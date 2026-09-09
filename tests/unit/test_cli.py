@@ -698,3 +698,125 @@ def test_serve_validate_builds_the_observer_for_a_vendor_that_has_one(monkeypatc
         args = parser.parse_args(["serve", "--vendor", "square", *argv])
         assert cli_module._serve(args, {}, sys.stdout) == 0
     assert [observer is not None for observer in seen] == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# `serve --vendor clover,square`: several vendors in one process.
+# ---------------------------------------------------------------------------
+
+
+def serve_intercepted(monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str]) -> tuple[object, str]:
+    """Run ``serve`` with ``run_server`` intercepted, returning the application
+    it was handed and what was announced.
+
+    The interception the precedence test uses, for the same reason: what is
+    under test is which units were built and what they were mounted into, and
+    binding a real port to find that out would be slower, racier and no more
+    conclusive. The socket is proved out of process, in ``tests/integration``.
+    Real units, because ``create_unit`` is what resolves a vendor name.
+    """
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    served: list[object] = []
+
+    def fake_run_server(app: object, **kwargs: object) -> None:
+        """``on_bound`` is called the way the real one calls it: the announce
+        line is printed from that callback, so a stub that skipped it would
+        assert nothing about the line."""
+        served.append(app)
+        announce = kwargs.get("on_bound")
+        assert callable(announce)
+        announce("127.0.0.1", 8080)
+
+    monkeypatch.setattr(asgi_module, "run_server", fake_run_server)
+    buffer = io.StringIO()
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--profile", "oauth-only", *argv])
+    assert cli_module._serve(args, env, buffer) == 0
+    assert len(served) == 1
+    return served[0], buffer.getvalue()
+
+
+def test_serve_mounts_one_app_per_vendor_when_several_are_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A comma-separated `--vendor` builds one unit per name and hands
+    `run_server` the mount; the announce line is how a parent process learns
+    both the port and where each vendor ended up."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover,square", "--port", "0"], {})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "(vendors=clover,square; mounts=/clover,/square)" in announced
+
+
+def test_serve_takes_the_vendor_list_from_the_environment_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`VENDORFAKE_VENDOR=clover,square` alone is the container form: one
+    variable on an image that names no vendor at all."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, [], {"VENDORFAKE_VENDOR": "clover,square"})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "(vendors=clover,square; mounts=/clover,/square)" in announced
+
+
+def test_serve_ignores_whitespace_around_a_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`clover, square` is what a human writes; a mount named `" square"` is
+    what an unstripped split would produce."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover, square"], {})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "mounts=/clover,/square" in announced
+
+
+def test_serve_with_one_vendor_is_the_single_vendor_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One vendor is served as it always was: the unit's own application
+    straight onto the socket, no mount, no prefix, and the `vendor=` announce
+    line a parent process may already be parsing."""
+    from fastapi import FastAPI
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover"], {})
+
+    assert isinstance(app, FastAPI)
+    assert "(vendor=clover)" in announced
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "fragment"),
+    [
+        (["--vendor", "clover,clover"], {}, "twice"),
+        (["--vendor", "clover,"], {}, "empty vendor name"),
+        (["--vendor", ",square"], {}, "empty vendor name"),
+        ([], {"VENDORFAKE_VENDOR": "clover,clover"}, "twice"),
+        (["--vendor", "clover,square", "--validate"], {}, "--validate serves one vendor"),
+    ],
+)
+def test_serve_refuses_a_vendor_list_it_cannot_mount(argv: list[str], env: dict[str, str], fragment: str) -> None:
+    """A duplicate mount would be unreachable, an empty name is a mount at
+    `//`, and `--validate` has one ledger and one declaration to check against.
+    Each would otherwise be a server that started and answered some of what was
+    asked for."""
+    import vendorfake.cli as cli_module
+
+    parser = cli_module._build_parser()
+    with pytest.raises(SystemExit) as raised:
+        cli_module._serve(parser.parse_args(["serve", *argv]), env, io.StringIO())
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+    assert fragment in str(raised.value)
+
+
+def test_a_describing_subcommand_refuses_a_vendor_list() -> None:
+    """Only `serve` has somewhere to put a second vendor. `info` prints one
+    document about one unit, so describing the first name silently would be the
+    worst of the three possible behaviours."""
+    with pytest.raises(SystemExit) as raised:
+        run("info", "--vendor", "clover,square")
+
+    assert str(raised.value) == "vendorfake: --vendor names several vendors; only `serve` mounts more than one"

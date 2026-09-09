@@ -1,10 +1,8 @@
-"""The chaos rule grammar, as an external document: JSON from disk or a
-request body, parsed rather than trusted. INVARIANT: a rule that cannot fire
-says so when written, not by never firing -- ``extra="forbid"`` catches a
-misspelled condition key, and ``every``/``times`` are bounded to ``ge=1``.
-Wire format is snake_case throughout, including ``params`` keys, a promise
-:data:`BUILTIN_FAULTS` states; ``params`` itself stays ``dict[str, Any]`` and
-is not modelled.
+"""The chaos rule grammar, as an external document: JSON from disk or a request body, parsed rather than trusted.
+INVARIANT: a rule that cannot fire says so when written, not by never firing -- ``extra="forbid"`` catches a misspelled
+condition key, and ``every``/``times`` are bounded to ``ge=1``. Wire format is snake_case throughout, including
+``params`` keys, a promise :data:`BUILTIN_FAULTS` states; ``params`` itself stays ``dict[str, Any]`` and is not
+modelled.
 """
 
 from __future__ import annotations
@@ -102,9 +100,10 @@ FaultProvenance = Literal["vendor", "transport"]
 """``"vendor"`` reproduces documented behaviour; ``"transport"`` is a dropped
 connection or mangled body no vendor documents."""
 
-FaultPhase = Literal["request", "response", "delivery"]
-"""When a fault fires relative to the handler (konyklabs/roadmap#101, item
-17): instead of it, on its committed answer, or as a webhook delivery."""
+FaultPhase = Literal["request", "handler", "response", "delivery"]
+"""When a fault fires relative to the handler (konyklabs/roadmap#101, item 17): instead of it; ``handler`` = the
+route's own handler answers the way the vendor does, instead of its normal reply; on its committed answer; or as a
+webhook delivery."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +162,15 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         phase="request",
     ),
     FaultSpec(
+        "refresh_rejected",
+        "request",
+        "Reject the request as the vendor rejects an unknown, used or expired refresh token: "
+        "its own 401 shape, without touching stored state.",
+        "detail? (overrides the message)",
+        provenance="vendor",
+        phase="request",
+    ),
+    FaultSpec(
         "webhook.duplicate",
         "webhook",
         "Deliver the same event body more than once.",
@@ -198,7 +206,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "malformed_body",
         "request",
         "Replace a successful response's body with something the vendor's own schema forbids.",
-        "mode (invalid_json|html|empty|truncate), status (default 200; html defaults 502)",
+        "mode (invalid_json|html|empty|truncate), status (default 200; html defaults 502), commit (before|after, default before)",
         provenance="transport",
         phase="response",
     ),
@@ -206,7 +214,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "body_mutation",
         "request",
         "Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran.",
-        "ops (list of {op, pointer, value?, as?})",
+        "ops (list of {op, pointer, value?, as?}), commit (before|after, default before)",
         provenance="transport",
         phase="response",
     ),
@@ -214,6 +222,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "connection_reset",
         "request",
         "Drop the connection after the response starts, before it completes.",
+        "commit (before|after, default before)",
         provenance="transport",
         phase="response",
     ),
@@ -221,6 +230,7 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "empty_response",
         "request",
         "Drop the connection as close to before any bytes as the binding can manage.",
+        "commit (before|after, default before)",
         provenance="transport",
         phase="response",
     ),
@@ -231,6 +241,15 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         "chunk_bytes (default 64), chunk_delay_ms (default 100)",
         provenance="transport",
         phase="response",
+    ),
+    FaultSpec(
+        "authorize_denied",
+        "request",
+        "The merchant declines on the consent screen: the authorize route redirects with error=access_denied "
+        "and state passed through (the vendor's documented shape where one is published, RFC 6749 s4.1.2.1 "
+        "elsewhere) and mints no code.",
+        provenance="vendor",
+        phase="handler",
     ),
 )
 """The faults the core implements, as data; ``params`` is a promise each
@@ -259,10 +278,8 @@ def matched_routes(rule: ChaosRule, route_keys: Sequence[str]) -> tuple[str, ...
 
 
 def validate_rule_document(document: Mapping[str, Any]) -> None:
-    """An absent or empty ``id``/``fault`` is ``missing_field``; an absent
-    ``scope`` is ``invalid_value``. No capability check here -- that needs the
-    registry, so the control plane performs it.
-    """
+    """An absent or empty ``id``/``fault`` is ``missing_field``; an absent ``scope`` is ``invalid_value``. No
+    capability check here -- that needs the registry, so the control plane performs it."""
     identifier = document.get("id")
     if not isinstance(identifier, str) or not identifier:
         raise UnitError(
@@ -286,10 +303,8 @@ def validate_rule_document(document: Mapping[str, Any]) -> None:
 
 
 def parse_rule(document: object, *, source: str | None = None) -> ChaosRule:
-    """Validate one rule document, or raise a field-naming ``UnitError``.
-    :func:`validate_rule_document`'s checks run first, so a missing ``id``
-    reports ``missing_field`` on ``id`` and not whichever field Pydantic
-    happens to complain about."""
+    """Validate one rule document, or raise a field-naming ``UnitError``. :func:`validate_rule_document`'s checks run
+    first, so a missing ``id`` reports ``missing_field`` on ``id`` and not whichever field Pydantic complains about."""
     if not isinstance(document, Mapping):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

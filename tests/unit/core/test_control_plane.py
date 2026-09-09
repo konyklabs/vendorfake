@@ -415,6 +415,28 @@ def test_a_rule_reports_the_routes_it_actually_resolves_to() -> None:
     assert res.json()["rules"][0]["matched_routes"] == ["GET /v2/orders"]
 
 
+def test_a_bad_params_commit_is_refused_when_the_rule_is_written() -> None:
+    """A rule that cannot fire says so when written, not on every matching
+    request: an unknown mode, or ``commit`` on a fault that delivers intact
+    or fires before the handler, is a 400 naming ``params.commit``."""
+    api, _ = _api()
+    for fault, params in (
+        ("malformed_body", {"mode": "invalid_json", "commit": "After"}),
+        ("slow_body", {"commit": "after"}),
+        ("rate_limit", {"commit": "after"}),
+    ):
+        res = api.post("/__unit/chaos/rules", {"id": "r1", "scope": "request", "fault": fault, "params": params})
+        assert res.status == 400, (fault, res.text)
+        assert res.header("x-unit-error") == "invalid_value"
+        assert res.header("vendorfake-rule-error") == "r1"
+        assert '"field":"params.commit"' in res.text
+    ok = api.post(
+        "/__unit/chaos/rules",
+        {"id": "r1", "scope": "request", "fault": "connection_reset", "params": {"commit": "after"}},
+    )
+    assert ok.status == 200, ok.text
+
+
 def test_matched_routes_never_counts_a_control_route() -> None:
     """The pipeline short-circuits internal routes before fault selection ever
     runs, so counting them would report a rule as matching routes it can never
@@ -1079,6 +1101,29 @@ def test_the_manifest_takes_its_base_url_from_the_host_that_was_asked() -> None:
     ).json()
     assert forwarded["base_url"] == "https://unit.example.com"
     assert api.get("/__unit/manifest").json()["base_url"] is None
+
+
+def test_the_manifest_base_url_carries_the_prefix_a_request_arrived_under() -> None:
+    """One process can serve several units, each mounted under its own prefix
+    (``vendorfake serve --vendor clover,square``), and the mount tells the unit
+    where it is with ``x-forwarded-prefix``. Without it the manifest would
+    publish a base URL that answers nothing: the host is right and the path is
+    a mount short. The value is normalised the way a proxy chain leaves it --
+    first value of the list, one leading slash, no trailing one."""
+    api, _ = _api()
+
+    def base_url(**headers: str) -> object:
+        return api.get("/__unit/manifest", headers={"host": "unit.internal:8080", **headers}).json()["base_url"]
+
+    assert base_url() == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "/clover"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "/clover/"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "clover"}) == "http://unit.internal:8080/clover"
+    # A chain of proxies appends; the outermost prefix is the one the caller spoke to.
+    assert base_url(**{"x-forwarded-prefix": "/edge/clover, /clover"}) == "http://unit.internal:8080/edge/clover"
+    # An empty or bare-slash value is a proxy saying "no prefix", not a trailing slash to keep.
+    assert base_url(**{"x-forwarded-prefix": "/"}) == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "", "x-forwarded-proto": "https"}) == "https://unit.internal:8080"
 
 
 def test_the_manifest_names_its_schema_and_the_unit_it_describes() -> None:

@@ -175,11 +175,21 @@ def _order_entity(order: SeedOrder, doc: SeedDocument, items: dict[str, Any]) ->
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: CloverConfig) -> None:
-    """Expirations come from the configured TTLs at hydrate time, so a
-    shortened access TTL shortens the seeded token too."""
+    """Expirations come from the configured TTLs at hydrate time unless the
+    seed document names an explicit lifetime (JUDGMENT: relative to unit
+    start, matching Square's ``expires_in_ms``), so a profile that shortens
+    the access TTL shortens an un-overridden seeded token too."""
     tokens = ctx.store.collection(COL.tokens)
     now = int(ctx.clock.now())
     for token in doc.tokens:
+        access_ttl_ms = (
+            config.access_token_ttl_ms if token.access_token_expires_in_ms is None else token.access_token_expires_in_ms
+        )
+        refresh_ttl_ms = (
+            config.refresh_token_ttl_ms
+            if token.refresh_token_expires_in_ms is None
+            else token.refresh_token_expires_in_ms
+        )
         tokens.insert(
             TokenEntity(
                 id=token.id,
@@ -187,8 +197,8 @@ def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: CloverConfig) ->
                 refresh_token=token.refresh_token,
                 client_id=token.client_id or config.client_id,
                 merchant_id=doc.merchant.id,
-                access_token_expiration_ms=now + config.access_token_ttl_ms,
-                refresh_token_expiration_ms=now + config.refresh_token_ttl_ms,
+                access_token_expiration_ms=now + access_ttl_ms,
+                refresh_token_expiration_ms=now + refresh_ttl_ms,
                 permissions=tuple(config.permissions if token.permissions is None else token.permissions),
                 createdTime=now,
             ).to_entity(),

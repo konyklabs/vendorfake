@@ -2,7 +2,7 @@
 
 # Faults
 
-Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos](../concepts/chaos.md) and [Provenance labels](../concepts/chaos.md#provenance).
+Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: handler` is handed to the route, whose own handler answers the way the vendor does and commits nothing; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos](../concepts/chaos.md) and [Provenance labels](../concepts/chaos.md#provenance).
 
 | Fault | Scope | Provenance | Phase | Params | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -11,13 +11,15 @@ Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor 
 | `unavailable` | request | vendor | request |  | Fail the request as temporarily unavailable. |
 | `timeout` | request | vendor | request | delay_ms | Stall the request, then fail it. |
 | `token_expiry` | request | vendor | request |  | Treat the caller token as expired mid-flow, without touching stored state. |
+| `refresh_rejected` | request | vendor | request | detail | Reject the request as the vendor rejects an unknown, used or expired refresh token: its own 401 shape, without touching stored state. |
 | `webhook.duplicate` | webhook | vendor | delivery | copies | Deliver the same event body more than once. |
 | `webhook.delay` | webhook | vendor | delivery | delay_ms | Delay delivery. |
 | `webhook.out_of_order` | webhook | vendor | delivery |  | Hold this event until the next one has been delivered. |
 | `webhook.drop_ack` | webhook | vendor | delivery |  | Ignore a successful subscriber response so the retry schedule runs. |
 | `webhook.drop` | webhook | vendor | delivery |  | Silently swallow the delivery: recorded as dropped, never sent to the subscriber. Filter with match.event_type. |
-| `malformed_body` | request | transport | response | mode, status | Replace a successful response's body with something the vendor's own schema forbids. |
-| `body_mutation` | request | transport | response | ops | Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran. |
-| `connection_reset` | request | transport | response |  | Drop the connection after the response starts, before it completes. |
-| `empty_response` | request | transport | response |  | Drop the connection as close to before any bytes as the binding can manage. |
+| `malformed_body` | request | transport | response | mode, status, commit | Replace a successful response's body with something the vendor's own schema forbids. |
+| `body_mutation` | request | transport | response | ops, commit | Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran. |
+| `connection_reset` | request | transport | response | commit | Drop the connection after the response starts, before it completes. |
+| `empty_response` | request | transport | response | commit | Drop the connection as close to before any bytes as the binding can manage. |
 | `slow_body` | request | transport | response | chunk_bytes, chunk_delay_ms | Stream a successful response body in chunks, with a delay between them. |
+| `authorize_denied` | request | vendor | handler |  | The merchant declines on the consent screen: the authorize route redirects with error=access_denied and state passed through (the vendor's documented shape where one is published, RFC 6749 s4.1.2.1 elsewhere) and mints no code. |

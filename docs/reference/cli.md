@@ -49,7 +49,10 @@ options:
   --vendor VENDOR       Vendor to serve (see `vendorfake vendors`). Defaults
                         to $VENDORFAKE_VENDOR; with exactly one vendor
                         installed that one is used, otherwise the command
-                        refuses and lists them.
+                        refuses and lists them. `serve` also takes a comma-
+                        separated list (`clover,square`) and mounts each
+                        vendor under /<vendor>/; every other subcommand
+                        describes one vendor and refuses a list.
   --profile PROFILE     Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                         then to the vendor's default profile.
   --host HOST           Interface to bind. Defaults to $VENDORFAKE_HOST, then
@@ -76,7 +79,10 @@ options:
   --vendor VENDOR    Vendor to serve (see `vendorfake vendors`). Defaults to
                      $VENDORFAKE_VENDOR; with exactly one vendor installed
                      that one is used, otherwise the command refuses and lists
-                     them.
+                     them. `serve` also takes a comma-separated list
+                     (`clover,square`) and mounts each vendor under
+                     /<vendor>/; every other subcommand describes one vendor
+                     and refuses a list.
   --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                      then to the vendor's default profile.
 ```
@@ -94,7 +100,10 @@ options:
   --vendor VENDOR    Vendor to serve (see `vendorfake vendors`). Defaults to
                      $VENDORFAKE_VENDOR; with exactly one vendor installed
                      that one is used, otherwise the command refuses and lists
-                     them.
+                     them. `serve` also takes a comma-separated list
+                     (`clover,square`) and mounts each vendor under
+                     /<vendor>/; every other subcommand describes one vendor
+                     and refuses a list.
   --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                      then to the vendor's default profile.
   --no-internal      Omit the /__unit/* control plane, describing only the
@@ -114,7 +123,10 @@ options:
   --vendor VENDOR      Vendor to serve (see `vendorfake vendors`). Defaults to
                        $VENDORFAKE_VENDOR; with exactly one vendor installed
                        that one is used, otherwise the command refuses and
-                       lists them.
+                       lists them. `serve` also takes a comma-separated list
+                       (`clover,square`) and mounts each vendor under
+                       /<vendor>/; every other subcommand describes one vendor
+                       and refuses a list.
   --profile PROFILE    Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                        then to the vendor's default profile.
   --base-url BASE_URL  The address the unit will be reached at, recorded in

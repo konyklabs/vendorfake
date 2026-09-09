@@ -53,7 +53,9 @@ Three families:
 **Vendor faults** (`provenance: vendor`) reproduce something the vendor
 itself documents: `rate_limit`, `server_error`, `unavailable`, `timeout`,
 `token_expiry` (one 401 without touching the stored token — the transient
-case a deactivate-on-401 handler gets wrong).
+case a deactivate-on-401 handler gets wrong), `refresh_rejected` (the
+vendor's own "refresh token invalid" 401, before the handler runs, without
+rotating anything).
 
 **Delivery faults** (`webhook` scope, `provenance: vendor`):
 `webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
@@ -78,12 +80,22 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
 `vendorfake explain fault <name>`):
 
 - `phase: request` — fires **instead of** the handler. `rate_limit`,
-  `server_error`, `unavailable`, `timeout`, `token_expiry`. Nothing is
-  committed; a retry starts clean.
+  `server_error`, `unavailable`, `timeout`, `token_expiry`,
+  `refresh_rejected`. Nothing is committed; a retry starts clean.
+- `phase: handler` — handed **to the route**, whose own handler answers the
+  way the vendor does instead of its normal reply. `authorize_denied`. Nothing
+  is committed. The mechanism headers and the request record name the fault
+  only when the route implements it; a route the fault means nothing to
+  ignores it, which is logged (`handler-phase fault not implemented by the
+  route`) and recorded as unfaulted, and the rule's budget is given back
+  (`fires` does not count it). The same holds for a request the route refuses
+  before it reaches its denial branch (a malformed authorize call), logged as
+  `handler-phase fault not reached: the route refused first`.
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
   the journal has it; with four of the five the caller never saw it succeed
-  (`slow_body` delivers the answer intact, only late).
+  (`slow_body` delivers the answer intact, only late). Those four take
+  `params.commit` to roll the handler's work back instead — see below.
 - `phase: delivery` — a webhook delivery, not a request: the `webhook.*`
   faults.
 
@@ -96,6 +108,75 @@ response after the write. The request-log entry for such a call carries
 [Journal and request log](unit.md#the-journal-and-the-request-log)). Bound the
 rule with `when: {"nth": [1]}` and re-seed the token, or use a request-phase
 fault for the failure the retry ladder is meant to recover from.
+
+### `commit`: the other model of the same edge
+
+A gateway that mangles the response *after* the write is one honest model of a
+vendor; one where nothing is committed unless the response is written is
+equally plausible, and no vendor documents which of the two its own edge
+implements. So the four faults that discard or corrupt the answer —
+`malformed_body`, `body_mutation`, `connection_reset`, `empty_response` — take
+a `commit` parameter, and a consumer tests both. JUDGMENT: the whole of
+`commit: after` is this project's choice, not a documented behaviour.
+
+- `commit: "before"` (the default, and every earlier release's behaviour) —
+  the handler commits, then the answer is corrupted or dropped.
+- `commit: "after"` — the handler runs inside a snapshot the kernel always
+  restores, so the request leaves nothing behind: no entity change, no journal
+  entry, **no webhook event and no idempotency record**. The answer is then
+  faulted exactly as it would have been.
+
+```json
+{"id": "reset-refresh", "scope": "request", "fault": "connection_reset",
+ "match": {"route": "POST /oauth/v2/refresh"},
+ "params": {"commit": "after"}, "when": {"times": 1}}
+```
+
+Against Clover's single-use rotation that is the difference between a test
+that can retry and one that cannot: the first refresh dies on the wire, and
+the seeded refresh token still works on the second call. Drop the `params` and
+the second call is the documented 401 — the token was spent by a request the
+consumer saw fail.
+
+Two consequences worth stating. On an idempotent route, `after` stores no
+record, so a retry with the same key runs the handler again rather than
+replaying; that is the point, since there is no commit to replay. And
+`slow_body` refuses `commit` with a 400 naming `params.commit`, as does any
+request-phase fault carrying it: neither has a commit to withhold.
+
+`GET /__unit/requests` shows `fault_commit` next to `discarded_mutation`. Under
+`after` the row reads `fault_commit: "after"`, `discarded_mutation: false` and
+no `committed_journal_seq`, because nothing was committed.
+
+The rollback is a whole-store restore, so arm `after` from one caller at a
+time: a request running concurrently on a route the vendor does not serialize
+can have its own commit rolled back with the faulted one.
+
+## Rehearsing a declined consent
+
+The authorize routes approve automatically, because a fake has nobody to click
+the consent screen. `authorize_denied` is how a headless connect-flow test sees
+the other answer, without the consumer's code having to build a different URL:
+
+```json
+{"id": "decline-once", "scope": "request", "fault": "authorize_denied",
+ "match": {"route": "GET /oauth/v2/authorize"}, "when": {"times": 1}}
+```
+
+The first authorize call redirects with the denial and mints no code; the
+second is the ordinary approval, so one test covers the refusal *and* the
+retry. What each vendor sends back:
+
+| Vendor | Route | Denial redirect |
+| --- | --- | --- |
+| Square | `GET /oauth2/authorize` | `?error=access_denied&error_description=user_denied` plus `state` |
+| Clover | `GET /oauth/v2/authorize` | `?error=access_denied` plus `state` when the request carried one — JUDGMENT: Clover documents only the approved redirect, so this is RFC 6749 §4.1.2.1's shape |
+| Lightspeed | `GET /connect` | `?error=access_denied` plus `state` when the request carried one |
+
+Square's `?unit_prompt=deny` is the same answer reached in band, for a test
+that can edit the authorization URL; the fault is for the one that cannot.
+Toast has no consent screen and no authorize route, so nothing there matches
+the rule.
 
 ## Transport faults: what each binding raises
 
@@ -138,6 +219,54 @@ curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: appli
 For a *permanent* revocation, use the vendor's own revoke endpoint instead;
 for an expiry a client's own clock would notice, advance a
 [virtual clock](unit.md#virtual) past `expires_at`.
+
+## Rehearsing a rejected refresh
+
+`refresh_rejected` answers one refresh call with the vendor's own "refresh
+token invalid" 401 — fired **before** the handler runs, so nothing is
+rotated and the stored token is untouched:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "reject-one-refresh", "scope": "request", "fault": "refresh_rejected",
+  "match": {"path": "/oauth/v2/refresh"}, "when": {"times": 1}
+}'
+```
+
+Each vendor answers in its own documented shape:
+
+- **Clover** (`POST /oauth/v2/refresh`): 401 `{"message": "The refresh token
+  is invalid."}`.
+- **Square** (`POST /oauth2/token`, `grant_type: refresh_token`): 401,
+  `errors[0]` carries `category: "AUTHENTICATION_ERROR"`,
+  `code: "UNAUTHORIZED"`.
+- **Lightspeed** (`POST /api/1.0/token`, form-encoded
+  `grant_type=refresh_token`): 401 `{"error": "Unauthorized", "message":
+  ...}`.
+
+  Square's and Lightspeed's token endpoint also serves the code exchange, and
+  the fault fires on the match alone, so add `"body_contains":
+  "refresh_token"` to `match` there — a code exchange never carries that
+  string, a refresh always does — or a one-shot rule is spent on the exchange.
+- **Toast** has no refresh route at all — a client logs in again when its
+  token expires — so the rule is matched on
+  `POST /authentication/v1/authentication/login` instead, with
+  `params.detail` set to the login surface's own documented phrase
+  (`INVALID_CREDENTIALS_MESSAGE`, "The credentials in your request are not
+  valid."): 401 code `10007`.
+
+The stored token is never touched — the fault fires instead of the handler,
+so there is nothing to roll back — and the next call succeeds exactly as if
+the rule had never been armed. `GET /__unit/requests?operation_id=RefreshToken`
+shows the faulted call with `fault: "refresh_rejected"` (Clover's dedicated
+refresh route has that operation id; Square's and Lightspeed's token
+endpoints share one operation id across both grant types, so filter those by
+route or rule instead).
+
+Under `strict_rules`, only `match.route` is checked against the route table
+at arm time — a `match.path` rule (as above) is never refused as dead, even
+when the path is misspelled. A typo there shows up only as `fires: 0` at
+`GET /__unit/chaos`, not as a 400 on arming.
 
 ## From an SDK: in-band triggers
 

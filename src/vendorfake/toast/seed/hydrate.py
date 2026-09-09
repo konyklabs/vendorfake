@@ -359,17 +359,20 @@ def _insert_groups(
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: ToastConfig) -> None:
-    """Expirations come from the configured TTL at hydrate time."""
+    """Expirations come from the configured TTL at hydrate time unless the
+    seed document names an explicit lifetime (JUDGMENT: relative to unit
+    start, matching Square's ``expires_in_ms``)."""
     tokens = ctx.store.collection(COL.tokens)
     now = int(ctx.clock.now())
     for token in doc.tokens:
+        ttl_ms = config.access_token_ttl_ms if token.expires_in_ms is None else token.expires_in_ms
         tokens.insert(
             TokenEntity(
                 id=token.id,
                 access_token=token.access_token,
                 client_id=token.client_id or config.client_id,
                 partner_guid=config.partner_guid,
-                expires_at_ms=now + config.access_token_ttl_ms,
+                expires_at_ms=now + ttl_ms,
                 scopes=tuple(config.scopes if token.scopes is None else token.scopes),
                 createdDate=now,
             ).to_entity(),

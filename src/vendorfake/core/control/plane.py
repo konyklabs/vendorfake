@@ -31,6 +31,7 @@ from typing import Any
 
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES
 from vendorfake.core.capability.registry import CONTROL_CAPABILITY, apply_capability_delta
+from vendorfake.core.chaos.faults import validate_fault_params
 from vendorfake.core.chaos.rules import BUILTIN_FAULTS, ChaosRule, matched_routes, parse_rule
 from vendorfake.core.control.schemas import (
     CapabilitiesBody,
@@ -1059,19 +1060,23 @@ def _distribution_version() -> str:
 
 
 def _request_base_url(req: UnitRequest) -> str | None:
-    """``scheme://host`` from the request that asked, or ``None``.
+    """``scheme://host``, plus any prefix the request was forwarded under, or ``None``.
 
     A unit does not know its own address -- it may be behind a container port
     mapping or a compose network alias -- so the only honest answer is the one
-    the caller reached it at. ``x-forwarded-proto`` wins where a proxy set it,
-    since the caller's scheme is the one a webhook URL has to carry.
+    the caller reached it at. ``x-forwarded-proto`` and ``x-forwarded-prefix``
+    (one process serving several units, each under its own prefix) win where a
+    proxy set them, first value first.
     """
     host = req.headers.get("host")
     if not host:
         return None
     forwarded = req.headers.get("x-forwarded-proto", "")
     scheme = forwarded.split(",")[0].strip().lower() or "http"
-    return f"{scheme}://{host}"
+    prefix = req.headers.get("x-forwarded-prefix", "").split(",")[0].strip().rstrip("/")
+    if prefix and not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    return f"{scheme}://{host}{prefix}"
 
 
 # Helpers. Module level so a test can reach them without building a unit.
@@ -1113,6 +1118,7 @@ def _validated_rule(document: Mapping[str, Any], ctx: UnitContext, route_keys: S
     behaviour capability has no surface of its own to answer "disabled" from.
     """
     rule = parse_rule(document, source="POST /__unit/chaos/rules")
+    validate_fault_params(rule)
     if rule.scope == "webhook":
         ctx.capabilities.assert_enabled("webhooks.chaos", "POST /__unit/chaos/rules")
     resolved = matched_routes(rule, route_keys)

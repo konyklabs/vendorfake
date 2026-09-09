@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlsplit
 
-from tests.unit.lightspeed.harness import Harness
+from tests.unit.lightspeed.harness import TOKEN_PATH, Harness
 from vendorfake.lightspeed.entities import COL, TokenEntity
 from vendorfake.lightspeed.model.auth import TOKEN_TYPE
 from vendorfake.lightspeed.seed.constants import (
@@ -186,6 +186,43 @@ def test_a_refresh_needs_the_client_secret(h: Harness) -> None:
     assert answered.status == 401
 
 
+def test_a_refresh_rejected_fault_answers_lightspeeds_own_401_and_leaves_the_token_live(h: Harness) -> None:
+    """konyklabs/roadmap#131: a one-shot ``refresh_rejected`` rule reproduces
+    Lightspeed's own 401 shape on the token endpoint's refresh grant, without
+    revoking the access token the refresh would otherwise have retired, then
+    lets the next call succeed."""
+    armed = h.api.post(
+        "/__unit/chaos/rules",
+        {
+            "id": "refresh-rejected-lightspeed",
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"path": TOKEN_PATH},
+            "when": {"times": 1},
+        },
+    )
+    assert armed.status == 200, armed.text
+
+    faulted = h.refresh()
+    assert faulted.status == 401
+    body = faulted.json()
+    assert body["error"] == "Unauthorized"
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+
+    newest = h.api.get("/__unit/requests?limit=1").json()["requests"][0]
+    assert newest["fault"] == "refresh_rejected"
+    assert newest["rule_id"] == "refresh-rejected-lightspeed"
+
+    # The fault fired instead of the handler, so the access token it would
+    # have revoked is still live.
+    assert h.get(h.path("/retailer")).status == 200
+
+    second = h.refresh()
+    assert second.status == 200, second.text
+    assert second.json()["access_token"] != SEED_ACCESS_TOKEN
+    assert "vendorfake-fault" not in second.headers
+
+
 # -- presenting a credential -------------------------------------------------
 
 
@@ -323,3 +360,66 @@ def test_a_wrong_client_id_is_refused_on_the_refresh_grant(h: Harness) -> None:
     answered = h.refresh(client_id="not-this-application")
     assert answered.status == 401
     assert answered.json()["unit_error"]["field"] == "client_id"
+
+
+# ---------------------------------------------------------------------------
+# The authorize_denied fault: the documented declined-access response.
+# ---------------------------------------------------------------------------
+
+DENY_RULE: dict[str, object] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /connect"},
+    "when": {"times": 1},
+}
+
+
+def _connect(h: Harness, **overrides: str):  # type: ignore[no-untyped-def]
+    query = {"response_type": "code", "client_id": SEED_CLIENT_ID, "redirect_uri": REDIRECT, "state": "xyz"}
+    query.update(overrides)
+    return h.api.get("/connect", query=query)
+
+
+def test_an_armed_denial_answers_the_documented_declined_access_response(h: Harness) -> None:
+    """DOCUMENTED -- the declined access response is
+    ``{redirect_uri}?error=access_denied``
+    (https://x-series-api.lightspeedhq.com/docs/authorization). JUDGMENT --
+    that page does not say whether ``state`` comes back, so it is echoed per
+    RFC 6749 s4.1.2.1. No code is stored: the fault reaches the handler rather
+    than rewriting a redirect that had already minted one.
+    """
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    codes = h.unit.context.store.collection(COL.auth_codes)
+    before = len(codes.all())
+
+    denied = _connect(h)
+    assert denied.status == 302
+    assert denied.headers["vendorfake-fault"] == "authorize_denied"
+    assert denied.headers["vendorfake-rule"] == "decline-once"
+    query = dict(parse_qsl(urlsplit(denied.headers["location"]).query))
+    assert query["error"] == "access_denied"
+    assert query["state"] == "xyz"
+    assert "code" not in query
+    assert len(codes.all()) == before
+
+
+def test_the_second_connect_approves_and_its_code_exchanges(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    assert "error" in dict(parse_qsl(urlsplit(_connect(h).headers["location"]).query))
+
+    approved = _connect(h)
+    assert approved.status == 302
+    assert "vendorfake-fault" not in approved.headers
+    code = dict(parse_qsl(urlsplit(approved.headers["location"]).query))["code"]
+    exchanged = h.exchange(code, redirect_uri=REDIRECT)
+    assert exchanged.status == 200, exchanged.text
+    assert exchanged.json()["access_token"]
+
+
+def test_the_request_log_names_the_fault_on_the_declined_call_only(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    _connect(h)
+    _connect(h)
+    records = h.api.get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records if r.get("fault")] == [("authorize_denied", "decline-once")]
