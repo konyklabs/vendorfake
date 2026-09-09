@@ -285,6 +285,8 @@ class RequestRecord:
     #: ``True`` when the handler committed and the caller still did not get its clean answer. ``slow_body`` delivers
     #: intact, only late, so it does not count. The mutation stands; it is discarded only from the caller's view.
     discarded_mutation: bool = False
+    #: ``params.commit`` of the response-phase fault that fired: ``"after"`` means nothing was committed at all.
+    fault_commit: Literal["before", "after"] | None = None
 
     def as_json(self) -> dict[str, Any]:
         """``matched``, ``near_misses`` and ``discarded_mutation`` are always present, being the three a caller filters
@@ -306,6 +308,7 @@ class RequestRecord:
             ("fault", self.fault),
             ("rule_id", self.rule_id),
             ("committed_journal_seq", self.committed_journal_seq),
+            ("fault_commit", self.fault_commit),
         ):
             if value is not None:
                 body[key] = value

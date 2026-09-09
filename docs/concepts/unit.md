@@ -287,7 +287,11 @@ caller got the 400 naming the rule instead (`slow_body` delivers the answer
 intact, only late, so it does not count). The mutation stands in the store;
 it is discarded only from the caller's point of view — which, against a
 single-use rotation, means a credential spent by a call that looked like it
-failed. See [Chaos → Phase](chaos.md#phase-does-the-handler-commit).
+failed. `fault_commit` (present only when a response-phase fault fired) says
+which of the two commit models the rule asked for: `"before"`, the default, or
+`"after"`, where the handler's work was rolled back and there is therefore no
+`committed_journal_seq` and no `discarded_mutation`. See
+[Chaos → Phase](chaos.md#phase-does-the-handler-commit).
 
 ```python
 (call,) = clover.requests(route="POST /oauth/v2/refresh")

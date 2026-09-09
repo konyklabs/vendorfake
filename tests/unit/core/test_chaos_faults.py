@@ -9,9 +9,11 @@ import pytest
 from vendorfake.core.chaos.engine import ChaosDecision
 from vendorfake.core.chaos.faults import (
     AUTH_PHASE_FAULTS,
+    COMMIT_FAULTS,
     FAULT_PARAM_KEYS,
     HANDLER_PHASE_FAULTS,
     apply_request_fault,
+    commit_mode,
 )
 from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -261,3 +263,45 @@ def test_every_declared_parameter_appears_in_the_catalogue_prose() -> None:
     for name, keys in FAULT_PARAM_KEYS.items():
         for key in keys:
             assert key in prose[name], f"{name}.{key} is implemented but undocumented"
+
+
+# ---------------------------------------------------------------------------
+# params.commit
+# ---------------------------------------------------------------------------
+
+
+def test_commit_is_declared_on_exactly_the_four_faults_that_discard_the_answer() -> None:
+    """`slow_body` delivers the handler's answer intact, so there is nothing
+    for `commit: after` to withhold and the key is not offered on it."""
+    assert {"malformed_body", "body_mutation", "connection_reset", "empty_response"} == COMMIT_FAULTS
+    carrying = {name for name, keys in FAULT_PARAM_KEYS.items() if "commit" in keys}
+    assert carrying == COMMIT_FAULTS
+
+
+def test_commit_defaults_to_before_when_the_param_is_absent() -> None:
+    assert commit_mode(_decision("connection_reset")) == "before"
+    assert commit_mode(_decision("rate_limit")) == "before"
+
+
+def test_commit_is_read_verbatim_when_it_names_a_mode() -> None:
+    assert commit_mode(_decision("malformed_body", commit="after")) == "after"
+    assert commit_mode(_decision("malformed_body", commit="before")) == "before"
+
+
+def test_an_unknown_commit_mode_is_refused_by_name() -> None:
+    with pytest.raises(UnitError) as caught:
+        commit_mode(_decision("body_mutation", commit="sometimes"))
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "params.commit"
+    assert caught.value.rule_id == "r1"
+    assert "sometimes" in caught.value.detail
+
+
+def test_commit_on_a_fault_that_cannot_honour_it_is_refused() -> None:
+    """`slow_body` and every request-phase fault: accepting the key silently
+    would read as a rollback the kernel never performs."""
+    for fault in ("slow_body", "rate_limit", "authorize_denied"):
+        with pytest.raises(UnitError) as caught:
+            commit_mode(_decision(fault, commit="after"))
+        assert caught.value.field == "params.commit", fault
+        assert caught.value.kind is UnitErrorKind.INVALID_VALUE, fault

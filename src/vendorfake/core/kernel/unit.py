@@ -40,13 +40,14 @@ it.
 from __future__ import annotations
 
 import collections
+import contextlib
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
@@ -58,6 +59,7 @@ from vendorfake.core.chaos.faults import (
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
+    commit_mode,
     stamp_mechanism,
 )
 from vendorfake.core.chaos.rules import matched_routes
@@ -341,6 +343,8 @@ class _Trace:
     #: Whether the payout has already been *tried*. Set before the attempt, not after, because the attempt itself
     #: can raise, and the error path would otherwise call it again from inside the ``except`` clause.
     response_fault_attempted: bool = False
+    #: ``params.commit`` of an armed response-phase fault, resolved before the handler runs.
+    fault_commit: Literal["before", "after"] | None = None
     near_misses: tuple[NearMiss, ...] = ()
 
 
@@ -746,6 +750,11 @@ class Unit:
                 # and an unrecorded 429 is one a consumer cannot explain.
                 trace.fault = decision.fault
                 trace.rule_id = decision.rule_id
+            # Here, not at step 8: a bad ``params.commit`` refuses before the handler runs, whatever the fault's own
+            # phase, so a request-phase rule carrying it is refused too.
+            mode = commit_mode(decision)
+            if decision.fault in RESPONSE_PHASE_FAULTS:
+                trace.fault_commit = mode
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -797,17 +806,26 @@ class Unit:
         if replayed is not None:
             res = replayed
         else:
+            # ``commit: after``: the handler runs inside a snapshot restored whatever it did, with journal listeners
+            # muted, so no entity, journal entry, webhook event or idempotency record survives the request.
+            uncommitted = trace.fault_commit == "after"
+            snapshot = self._store.snapshot() if uncommitted else None
             trace.journal_seq_before = self._store.journal_seq
             try:
-                res = normalize(route.handler(args))
+                with self._store.muted() if uncommitted else contextlib.nullcontext():
+                    res = normalize(route.handler(args))
             finally:
                 # In a ``finally``: a handler that committed and then raised has still committed.
                 trace.journal_seq_after = self._store.journal_seq
+                if snapshot is not None:
+                    self._store.restore(snapshot)
+                    trace.journal_seq_after = trace.journal_seq_before
             # INVARIANT: what is recorded is the handler's CLEAN answer, before any response-phase fault touches it.
             # The handler has committed and this store has no rollback, so a retry replays what the vendor really
             # committed; recording the faulted answer would stamp every later replay, and skipping the record would
-            # let a retry charge the caller twice. provenance: judgment.
-            if idem is not None and idem_key is not None and 200 <= res.status < 300:
+            # let a retry charge the caller twice. Under ``commit: after`` there is nothing to replay, so the key is
+            # left unstored and the retry runs the handler again. provenance: judgment.
+            if not uncommitted and idem is not None and idem_key is not None and 200 <= res.status < 300:
                 self._store.put_idempotent(
                     IdempotencyRecord(
                         scope=idem.scope,
@@ -976,6 +994,7 @@ class Unit:
                     near_misses=trace.near_misses,
                     committed_journal_seq=trace.journal_seq_after if committed else None,
                     discarded_mutation=committed and deprived,
+                    fault_commit=trace.fault_commit if trace.response_fault_attempted else None,
                 )
             )
         # ``decorate`` sees only the headers: the delay and the connection are not vendor opinions.

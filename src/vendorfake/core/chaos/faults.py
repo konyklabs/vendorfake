@@ -33,6 +33,8 @@ from vendorfake.core.util.numbers import as_float, as_int, as_str, js_number, js
 
 __all__ = [
     "AUTH_PHASE_FAULTS",
+    "COMMIT_FAULTS",
+    "COMMIT_MODES",
     "DEFAULT_REFRESH_REJECTED_DETAIL",
     "DEFAULT_RETRY_AFTER_SECONDS",
     "DEFAULT_TIMEOUT_DELAY_MS",
@@ -46,6 +48,7 @@ __all__ = [
     "RequestMoment",
     "apply_request_fault",
     "apply_response_fault",
+    "commit_mode",
     "is_transport_fault",
     "stamp_mechanism",
 ]
@@ -70,6 +73,14 @@ INTACT_RESPONSE_FAULTS: frozenset[str] = frozenset({"slow_body"})
 """Response-phase faults that hand back the handler's answer *unchanged* and
 only shape how it travels (``kernel/unit.py``'s ``discarded_mutation``)."""
 
+COMMIT_FAULTS: frozenset[str] = RESPONSE_PHASE_FAULTS - INTACT_RESPONSE_FAULTS
+"""The response-phase faults ``params.commit`` is accepted on: the ones that
+discard or corrupt the answer, so whether the handler committed is observable."""
+
+COMMIT_MODES: tuple[str, ...] = ("before", "after")
+"""``params.commit``: commit the handler's work, then fault the answer, or run
+the handler inside a snapshot that is always restored."""
+
 #: Defaults when a fault's own param is absent.
 DEFAULT_TIMEOUT_DELAY_MS = 100.0
 DEFAULT_RETRY_AFTER_SECONDS = 1
@@ -90,10 +101,10 @@ FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "webhook.out_of_order": (),
     "webhook.drop_ack": (),
     "webhook.drop": (),
-    "malformed_body": ("mode", "status"),
-    "body_mutation": ("ops",),
-    "connection_reset": (),
-    "empty_response": (),
+    "malformed_body": ("mode", "status", "commit"),
+    "body_mutation": ("ops", "commit"),
+    "connection_reset": ("commit",),
+    "empty_response": ("commit",),
     "slow_body": ("chunk_bytes", "chunk_delay_ms"),
     "authorize_denied": (),
 }
@@ -208,6 +219,37 @@ def apply_request_fault(
     log.warn("unknown request-scope fault ignored", {"fault": decision.fault, "rule": rule})
 
 
+def commit_mode(decision: ChaosDecision) -> Literal["before", "after"]:
+    """Whether this decision's fault fires on committed work (``before``, the default) or on a handler run inside a
+    snapshot the kernel always restores (``after``). JUDGMENT: no vendor documents which of the two its edge
+    implements, so the fake offers both and defaults to the one every earlier release had."""
+    params = decision.params
+    if "commit" not in params:
+        return "before"
+    raw = params.get("commit")
+    if decision.fault not in COMMIT_FAULTS:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{decision.fault} rule {decision.rule_id!r}: params.commit is accepted only on "
+                f"{', '.join(sorted(COMMIT_FAULTS))}, which discard or corrupt the answer."
+            ),
+            field="params.commit",
+            rule_id=decision.rule_id,
+        )
+    if raw not in COMMIT_MODES:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{decision.fault} rule {decision.rule_id!r}: params.commit must be one of "
+                f"{', '.join(COMMIT_MODES)}; got {raw!r}."
+            ),
+            field="params.commit",
+            rule_id=decision.rule_id,
+        )
+    return "after" if raw == "after" else "before"
+
+
 # -- Response-scope faults: transport-fidelity, provenance: transport. -------
 # Corrupts a *successful* handler response, called after it returns.
 
@@ -237,6 +279,8 @@ def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log
     fault = decision.fault
     if fault not in RESPONSE_PHASE_FAULTS:
         return response
+    # Re-checked here so a refusal raised pre-handler is answered cleanly rather than corrupted by its own rule.
+    commit_mode(decision)
     rule = decision.rule_id
     params = decision.params
     if fault == "malformed_body":

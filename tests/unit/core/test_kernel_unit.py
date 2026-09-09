@@ -12,7 +12,17 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeAuth, FakeErrors, FakeVendor, capability, make_unit, route
+from tests.fakes import (
+    WEBHOOK_CAPABILITIES,
+    FakeAuth,
+    FakeErrors,
+    FakeEvents,
+    FakeSigner,
+    FakeVendor,
+    capability,
+    make_unit,
+    route,
+)
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
@@ -24,6 +34,7 @@ from vendorfake.core.kernel.types import (
 )
 from vendorfake.core.kernel.unit import REQUEST_ID_HEADER, RouteInfo, Unit, make_request
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.webhooks.sink import MemorySink
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -999,3 +1010,196 @@ def test_a_malformed_percent_escape_reaches_the_caller_as_a_shaped_400() -> None
     assert res.status == 400
     assert res.header("x-unit-error") == "invalid_value"
     assert res.json()["error"]["field"] == "path"
+
+
+# ---------------------------------------------------------------------------
+# step 8/9 -- params.commit on a response-phase fault
+# ---------------------------------------------------------------------------
+
+_SUBSCRIBER: dict[str, Any] = {
+    "id": "sub_1",
+    "notification_url": "https://subscriber.test/hook",
+    "event_types": ("order.created",),
+    "signature_key": "shh",
+    "enabled": True,
+}
+
+
+def _mutating(calls: list[str]):  # type: ignore[no-untyped-def]
+    """Insert one order per call, so a rolled-back request is visible as an
+    entity that is not there, a journal that did not move and no event."""
+
+    def run(args):  # type: ignore[no-untyped-def]
+        calls.append("ok")
+        order_id = f"o{len(calls)}"
+        args.ctx.store.collection("orders").insert({"id": order_id, "state": "OPEN"})
+        return json_({"id": order_id})
+
+    return run
+
+
+def _commit_unit(
+    rule: dict[str, object],
+    calls: list[str],
+    *,
+    idempotency: IdempotencySpec | None = None,
+) -> tuple[Any, MemorySink]:
+    """A webhook-capable unit whose one route mutates, armed with ``rule``."""
+    sink = MemorySink()
+    vendor = FakeVendor(capabilities=WEBHOOK_CAPABILITIES, not_supported={}, signer=FakeSigner(), events=FakeEvents())
+    unit = make_unit(
+        [route("POST", "/v2/orders", _mutating(calls), idempotency=idempotency)],
+        vendor=vendor,
+        sink=sink,
+        control_routes=control_plane_routes,
+        capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
+        subscribers=(_SUBSCRIBER,),
+        schedule_ms=(1,),
+        chaos_rules=[rule],
+    )
+    return unit, sink
+
+
+def _malformed(commit: object | None = None) -> dict[str, object]:
+    params: dict[str, object] = {"mode": "invalid_json"}
+    if commit is not None:
+        params["commit"] = commit
+    return {
+        "id": "r1",
+        "scope": "request",
+        "fault": "malformed_body",
+        "match": {"route": "POST /v2/orders"},
+        "params": params,
+    }
+
+
+def _newest(unit: Any) -> dict[str, Any]:
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    return dict(records[0])
+
+
+def test_commit_after_rolls_the_handlers_whole_commit_back_and_still_corrupts_the_answer() -> None:
+    """The named failure: `commit: before` on a single-use rotation spends the
+    credential on a call the consumer saw fail. Under `after` the entity, the
+    journal, the webhook event and the idempotency record are all withheld,
+    and the caller still gets the corrupted body it armed the rule for."""
+    calls: list[str] = []
+    unit, sink = _commit_unit(_malformed("after"), calls)
+    store = unit.context.store
+    seeded_seq = store.journal_seq
+    res = in_process(unit).post("/v2/orders", {})
+
+    assert calls == ["ok"]
+    assert store.collection("orders").all() == []
+    assert store.journal_seq == seeded_seq
+    assert unit.webhooks.prepared() == ()
+    unit.webhooks.drain()
+    assert sink.received == []
+
+    assert res.header("vendorfake-fault") == "malformed_body"
+    assert res.header("vendorfake-rule") == "r1"
+    with pytest.raises(ValueError):
+        res.json()
+
+    record = _newest(unit)
+    assert record["fault_commit"] == "after"
+    assert record["discarded_mutation"] is False
+    assert "committed_journal_seq" not in record
+    unit.stop()
+
+
+def test_commit_before_is_the_default_and_leaves_the_mutation_standing() -> None:
+    """Today's behaviour, unchanged, whether the key is written or absent."""
+    for rule in (_malformed("before"), _malformed()):
+        calls: list[str] = []
+        unit, _ = _commit_unit(rule, calls)
+        store = unit.context.store
+        seeded_seq = store.journal_seq
+        res = in_process(unit).post("/v2/orders", {})
+
+        assert calls == ["ok"]
+        assert [e["id"] for e in store.collection("orders").all()] == ["o1"]
+        assert store.journal_seq == seeded_seq + 1
+        assert [e.type for e in unit.webhooks.prepared()] == ["order.created"]
+        assert res.header("vendorfake-fault") == "malformed_body"
+
+        record = _newest(unit)
+        assert record["fault_commit"] == "before"
+        assert record["discarded_mutation"] is True
+        assert record["committed_journal_seq"] == seeded_seq + 1
+        unit.stop()
+
+
+def test_an_unfaulted_request_carries_no_fault_commit_at_all() -> None:
+    """The key is a property of the fault that fired, not of every row."""
+    calls: list[str] = []
+    unit, _ = _commit_unit(_malformed("after"), calls)
+    assert in_process(unit).get("/__unit/health").status == 200
+    unit2, _ = _commit_unit({"id": "r1", "scope": "request", "fault": "rate_limit"}, calls)
+    assert in_process(unit2).post("/v2/orders", {}).status == 429
+    assert "fault_commit" not in _newest(unit2)
+    unit.stop()
+    unit2.stop()
+
+
+def test_commit_after_leaves_the_idempotency_key_free_so_the_retry_really_runs() -> None:
+    """Nothing was committed, so there is nothing to replay: the retry is a
+    first attempt, and its mutation is the only one that stands."""
+    calls: list[str] = []
+    rule = {
+        "id": "r1",
+        "scope": "request",
+        "fault": "connection_reset",
+        "match": {"route": "POST /v2/orders"},
+        "params": {"commit": "after"},
+        "when": {"times": 1},
+    }
+    unit, _ = _commit_unit(rule, calls, idempotency=_IDEM)
+    seeded_seq = unit.context.store.journal_seq
+    api = in_process(unit)
+    first = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert first.header("vendorfake-fault") == "connection_reset"
+    store = unit.context.store
+    assert store.collection("orders").all() == []
+
+    second = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert second.header("x-unit-idempotent-replay") is None
+    assert second.header("vendorfake-fault") is None
+    assert calls == ["ok", "ok"]
+    assert [e["id"] for e in store.collection("orders").all()] == ["o2"]
+    assert store.journal_seq == seeded_seq + 1
+    unit.stop()
+
+
+def test_an_unknown_commit_mode_is_refused_before_the_handler_runs() -> None:
+    calls: list[str] = []
+    unit, _ = _commit_unit(_malformed("sometimes"), calls)
+    seeded_seq = unit.context.store.journal_seq
+    res = in_process(unit).post("/v2/orders", {})
+    assert res.status == 400
+    assert res.json()["error"]["code"] == "invalid_value"
+    assert res.json()["error"]["field"] == "params.commit"
+    assert res.header("vendorfake-rule-error") == "r1"
+    assert calls == []
+    assert unit.context.store.journal_seq == seeded_seq
+    unit.stop()
+
+
+def test_commit_on_slow_body_or_on_a_request_phase_fault_is_refused_the_same_way() -> None:
+    """Neither can honour it: `slow_body` delivers the answer intact, and a
+    request-phase fault never let the handler run at all."""
+    for fault in ("slow_body", "server_error"):
+        calls: list[str] = []
+        rule = {
+            "id": "r1",
+            "scope": "request",
+            "fault": fault,
+            "match": {"route": "POST /v2/orders"},
+            "params": {"commit": "after"},
+        }
+        unit, _ = _commit_unit(rule, calls)
+        res = in_process(unit).post("/v2/orders", {})
+        assert res.status == 400, fault
+        assert res.json()["error"]["field"] == "params.commit", fault
+        assert calls == [], fault
+        unit.stop()

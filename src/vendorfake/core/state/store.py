@@ -16,12 +16,13 @@ held, so **a journal listener must not block**.
 from __future__ import annotations
 
 import binascii
+import contextlib
 import copy
 import json
 import math
 import threading
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, Literal, TypeAlias, TypeVar
 
@@ -403,6 +404,7 @@ class Store:
         "_idempotency",
         "_journal",
         "_listeners",
+        "_muted",
         "_seq",
         "_wrappers",
         "clock",
@@ -421,6 +423,7 @@ class Store:
         self._journal: deque[JournalEntry] = deque(maxlen=JOURNAL_CAPACITY)
         self._idempotency: dict[str, IdempotencyRecord] = {}
         self._listeners: list[JournalListener] = []
+        self._muted = False
         self._seq = 0
         #: Field names whose *values* :meth:`entity_digest` ignores, at any depth.
         self.volatile_fields: set[str] = {"created_at", "updated_at"}
@@ -462,6 +465,18 @@ class Store:
         with self.lock:
             self._listeners.append(listener)
 
+    @contextlib.contextmanager
+    def muted(self) -> Iterator[None]:
+        """Journal listeners do not run for entries appended inside the block; the entries themselves still are, so a
+        caller that means to undo the writes restores a snapshot as well."""
+        with self.lock:
+            self._muted = True
+        try:
+            yield
+        finally:
+            with self.lock:
+                self._muted = False
+
     def append_journal(
         self,
         *,
@@ -475,7 +490,8 @@ class Store:
     ) -> JournalEntry:
         """Append one committed mutation and dispatch it to every listener. Called only from
         :class:`Collection`, after the map is written, so a listener always observes committed
-        state. ``seq`` starts at 1 and increases strictly until :meth:`reset`."""
+        state. ``seq`` starts at 1 and increases strictly until
+        :meth:`reset`; :meth:`muted` suspends the dispatch."""
         with self.lock:
             self._seq += 1
             entry = JournalEntry(
@@ -490,8 +506,9 @@ class Store:
                 meta=dict(meta) if meta is not None else None,
             )
             self._journal.append(entry)
-            for listener in self._listeners:
-                listener(entry)
+            if not self._muted:
+                for listener in self._listeners:
+                    listener(entry)
             return entry
 
     def journal(self, since_seq: int = 0) -> list[JournalEntry]:

@@ -91,7 +91,8 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
   the journal has it; with four of the five the caller never saw it succeed
-  (`slow_body` delivers the answer intact, only late).
+  (`slow_body` delivers the answer intact, only late). Those four take
+  `params.commit` to roll the handler's work back instead — see below.
 - `phase: delivery` — a webhook delivery, not a request: the `webhook.*`
   faults.
 
@@ -104,6 +105,49 @@ response after the write. The request-log entry for such a call carries
 [Journal and request log](unit.md#the-journal-and-the-request-log)). Bound the
 rule with `when: {"nth": [1]}` and re-seed the token, or use a request-phase
 fault for the failure the retry ladder is meant to recover from.
+
+### `commit`: the other model of the same edge
+
+A gateway that mangles the response *after* the write is one honest model of a
+vendor; one where nothing is committed unless the response is written is
+equally plausible, and no vendor documents which of the two its own edge
+implements. So the four faults that discard or corrupt the answer —
+`malformed_body`, `body_mutation`, `connection_reset`, `empty_response` — take
+a `commit` parameter, and a consumer tests both. JUDGMENT: the whole of
+`commit: after` is this project's choice, not a documented behaviour.
+
+- `commit: "before"` (the default, and every earlier release's behaviour) —
+  the handler commits, then the answer is corrupted or dropped.
+- `commit: "after"` — the handler runs inside a snapshot the kernel always
+  restores, so the request leaves nothing behind: no entity change, no journal
+  entry, **no webhook event and no idempotency record**. The answer is then
+  faulted exactly as it would have been.
+
+```json
+{"id": "reset-refresh", "scope": "request", "fault": "connection_reset",
+ "match": {"route": "POST /oauth/v2/refresh"},
+ "params": {"commit": "after"}, "when": {"times": 1}}
+```
+
+Against Clover's single-use rotation that is the difference between a test
+that can retry and one that cannot: the first refresh dies on the wire, and
+the seeded refresh token still works on the second call. Drop the `params` and
+the second call is the documented 401 — the token was spent by a request the
+consumer saw fail.
+
+Two consequences worth stating. On an idempotent route, `after` stores no
+record, so a retry with the same key runs the handler again rather than
+replaying; that is the point, since there is no commit to replay. And
+`slow_body` refuses `commit` with a 400 naming `params.commit`, as does any
+request-phase fault carrying it: neither has a commit to withhold.
+
+`GET /__unit/requests` shows `fault_commit` next to `discarded_mutation`. Under
+`after` the row reads `fault_commit: "after"`, `discarded_mutation: false` and
+no `committed_journal_seq`, because nothing was committed.
+
+The rollback is a whole-store restore, so arm `after` from one caller at a
+time: a request running concurrently on a route the vendor does not serialize
+can have its own commit rolled back with the faulted one.
 
 ## Rehearsing a declined consent
 

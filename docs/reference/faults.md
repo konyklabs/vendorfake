@@ -17,9 +17,9 @@ Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor 
 | `webhook.out_of_order` | webhook | vendor | delivery |  | Hold this event until the next one has been delivered. |
 | `webhook.drop_ack` | webhook | vendor | delivery |  | Ignore a successful subscriber response so the retry schedule runs. |
 | `webhook.drop` | webhook | vendor | delivery |  | Silently swallow the delivery: recorded as dropped, never sent to the subscriber. Filter with match.event_type. |
-| `malformed_body` | request | transport | response | mode, status | Replace a successful response's body with something the vendor's own schema forbids. |
-| `body_mutation` | request | transport | response | ops | Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran. |
-| `connection_reset` | request | transport | response |  | Drop the connection after the response starts, before it completes. |
-| `empty_response` | request | transport | response |  | Drop the connection as close to before any bytes as the binding can manage. |
+| `malformed_body` | request | transport | response | mode, status, commit | Replace a successful response's body with something the vendor's own schema forbids. |
+| `body_mutation` | request | transport | response | ops, commit | Apply RFC 6901 JSON-pointer operations to a successful JSON response body, after the handler ran. |
+| `connection_reset` | request | transport | response | commit | Drop the connection after the response starts, before it completes. |
+| `empty_response` | request | transport | response | commit | Drop the connection as close to before any bytes as the binding can manage. |
 | `slow_body` | request | transport | response | chunk_bytes, chunk_delay_ms | Stream a successful response body in chunks, with a delay between them. |
 | `authorize_denied` | request | vendor | handler |  | The merchant declines on the consent screen: the authorize route redirects with the vendor's documented denial (error=access_denied, state passed through) and mints no code. |

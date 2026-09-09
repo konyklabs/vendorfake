@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from tests.unit.clover.harness import (
@@ -24,6 +25,7 @@ from tests.unit.clover.harness import (
 )
 from vendorfake.clover.entities import COL, AuthorizationCodeEntity, TokenEntity
 from vendorfake.core.util.b64 import b64url_encode
+from vendorfake.testing import CloverSeed, StartedUnit, unit
 
 DAY_S = 24 * 60 * 60
 
@@ -563,3 +565,68 @@ def test_the_request_log_names_the_fault_on_the_declined_call_only(h: Harness) -
     h.authorize(state="xyz")
     records = h.api.get("/__unit/requests").json()["requests"]
     assert [(r["fault"], r["rule_id"]) for r in records if r.get("fault")] == [("authorize_denied", "decline-once")]
+
+
+# ---------------------------------------------------------------------------
+# params.commit on the refresh rotation
+# ---------------------------------------------------------------------------
+
+
+def _reset_refresh(commit: str | None = None) -> dict[str, object]:
+    rule: dict[str, object] = {
+        "id": "reset-refresh",
+        "scope": "request",
+        "fault": "connection_reset",
+        "match": {"route": "POST /oauth/v2/refresh"},
+        "when": {"times": 1},
+    }
+    if commit is not None:
+        rule["params"] = {"commit": commit}
+    return rule
+
+
+def _refresh_with(started: StartedUnit[CloverSeed], token: str) -> httpx.Response:
+    body = {"client_id": started.seed.client_id, "refresh_token": token}
+    return started.client.post("/oauth/v2/refresh", json=body)
+
+
+def test_a_reset_with_commit_after_leaves_the_seeded_refresh_token_usable() -> None:
+    """The consumer's scenario. The connection dies on the first refresh; with
+    ``commit: after`` the rotation never happened, so the credential the
+    consumer still holds works on the retry."""
+    with unit("clover", profile="oauth-only") as started:
+        started.add_chaos_rule(_reset_refresh("after"))
+        token = started.seed.refresh_token
+        with pytest.raises(httpx.RemoteProtocolError):
+            _refresh_with(started, token)
+
+        retried = _refresh_with(started, token)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["access_token"]
+
+        records = started.requests(route="POST /oauth/v2/refresh")
+        first = records[-1]
+        assert first["fault"] == "connection_reset"
+        assert first["fault_commit"] == "after"
+        assert first["discarded_mutation"] is False
+        assert "committed_journal_seq" not in first
+
+
+def test_the_same_reset_without_commit_spends_the_token_as_it_always_has() -> None:
+    """The default is unchanged: the rotation stands behind the dead
+    connection, so the retry is the documented single-use 401."""
+    with unit("clover", profile="oauth-only") as started:
+        started.add_chaos_rule(_reset_refresh())
+        token = started.seed.refresh_token
+        with pytest.raises(httpx.RemoteProtocolError):
+            _refresh_with(started, token)
+
+        retried = _refresh_with(started, token)
+        assert retried.status_code == 401
+        assert "already used" in retried.text
+
+        records = started.requests(route="POST /oauth/v2/refresh")
+        first = records[-1]
+        assert first["fault_commit"] == "before"
+        assert first["discarded_mutation"] is True
+        assert first["committed_journal_seq"] > 0
