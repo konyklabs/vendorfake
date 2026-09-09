@@ -137,6 +137,7 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
     assert declared == {
         "serve",
         "info",
+        "manifest",
         "openapi",
         "vendors",
         "profiles",
@@ -598,3 +599,102 @@ def test_the_profiles_subcommand_refuses_a_malformed_profile_document_too(
         run("profiles", "--vendor", "acme")
 
     assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# manifest
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_prints_one_json_document_and_nothing_else() -> None:
+    """`--json` is implicit here: the output *is* the document. A banner, a
+    table or a trailing note would break `vendorfake manifest > square.json`,
+    which is the whole way a compose setup step uses it."""
+    code, out = run("manifest", "--vendor", "square")
+    assert code == 0
+    document = json.loads(out)
+    assert document["schema"] == "vendorfake.manifest/1"
+    assert (document["vendor"], document["profile"]) == ("square", "full")
+
+
+def test_manifest_matches_the_document_the_control_plane_serves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two ways in, one function behind them. Were these built separately, a
+    field added to one would silently be absent from the other, and a script
+    that read the file would fail only against the served world. Both units run
+    on the same pinned virtual clock: the seeded tokens carry an expiry."""
+    from vendorfake.core.transport.inprocess import in_process
+    from vendorfake.registry import create_unit
+
+    pinned = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"}
+    for key, value in pinned.items():
+        monkeypatch.setenv(key, value)
+    _, out = run("manifest", "--vendor", "square")
+    unit = create_unit(vendor="square", env=pinned)
+    try:
+        served = in_process(unit).get("/__unit/manifest").json()
+    finally:
+        unit.stop()
+    assert json.loads(out) == served
+
+
+def test_manifest_records_the_base_url_it_was_given_and_null_without_one() -> None:
+    """A process with no request cannot infer the address a container will be
+    reached at; guessing loopback would put a URL in the document that no
+    caller outside the container can use."""
+    _, given = run("manifest", "--vendor", "square", "--base-url", "http://fake:8080")
+    assert json.loads(given)["base_url"] == "http://fake:8080"
+    _, omitted = run("manifest", "--vendor", "square")
+    assert json.loads(omitted)["base_url"] is None
+
+
+def test_manifest_refuses_an_unknown_vendor_rather_than_printing_an_empty_document() -> None:
+    """An empty `ids` would read as "this unit has no entities", and a script
+    would fail somewhere further down on a missing key instead of here."""
+    with pytest.raises(SystemExit) as raised:
+        run("manifest", "--vendor", "nope")
+    assert str(raised.value).startswith("vendorfake: ")
+
+
+def test_serve_validate_refuses_a_vendor_with_no_fidelity_leg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--validate`` on a vendor with no declaration would start a server that
+    checks nothing, with the flag reading as satisfied. It refuses instead, and
+    says which vendor and why.
+
+    ``run_server`` is intercepted the way the precedence test does it: what is
+    under test is the refusal, and it happens before a socket would be bound.
+    """
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    bound: list[object] = []
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: bound.append(kwargs))
+
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "clover", "--validate"])
+    with pytest.raises(SystemExit) as caught:
+        cli_module._serve(args, {}, sys.stdout)
+    message = str(caught.value)
+    assert "clover" in message and "fidelity leg" in message
+    assert bound == []
+
+
+def test_serve_validate_builds_the_observer_for_a_vendor_that_has_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flag reaches ``create_app`` as an observer; without it there is none."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    seen: list[object] = []
+    real_create_app = asgi_module.create_app
+
+    def spy_create_app(unit: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("observer"))
+        return real_create_app(unit, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asgi_module, "create_app", spy_create_app)
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+
+    parser = cli_module._build_parser()
+    for argv in (["--validate"], []):
+        args = parser.parse_args(["serve", "--vendor", "square", *argv])
+        assert cli_module._serve(args, {}, sys.stdout) == 0
+    assert [observer is not None for observer in seen] == [True, False]

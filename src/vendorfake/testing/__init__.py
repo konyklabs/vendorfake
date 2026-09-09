@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import contextlib
+import json
 import os
 import queue
 import re
@@ -25,8 +27,9 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
-from vendorfake.core.config.profile import ENV_SEED, ENV_VENDOR_PREFIX, load_profile
+from vendorfake.core.config.profile import DEFAULT_PROFILE_NAME, ENV_SEED, ENV_VENDOR_PREFIX, load_profile
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
+from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
@@ -51,7 +54,7 @@ from vendorfake.testing.seeds import (
     seed_collections_for,
     seed_for,
 )
-from vendorfake.testing.transport import UnitTransport, UnmatchedRequest, checked_unmatched
+from vendorfake.testing.transport import DEFAULT_INPROCESS_POLICY, UnitTransport, UnmatchedRequest, checked_unmatched
 
 __all__ = [
     "CLIENT_TIMEOUT_S",
@@ -154,6 +157,22 @@ class Driver(Generic[SeedT]):
     base_url: str
     client: httpx.Client
     seed: SeedT
+    _async_client: httpx.AsyncClient | None = field(default=None, kw_only=True, repr=False)
+
+    @property
+    def async_client(self) -> httpx.AsyncClient:
+        """An ``httpx.AsyncClient`` onto the same unit over the same base URL, built
+        lazily so it binds the loop that first uses it; closed with the driver."""
+        if self._async_client is None:
+            self._async_client = httpx.AsyncClient(
+                base_url=self.base_url, timeout=CLIENT_TIMEOUT_S, event_hooks=_async_hooks(self.client)
+            )
+        return self._async_client
+
+    async def aclose(self) -> None:
+        """Close the async client if one was built; safe to call twice."""
+        if self._async_client is not None:
+            await self._async_client.aclose()
 
     # -- reading ------------------------------------------------------------
 
@@ -377,26 +396,17 @@ class StartedUnit(Driver[SeedT]):
     #: The transport behind :attr:`Driver.client`, shared with
     #: :attr:`async_client`. Optional, so a hand-built ``StartedUnit`` still works.
     _transport: UnitTransport | None = field(default=None, kw_only=True, repr=False)
-    _async_client: httpx.AsyncClient | None = field(default=None, kw_only=True, repr=False)
 
     @property
     def async_client(self) -> httpx.AsyncClient:
-        """An ``httpx.AsyncClient`` onto the same unit, sharing :attr:`client`'s base
-        URL and transport instance, so the two are interchangeable views of one
-        unit. Lazy, because an eager one would bind whatever loop was running."""
+        """An ``httpx.AsyncClient`` onto the same unit, sharing :attr:`client`'s
+        transport instance, so the two are interchangeable views of one unit."""
         if self._async_client is None:
             transport = self._transport if self._transport is not None else UnitTransport(self.unit)
             self._async_client = httpx.AsyncClient(
                 transport=transport, base_url=self.base_url, timeout=CLIENT_TIMEOUT_S
             )
         return self._async_client
-
-    async def aclose(self) -> None:
-        """Close the async client if one was built; safe to call twice.
-        :func:`async_unit` awaits this on the way out, and the reference is kept
-        so a later request raises rather than silently getting a fresh client."""
-        if self._async_client is not None:
-            await self._async_client.aclose()
 
 
 @dataclass
@@ -610,11 +620,24 @@ def _unit(
     """The body of :func:`unit`. See that function for the contract. ``env`` is the
     whole ``VENDORFAKE_*`` layer, empty by default, with ``seed``,
     ``seed_overlay`` and ``clock_start`` as layers under it."""
-    environ: dict[str, str] = {} if seed is None else {"VENDORFAKE_CHAOS_SEED": str(seed)}
+    # The one resolution order every binding shares: ambient VENDORFAKE_* variables,
+    # then the keyword arguments' layer, then the caller's ``env`` mapping.
+    environ: dict[str, str] = registry.ambient_env()
+    if seed is not None:
+        environ["VENDORFAKE_CHAOS_SEED"] = str(seed)
     if clock_start is not None:
         environ["VENDORFAKE_CLOCK_START"] = _clock_start_env_value(clock_start)
     if seed_overlay is not None:
         environ["VENDORFAKE_SEED_OVERLAY"] = _seed_overlay_env_value(seed_overlay)
+    # An exported seed document is refused rather than silently hydrating a store
+    # the returned `.seed` does not describe; passed in env= it is a deliberate
+    # choice the seed-overlay tests rely on.
+    if "VENDORFAKE_SEED" in environ and "VENDORFAKE_SEED" not in (env or {}):
+        raise ValueError(
+            "unit() will not take VENDORFAKE_SEED from the exported environment: the .seed handed back is derived "
+            "from the vendor's constants and would not describe a unit hydrated from another document. Pass "
+            'env={"VENDORFAKE_SEED": ...} to mean it, or a profile whose document points at the seed you want.'
+        )
     environ.update(env or {})
     built = create_unit(
         vendor=vendor,
@@ -655,17 +678,65 @@ def _unit(
         built.stop()
 
 
-def _release_async_client(started: StartedUnit[Any]) -> None:
-    """Close a lazily built :attr:`StartedUnit.async_client` from sync code. With
-    no loop running ``asyncio.run`` closes it; with one running nothing is done,
-    and nothing leaks, this transport owning no socket, pool or thread."""
+def _near_miss_message(response: httpx.Response) -> str:
+    request = response.request
+    lines = [f"vendorfake: no route matched {request.method} {request.url.path} on the served unit"]
+    try:
+        candidates = json.loads(response.headers[NEAR_MISS_HEADER])
+    except (KeyError, ValueError):
+        candidates = []
+    if candidates:
+        lines.append("Closest routes:")
+        lines.extend(f"  {c.get('route')}  {c.get('operation_id') or ''}  {c.get('score')}" for c in candidates)
+    lines.append('Pass unmatched="vendor-404" to get the 404 instead.')
+    return "\n".join(lines)
+
+
+def _raise_on_near_miss(response: httpx.Response) -> None:
+    """The response hook behind ``unmatched="error"`` on an HTTP driver: the served
+    unit answers 404 with the near-miss header, and the Python driver raises."""
+    if NEAR_MISS_HEADER in response.headers:
+        raise UnmatchedRequest(_near_miss_message(response))
+
+
+async def _raise_on_near_miss_async(response: httpx.Response) -> None:
+    _raise_on_near_miss(response)
+
+
+def _http_client(base_url: str, unmatched: UnmatchedPolicy | None) -> httpx.Client:
+    """The sync client of an HTTP driver, with the near-miss hook under ``"error"``."""
+    policy = checked_unmatched(unmatched) or DEFAULT_INPROCESS_POLICY
+    hooks: dict[str, list[Any]] = {"response": [_raise_on_near_miss]} if policy == "error" else {}
+    return httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S, event_hooks=hooks)
+
+
+def _async_hooks(client: httpx.Client) -> dict[str, list[Any]]:
+    """The async twin of ``client``'s response hooks."""
+    return {"response": [_raise_on_near_miss_async]} if client.event_hooks.get("response") else {}
+
+
+_CLOSING: set[asyncio.Task[None]] = set()
+"""Close tasks in flight on a running loop, held so they are not collected early."""
+
+
+def _release_async_client(started: Driver[Any]) -> None:
+    """Close a lazily built :attr:`Driver.async_client` from sync code. With no
+    loop running ``asyncio.run`` closes it; with one running nothing is done."""
     client = started._async_client
     if client is None:
         return
     try:
-        asyncio.get_running_loop()
+        loop = asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(client.aclose())
+        # No loop running: close on a fresh one. A client whose own loop has already
+        # closed cannot be closed again and is left to the garbage collector.
+        with contextlib.suppress(RuntimeError):
+            asyncio.run(client.aclose())
+    else:
+        # Torn down from inside a running loop (an async test): close on that loop.
+        task = loop.create_task(client.aclose())
+        _CLOSING.add(task)
+        task.add_done_callback(_CLOSING.discard)
 
 
 @overload
@@ -821,30 +892,34 @@ def serve_in_thread(started: StartedUnit[SeedT], *, host: str = "127.0.0.1", por
     from vendorfake.asgi import create_app
     from vendorfake.asgi import serve_in_thread as serve_app
 
+    policy = started._transport.unmatched if started._transport is not None else None
     with (
         serve_app(create_app(started.unit), host=host, port=port) as base_url,
-        httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S) as client,
+        _http_client(base_url, policy) as client,
     ):
-        yield Driver(
-            vendor=started.vendor,
-            profile=started.profile,
-            base_url=base_url,
-            client=client,
-            seed=started.seed,
+        driver = Driver(
+            vendor=started.vendor, profile=started.profile, base_url=base_url, client=client, seed=started.seed
         )
+        try:
+            yield driver
+        finally:
+            _release_async_client(driver)
 
 
 @overload
 def served(
     vendor: Literal["square"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
     port: int = ...,
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: SquareSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[SquareSeed]]: ...
 
@@ -852,14 +927,17 @@ def served(
 @overload
 def served(
     vendor: Literal["clover"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
     port: int = ...,
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: CloverSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[CloverSeed]]: ...
 
@@ -867,14 +945,17 @@ def served(
 @overload
 def served(
     vendor: Literal["toast"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
     port: int = ...,
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: ToastSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[ToastSeed]]: ...
 
@@ -882,14 +963,17 @@ def served(
 @overload
 def served(
     vendor: Literal["lightspeed"],
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
     port: int = ...,
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[LightspeedSeed]]: ...
 
@@ -897,28 +981,34 @@ def served(
 @overload
 def served(
     vendor: str,
-    profile: str = ...,
+    profile: str | None = ...,
     *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
     port: int = ...,
     host: str = ...,
     log_level: str = ...,
     timeout_s: float = ...,
     env: Mapping[str, str] | None = ...,
     clock_start: datetime | str | None = ...,
+    validate: bool = ...,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[Seed]]: ...
 
 
 def served(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
+    unmatched: UnmatchedPolicy | None = None,
     port: int = 0,
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    validate: bool = False,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> AbstractContextManager[ServedUnit[Any]]:
     """``vendorfake serve`` in a child process, with its URL.
@@ -929,16 +1019,23 @@ def served(
     precedence and the names the mapping may not carry. ``seed_overlay`` reaches
     the child as ``VENDORFAKE_SEED_OVERLAY``. A session-scoped ``served()``
     against a vendor with rotating state needs :meth:`Driver.reset` between tests.
+
+    ``validate=True`` passes ``--validate`` to the child: every answer is checked
+    against the vendor's published schema and a violation comes back as a 500
+    naming it. It needs a vendor with a fidelity leg and costs a check per call.
     """
     return _served(
         vendor,
         profile,
+        capabilities=capabilities,
+        unmatched=unmatched,
         port=port,
         host=host,
         log_level=log_level,
         timeout_s=timeout_s,
         env=env,
         clock_start=clock_start,
+        validate=validate,
         seed_overlay=seed_overlay,
     )
 
@@ -946,14 +1043,17 @@ def served(
 @contextmanager
 def _served(
     vendor: str,
-    profile: str = "full",
+    profile: str | None = None,
     *,
+    capabilities: Sequence[str] | None = None,
+    unmatched: UnmatchedPolicy | None = None,
     port: int = 0,
     host: str = "127.0.0.1",
     log_level: str = "error",
     timeout_s: float = STARTUP_TIMEOUT_S,
     env: Mapping[str, str] | None = None,
     clock_start: datetime | str | None = None,
+    validate: bool = False,
     seed_overlay: SeedOverlay | str | os.PathLike[str] | None = None,
 ) -> Iterator[ServedUnit[Seed]]:
     """The body of :func:`served`. See that function for the contract.
@@ -1014,7 +1114,24 @@ def _served(
             "as explicit flags, and the CLI prefers a flag to the variable, so the entry would change nothing. "
             "Use the parameter instead."
         )
+    checked_unmatched(unmatched)  # refused here, on the caller's line, not after the child is spawned
+    if validate:
+        # The same refusal the child would make, made where the caller can see it: without this the child
+        # exits before announcing a port, and the caller gets a startup timeout instead of the reason.
+        from vendorfake.testing.fidelity import target_for
+
+        if target_for(resolved_name) is None:
+            raise ValueError(
+                f"served({vendor!r}, validate=True): {resolved_name} has no fidelity leg, so there is no "
+                "published schema to check its answers against."
+            )
+    resolved_profile, capability_layer = registry.resolve_capabilities(definition, profile, capabilities)
+    layer.update(capability_layer)
     child_view = {**os.environ, **layer}
+    # The same resolution order as unit() and the CLI: the argument, else the
+    # variable the child will see, else the default. Passed to the child as a flag
+    # so parent and child agree on the seed.
+    profile = resolved_profile or child_view.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
     resolution_env = {
         key: value for key, value in child_view.items() if key.startswith(ENV_VENDOR_PREFIX) or key == ENV_SEED
     }
@@ -1051,6 +1168,8 @@ def _served(
         "--log-level",
         log_level,
     ]
+    if validate:
+        argv.append("--validate")
     # The second documented exception to `cli.py`'s `os.environ` invariant:
     # `Popen`'s `env=` replaces rather than layers, so adding one variable to the
     # environment it would otherwise inherit has no path that avoids this read.
@@ -1059,9 +1178,9 @@ def _served(
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, timeout_s)
-        with httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S) as client:
+        with _http_client(base_url, unmatched) as client:
             health = client.get("/__unit/health").json()
-            yield ServedUnit(
+            child = ServedUnit(
                 vendor=str(health["vendor"]),
                 profile=str(health["profile"]),
                 base_url=base_url,
@@ -1073,18 +1192,20 @@ def _served(
                 process=process,
                 _output=output,
             )
+            try:
+                yield child
+            finally:
+                _release_async_client(child)
     finally:
         _stop(process)
         output.join()
 
 
-_FLAG_BEATEN_ENV: frozenset[str] = frozenset(
-    {"VENDORFAKE_PROFILE", "VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL"}
-)
+_FLAG_BEATEN_ENV: frozenset[str] = frozenset({"VENDORFAKE_HOST", "VENDORFAKE_PORT", "VENDORFAKE_LOG_LEVEL"})
 """The ``VENDORFAKE_*`` names an ``env=`` entry to :func:`served` is refused for,
 the child getting each as a flag that beats the variable."""
 
-_FLAG_BEATEN_HINT = "profile=, host=, port= and log_level="
+_FLAG_BEATEN_HINT = "host=, port= and log_level="
 
 SERVE_COMMAND: tuple[str, ...] = (sys.executable, "-m", "vendorfake", "serve")
 """What :func:`served` runs, before the flags. A module attribute so a test of

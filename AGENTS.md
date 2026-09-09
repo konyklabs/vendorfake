@@ -4,7 +4,10 @@ For an agent working *in this repository* -- building, fixing, or extending
 vendorfake itself. If instead you are writing tests **against** an installed
 vendorfake in a consumer repository, this is the wrong file: run `vendorfake
 explain <kind> <name>` there for one answer at a time, or read
-https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md.
+https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/unit.md for
+the vocabulary and
+https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md for
+the four ways to hold a unit.
 
 ## Layout
 
@@ -25,11 +28,11 @@ src/vendorfake/
   square/ clover/ toast/ lightspeed/
                 one vendor surface each: routes, error vocabulary, signature
                 scheme, retry schedule, seed.
-  cli.py        the vendorfake command; the only module that reads
-                os.environ.
+  cli.py        the vendorfake command.
   registry.py   vendor discovery and the one create_unit() constructor.
 tests/
   unit/         fast, no server, no vendor-specific fixtures required.
+  parity/       one behaviour asserted across unit(), served() and the CLI.
   integration/  needs a running server (marker: integration).
   conformance/  the suite that exercises tests/conformance's own harness
                 against the checks in src/vendorfake/conformance/checks/.
@@ -37,6 +40,9 @@ tools/          self-test.sh, boundary_check.py, boundary.toml, and the
                 other scripts self-test.sh's steps call.
 docs/           the docs site's source (see mkdocs.yml if present).
 ```
+
+`docs/testing.md` is the testing strategy: the tiers, and the two rules that
+decide whether a test exists.
 
 ## The one command
 
@@ -70,12 +76,13 @@ matter most:
 - Pydantic is permitted in `core/` only in the three files
   `tools/boundary.toml` names, because it parses an external document there;
   everywhere else in `core/` an entity stays a plain dict.
-- `cli.py` is the only module that resolves a unit's config from `os.environ`;
-  every first-party import in it happens inside a function body so `vendorfake
-  --help` never pays for importing a web framework. `vendorfake.testing.served()`
-  is the one documented exception, because it spawns `cli.py`'s own `serve`
-  subcommand as a child that inherits the real environment regardless -- see
-  its docstring in `src/vendorfake/testing/__init__.py`.
+- The process environment is read in one function, `registry.ambient_env()`,
+  which `unit()`, `served()` and `cli.py` layer explicit configuration over, so
+  an exported `VENDORFAKE_*` variable means one thing on every binding.
+  `create_unit()` itself takes `env` as a parameter defaulting to `{}`.
+  `cli.py`'s first-party imports happen inside function bodies so `vendorfake
+  --help` never pays for importing a web framework; `served()` spawns that
+  command as a child that inherits the real environment.
 
 ## Provenance labels
 

@@ -34,7 +34,7 @@ curl -s http://127.0.0.1:8124/__unit/health
 ```
 
 ```json
-{"status":"ok","vendor":"lightspeed","profile":"full","uptime_ms":19}
+{"status":"ok","vendor":"lightspeed","profile":"full","uptime_ms":19,"version":"0.5.0"}
 ```
 
 ### 1. Authorize, then exchange the code
@@ -317,7 +317,7 @@ Everything below is a place the vendor's published documentation does not
 settle a behaviour a fake must nevertheless have. Each is labelled `JUDGMENT` at
 its site in the code; the citation is the page that is *silent*, which is the
 discipline described under
-[Provenance labels](../concepts/provenance-labels.md).
+[Provenance labels](../concepts/chaos.md#provenance).
 
 | Decision | Why it is a judgment | Cited page |
 |---|---|---|

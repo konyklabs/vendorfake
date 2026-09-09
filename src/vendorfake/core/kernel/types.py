@@ -56,6 +56,7 @@ __all__ = [
     "PreparedEvent",
     "ReplyInit",
     "RequestRecord",
+    "ResponseObserver",
     "Route",
     "SeedingVendor",
     "ShapedError",
@@ -193,7 +194,7 @@ class UnitRequest:
 class TransportDirective:
     """An instruction to a binding about the *socket*, not the vendor's bytes: the three faults no response schema can
     express. ``UnitResponse.body`` still carries what the handler produced. The kernel never touches sockets, so it
-    builds this value and stops. provenance: transport; see ``docs/concepts/chaos-rules-and-faults.md`` ("Transport
+    builds this value and stops. provenance: transport; see ``docs/concepts/chaos.md`` ("Transport
     faults")."""
 
     kind: Literal["connection_reset", "empty_response", "slow_body"]
@@ -226,6 +227,10 @@ class ReplyInit:
     json: Any = None
     text: str | None = None
     raw: bytes | None = None
+
+
+ResponseObserver = Callable[[UnitRequest, UnitResponse], None]
+"""Called by a binding after the unit answered; may raise to turn the answer into a 500 naming the violation."""
 
 
 # What the unit observed about a request. Distinct from the journal, which records committed *mutations* only.

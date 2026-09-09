@@ -9,13 +9,16 @@ Every subcommand's `--help`.
 ```text
 usage: vendorfake [-h] [--json] [--version] COMMAND ...
 
-Run or describe a high-fidelity fake of a third-party vendor API.
+Run or describe a fake of a third-party vendor API, checked against its
+published schema.
 
 positional arguments:
   COMMAND
     serve        Serve a unit over HTTP.
     info         Print what a unit would be, as JSON, without serving it.
     openapi      Print the OpenAPI 3.1 document for a unit's route table.
+    manifest     Print the world-neutral manifest: credentials, webhook keys
+                 and entity ids.
     vendors      List the vendors that would resolve here.
     profiles     List the profiles a vendor ships.
     routes       List a vendor's route table.
@@ -39,6 +42,7 @@ public API a module here imitates.
 ```text
 usage: vendorfake serve [-h] [--vendor VENDOR] [--profile PROFILE]
                         [--host HOST] [--port PORT] [--log-level LOG_LEVEL]
+                        [--validate]
 
 options:
   -h, --help            show this help message and exit
@@ -55,6 +59,9 @@ options:
   --log-level LOG_LEVEL
                         uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL,
                         then the profile's.
+  --validate            Check every answer against the vendor's own published
+                        schema, and answer 500 naming the violation when one
+                        fails. Refused for a vendor with no fidelity leg.
 ```
 
 ## `vendorfake info`
@@ -92,6 +99,26 @@ options:
                      then to the vendor's default profile.
   --no-internal      Omit the /__unit/* control plane, describing only the
                      vendor surface.
+```
+
+## `vendorfake manifest`
+
+```text
+usage: vendorfake manifest [-h] [--json] [--vendor VENDOR] [--profile PROFILE]
+                           [--base-url BASE_URL]
+
+options:
+  -h, --help           show this help message and exit
+  --json               Machine output: one JSON document on stdout, nothing
+                       else on stdout.
+  --vendor VENDOR      Vendor to serve (see `vendorfake vendors`). Defaults to
+                       $VENDORFAKE_VENDOR; with exactly one vendor installed
+                       that one is used, otherwise the command refuses and
+                       lists them.
+  --profile PROFILE    Profile name or path. Defaults to $VENDORFAKE_PROFILE,
+                       then to the vendor's default profile.
+  --base-url BASE_URL  The address the unit will be reached at, recorded in
+                       the document. Omitted, base_url is null.
 ```
 
 ## `vendorfake vendors`
