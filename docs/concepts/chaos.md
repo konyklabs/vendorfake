@@ -82,6 +82,12 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
 - `phase: request` — fires **instead of** the handler. `rate_limit`,
   `server_error`, `unavailable`, `timeout`, `token_expiry`,
   `refresh_rejected`. Nothing is committed; a retry starts clean.
+- `phase: handler` — handed **to the route**, whose own handler answers the
+  way the vendor does instead of its normal reply. `authorize_denied`. Nothing
+  is committed. The mechanism headers and the request record name the fault
+  only when the route implements it; a route the fault means nothing to
+  ignores it, which is logged (`handler-phase fault not implemented by the
+  route`) and recorded as unfaulted.
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
   the journal has it; with four of the five the caller never saw it succeed
@@ -98,6 +104,32 @@ response after the write. The request-log entry for such a call carries
 [Journal and request log](unit.md#the-journal-and-the-request-log)). Bound the
 rule with `when: {"nth": [1]}` and re-seed the token, or use a request-phase
 fault for the failure the retry ladder is meant to recover from.
+
+## Rehearsing a declined consent
+
+The authorize routes approve automatically, because a fake has nobody to click
+the consent screen. `authorize_denied` is how a headless connect-flow test sees
+the other answer, without the consumer's code having to build a different URL:
+
+```json
+{"id": "decline-once", "scope": "request", "fault": "authorize_denied",
+ "match": {"route": "GET /oauth/v2/authorize"}, "when": {"times": 1}}
+```
+
+The first authorize call redirects with the denial and mints no code; the
+second is the ordinary approval, so one test covers the refusal *and* the
+retry. What each vendor sends back:
+
+| Vendor | Route | Denial redirect |
+| --- | --- | --- |
+| Square | `GET /oauth2/authorize` | `?error=access_denied&error_description=user_denied` plus `state` |
+| Clover | `GET /oauth/v2/authorize` | `?error=access_denied` plus `state` when the request carried one |
+| Lightspeed | `GET /connect` | `?error=access_denied` plus `state` when the request carried one |
+
+Square's `?unit_prompt=deny` is the same answer reached in band, for a test
+that can edit the authorization URL; the fault is for the one that cannot.
+Toast has no consent screen and no authorize route, so nothing there matches
+the rule.
 
 ## Transport faults: what each binding raises
 

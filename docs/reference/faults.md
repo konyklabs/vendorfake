@@ -2,7 +2,7 @@
 
 # Faults
 
-Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos](../concepts/chaos.md) and [Provenance labels](../concepts/chaos.md#provenance).
+Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor documents; `provenance: transport` is a transport-level failure mode no vendor documents. `phase: request` fires instead of the handler, so nothing is committed; `phase: handler` is handed to the route, whose own handler answers the way the vendor does and commits nothing; `phase: response` fires on the answer *after* the handler committed, so a retry does not start clean; `phase: delivery` is a webhook delivery. See [Chaos](../concepts/chaos.md) and [Provenance labels](../concepts/chaos.md#provenance).
 
 | Fault | Scope | Provenance | Phase | Params | Description |
 | --- | --- | --- | --- | --- | --- |
@@ -22,3 +22,4 @@ Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor 
 | `connection_reset` | request | transport | response |  | Drop the connection after the response starts, before it completes. |
 | `empty_response` | request | transport | response |  | Drop the connection as close to before any bytes as the binding can manage. |
 | `slow_body` | request | transport | response | chunk_bytes, chunk_delay_ms | Stream a successful response body in chunks, with a delay between them. |
+| `authorize_denied` | request | vendor | handler |  | The merchant declines on the consent screen: the authorize route redirects with the vendor's documented denial (error=access_denied, state passed through) and mints no code. |

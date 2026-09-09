@@ -506,3 +506,60 @@ def test_clock_start_makes_the_documented_access_token_lifetime_reproducible_acr
             seen.append(int(body["access_token_expiration"]))
 
     assert seen == [expected, expected]
+
+
+# ---------------------------------------------------------------------------
+# The authorize_denied fault: the merchant declines on the consent screen.
+# ---------------------------------------------------------------------------
+
+DENY_RULE: dict[str, object] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /oauth/v2/authorize"},
+    "when": {"times": 1},
+}
+
+
+def test_an_armed_denial_redirects_with_access_denied_and_mints_no_code(h: Harness) -> None:
+    """JUDGMENT -- Clover documents only the approved redirect, so the denial
+    takes RFC 6749 s4.1.2.1's shape: ``error=access_denied`` and the state
+    echoed back. What the fault must NOT do is mint a code the vendor never
+    minted, which is why it reaches the handler rather than rewriting the
+    answer afterwards.
+    """
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    codes = h.unit.context.store.collection(COL.codes)
+    before = len(codes.all())
+
+    denied = h.authorize(state="xyz")
+    assert denied.status == 302
+    assert denied.headers["vendorfake-fault"] == "authorize_denied"
+    assert denied.headers["vendorfake-rule"] == "decline-once"
+    query = _location_query(denied)
+    assert query["error"] == ["access_denied"]
+    assert query["state"] == ["xyz"]
+    assert "code" not in query
+    assert len(codes.all()) == before
+
+
+def test_the_second_authorize_approves_and_its_code_exchanges(h: Harness) -> None:
+    """``when.times: 1`` is what makes one test cover the refusal and the retry."""
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    assert "error" in _location_query(h.authorize(state="xyz"))
+
+    approved = h.authorize(state="xyz")
+    assert approved.status == 302
+    assert "vendorfake-fault" not in approved.headers
+    code = _location_query(approved)["code"][0]
+    exchanged = h.token(client_secret=CLIENT_SECRET, code=code)
+    assert exchanged.status == 200, exchanged.text
+    assert exchanged.json()["access_token"]
+
+
+def test_the_request_log_names_the_fault_on_the_declined_call_only(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    h.authorize(state="xyz")
+    h.authorize(state="xyz")
+    records = h.api.get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records if r.get("fault")] == [("authorize_denied", "decline-once")]

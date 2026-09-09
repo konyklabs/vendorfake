@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from tests.fakes import FakeAuth, FakeErrors, FakeVendor, capability, make_unit, route
+from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
     IdempotencySpec,
@@ -151,6 +152,113 @@ def test_a_disabled_chaos_capability_arms_nothing() -> None:
     )
     assert in_process(unit).get("/v2/orders").status == 200
     assert unit.context.chaos.status()[0].matches == 0
+
+
+# ---------------------------------------------------------------------------
+# step 8 -- the handler phase, for a fault only the route can answer
+# ---------------------------------------------------------------------------
+
+
+def _denying(calls: list[str]):  # type: ignore[no-untyped-def]
+    """A route that implements ``authorize_denied`` the way an authorize route does."""
+
+    def run(args):  # type: ignore[no-untyped-def]
+        calls.append("run")
+        if args.consume_fault("authorize_denied") is not None:
+            return json_({"denied": True})
+        return json_({"ok": True})
+
+    return run
+
+
+class _Warnings:
+    """A logger that keeps the warnings and drops everything else."""
+
+    def __init__(self) -> None:
+        self.warned: list[tuple[str, object]] = []
+
+    def debug(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+    def info(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+    def warn(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        self.warned.append((msg, fields))
+
+    def error(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+
+_DENY_RULE: dict[str, object] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /oauth/authorize"},
+    "when": {"times": 1},
+}
+
+
+def test_a_handler_that_consumes_the_fault_is_stamped_and_recorded_as_faulted() -> None:
+    """The route answered, so the two mechanism headers and the request record
+    say so -- exactly as they would for a fault the core raised itself."""
+    calls: list[str] = []
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _denying(calls))],
+        control_routes=control_plane_routes,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 200
+    assert res.json() == {"denied": True}
+    assert res.header("vendorfake-fault") == "authorize_denied"
+    assert res.header("vendorfake-rule") == "decline-once"
+    assert calls == ["run"]
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records] == [("authorize_denied", "decline-once")]
+
+
+def test_a_route_that_ignores_the_fault_answers_normally_and_is_warned_about() -> None:
+    """A handler-phase fault means nothing to most routes. The core must not
+    invent an answer for them: the reply, the headers and the record are the
+    unfaulted ones, and the mismatch is logged rather than swallowed."""
+    calls: list[str] = []
+    log = _Warnings()
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _handler(calls))],
+        control_routes=control_plane_routes,
+        logger=log,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 200
+    assert res.json() == {"ok": True}
+    assert res.header("vendorfake-fault") is None
+    assert res.header("vendorfake-rule") is None
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [r.get("fault") for r in records] == [None]
+    assert [msg for msg, _ in log.warned] == ["handler-phase fault not implemented by the route"]
+    assert log.warned[0][1] == {
+        "fault": "authorize_denied",
+        "rule": "decline-once",
+        "route": "GET /oauth/authorize",
+    }
+
+
+def test_a_times_one_handler_phase_rule_denies_the_first_call_only() -> None:
+    """The rehearsal the fault exists for: decline, then approve, in one test."""
+    calls: list[str] = []
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _denying(calls))],
+        control_routes=control_plane_routes,
+        chaos_rules=[_DENY_RULE],
+    )
+    api = in_process(unit)
+    assert api.get("/oauth/authorize").json() == {"denied": True}
+    second = api.get("/oauth/authorize")
+    assert second.json() == {"ok": True}
+    assert second.header("vendorfake-fault") is None
+    assert calls == ["run", "run"]
 
 
 # ---------------------------------------------------------------------------

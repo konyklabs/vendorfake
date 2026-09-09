@@ -14,7 +14,8 @@ DOCUMENTED -- revoke returns ``{"success": true}`` and revokes every token for t
 ``revoke_only_access_token`` is set. https://developer.squareup.com/reference/square/oauth-api/revoke-token
 JUDGMENT -- Square publishes no error table for ``/oauth2/token`` or ``/oauth2/revoke``; failures use
 the standard v2 envelope. JUDGMENT -- there is no consent screen to click, so ``authorize`` approves
-automatically; ``unit_prompt=deny``/``unit_prompt=html`` simulate a denial or a human-driven page.
+automatically; ``unit_prompt=deny``/``unit_prompt=html`` simulate a denial or a human-driven page, and
+the ``authorize_denied`` chaos fault arms the same denial out of band.
 """
 
 from __future__ import annotations
@@ -142,13 +143,11 @@ class OAuthSurface:
         state = args.query("state")
         prompt = args.query("unit_prompt")
 
-        if prompt == _PROMPT_DENY:
-            return redirect(
-                _with_query(
-                    redirect_uri,
-                    {"error": "access_denied", "error_description": "user_denied", "state": state},
-                )
-            )
+        # Two levers, one answer: the in-band prompt a URL can carry, and the armed fault a headless consumer
+        # cannot add a query parameter for. Consumed first, so the request record names the fault either way.
+        armed_denial = args.consume_fault("authorize_denied") is not None
+        if armed_denial or prompt == _PROMPT_DENY:
+            return _denied(redirect_uri, state)
 
         scopes = _split_scopes(args.query("scope") or " ".join(config.default_scopes))
         merchant = _first_merchant(args.ctx)
@@ -533,6 +532,14 @@ def _live_holder_of(refresh_token: str) -> Callable[[Entity], bool]:
         return entity.get("refresh_token") == refresh_token and entity.get("superseded_at") is None
 
     return predicate
+
+
+def _denied(redirect_uri: str, state: str | None) -> ReplyInit:
+    """DOCUMENTED -- a denial redirects with ``error=access_denied&error_description=user_denied``.
+    https://developer.squareup.com/docs/oauth-api/receive-and-manage-tokens"""
+    return redirect(
+        _with_query(redirect_uri, {"error": "access_denied", "error_description": "user_denied", "state": state})
+    )
 
 
 def _first_merchant(ctx: UnitContext) -> MerchantEntity:

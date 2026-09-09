@@ -1,10 +1,8 @@
-"""The chaos rule grammar, as an external document: JSON from disk or a
-request body, parsed rather than trusted. INVARIANT: a rule that cannot fire
-says so when written, not by never firing -- ``extra="forbid"`` catches a
-misspelled condition key, and ``every``/``times`` are bounded to ``ge=1``.
-Wire format is snake_case throughout, including ``params`` keys, a promise
-:data:`BUILTIN_FAULTS` states; ``params`` itself stays ``dict[str, Any]`` and
-is not modelled.
+"""The chaos rule grammar, as an external document: JSON from disk or a request body, parsed rather than trusted.
+INVARIANT: a rule that cannot fire says so when written, not by never firing -- ``extra="forbid"`` catches a misspelled
+condition key, and ``every``/``times`` are bounded to ``ge=1``. Wire format is snake_case throughout, including
+``params`` keys, a promise :data:`BUILTIN_FAULTS` states; ``params`` itself stays ``dict[str, Any]`` and is not
+modelled.
 """
 
 from __future__ import annotations
@@ -102,9 +100,10 @@ FaultProvenance = Literal["vendor", "transport"]
 """``"vendor"`` reproduces documented behaviour; ``"transport"`` is a dropped
 connection or mangled body no vendor documents."""
 
-FaultPhase = Literal["request", "response", "delivery"]
-"""When a fault fires relative to the handler (konyklabs/roadmap#101, item
-17): instead of it, on its committed answer, or as a webhook delivery."""
+FaultPhase = Literal["request", "handler", "response", "delivery"]
+"""When a fault fires relative to the handler (konyklabs/roadmap#101, item 17): instead of it; ``handler`` = the
+route's own handler answers the way the vendor does, instead of its normal reply; on its committed answer; or as a
+webhook delivery."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +240,14 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         provenance="transport",
         phase="response",
     ),
+    FaultSpec(
+        "authorize_denied",
+        "request",
+        "The merchant declines on the consent screen: the authorize route redirects with the vendor's "
+        "documented denial (error=access_denied, state passed through) and mints no code.",
+        provenance="vendor",
+        phase="handler",
+    ),
 )
 """The faults the core implements, as data; ``params`` is a promise each
 implementation reads exactly those keys and coerces rather than indexes."""
@@ -268,10 +275,8 @@ def matched_routes(rule: ChaosRule, route_keys: Sequence[str]) -> tuple[str, ...
 
 
 def validate_rule_document(document: Mapping[str, Any]) -> None:
-    """An absent or empty ``id``/``fault`` is ``missing_field``; an absent
-    ``scope`` is ``invalid_value``. No capability check here -- that needs the
-    registry, so the control plane performs it.
-    """
+    """An absent or empty ``id``/``fault`` is ``missing_field``; an absent ``scope`` is ``invalid_value``. No
+    capability check here -- that needs the registry, so the control plane performs it."""
     identifier = document.get("id")
     if not isinstance(identifier, str) or not identifier:
         raise UnitError(
@@ -295,10 +300,8 @@ def validate_rule_document(document: Mapping[str, Any]) -> None:
 
 
 def parse_rule(document: object, *, source: str | None = None) -> ChaosRule:
-    """Validate one rule document, or raise a field-naming ``UnitError``.
-    :func:`validate_rule_document`'s checks run first, so a missing ``id``
-    reports ``missing_field`` on ``id`` and not whichever field Pydantic
-    happens to complain about."""
+    """Validate one rule document, or raise a field-naming ``UnitError``. :func:`validate_rule_document`'s checks run
+    first, so a missing ``id`` reports ``missing_field`` on ``id`` and not whichever field Pydantic complains about."""
     if not isinstance(document, Mapping):
         raise UnitError(
             UnitErrorKind.INVALID_VALUE,

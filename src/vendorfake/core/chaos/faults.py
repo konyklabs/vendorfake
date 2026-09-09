@@ -1,16 +1,12 @@
-"""What an armed request-scope fault does: turns a :class:`ChaosDecision` into
-the ``UnitError`` the pipeline raises, in one place.
-INVARIANT: which phase a fault fires in is a property of the fault, not the
-call site. ``token_expiry`` fires only after authentication; every other
-request-scope fault fires before it, and the pipeline calls this function
-twice, unconditionally, once per phase.
-``timeout`` never parks on a virtual timer, which would deadlock the request
-lock; real mode reports the delay on :attr:`UnitError.delay_ms`, virtual mode
-advances :class:`Clock` and reports ``delay_ms=0`` (konyklabs/roadmap#101,
-item 18). Parameters are coerced, never indexed -- :data:`FAULT_PARAM_KEYS` is
-the promise of which keys each fault reads. Response-scope faults
-(:data:`RESPONSE_PHASE_FAULTS`) are a third phase, run by
-:func:`apply_response_fault` once an answer exists to corrupt.
+"""What an armed request-scope fault does: turns a :class:`ChaosDecision` into the ``UnitError`` the pipeline raises,
+in one place. INVARIANT: which phase a fault fires in is a property of the fault, not the call site. ``token_expiry``
+fires only after authentication; every other request-scope fault fires before it, and the pipeline calls this function
+twice, unconditionally, once per phase. ``timeout`` never parks on a virtual timer, which would deadlock the request
+lock; real mode reports the delay on :attr:`UnitError.delay_ms`, virtual mode advances :class:`Clock` and reports
+``delay_ms=0`` (konyklabs/roadmap#101, item 18). Parameters are coerced, never indexed -- :data:`FAULT_PARAM_KEYS` is
+the promise of which keys each fault reads. Response-scope faults (:data:`RESPONSE_PHASE_FAULTS`) are a third phase,
+run by :func:`apply_response_fault` once an answer exists to corrupt; handler-phase ones
+(:data:`HANDLER_PHASE_FAULTS`) are a fourth, answered by the route itself.
 """
 
 from __future__ import annotations
@@ -44,12 +40,14 @@ __all__ = [
     "FAULT_PARAM_KEYS",
     "FAULT_PHASE",
     "FAULT_PROVENANCE",
+    "HANDLER_PHASE_FAULTS",
     "INTACT_RESPONSE_FAULTS",
     "RESPONSE_PHASE_FAULTS",
     "RequestMoment",
     "apply_request_fault",
     "apply_response_fault",
     "is_transport_fault",
+    "stamp_mechanism",
 ]
 
 RequestMoment = Literal["pre", "post_auth"]
@@ -64,6 +62,9 @@ FAULT_PHASE: Mapping[str, _PublishedPhase] = {spec.name: spec.phase for spec in 
 
 RESPONSE_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "response")
 """Faults applied to a successful handler response -- see :func:`apply_response_fault`."""
+
+HANDLER_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "handler")
+"""Faults the route's own handler answers, through ``HandlerArgs.consume_fault``."""
 
 INTACT_RESPONSE_FAULTS: frozenset[str] = frozenset({"slow_body"})
 """Response-phase faults that hand back the handler's answer *unchanged* and
@@ -94,6 +95,7 @@ FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "connection_reset": (),
     "empty_response": (),
     "slow_body": ("chunk_bytes", "chunk_delay_ms"),
+    "authorize_denied": (),
 }
 """Every parameter key a built-in fault reads, snake_case, keyed by fault
 name -- checkable against the catalogue in ``chaos/rules.py``."""
@@ -108,10 +110,8 @@ FAULT_PROVENANCE: Mapping[str, FaultProvenance] = {spec.name: spec.provenance fo
 
 
 def _delay_owed(clock: Clock, delay_ms: float) -> int:
-    """What the binding still owes in wall-clock milliseconds: zero on a
-    virtual clock, ``delay_ms`` on a real one. ``math.ceil``, not ``round`` --
-    banker's rounding would send ``0.4`` and ``0.5`` both to zero.
-    """
+    """What the binding still owes in wall-clock milliseconds: zero on a virtual clock, ``delay_ms`` on a real one.
+    ``math.ceil``, not ``round`` -- banker's rounding would send ``0.4`` and ``0.5`` both to zero."""
     if delay_ms <= 0:
         return 0
     if clock.mode == "virtual":
@@ -127,14 +127,15 @@ def apply_request_fault(
     clock: Clock,
     log: Logger,
 ) -> None:
-    """Raise the ``UnitError`` this decision stands for, if this is its phase.
-    Returns normally -- doing nothing -- when the decision belongs to the
-    other phase, is a response-scope fault, or names a fault this core has
-    never heard of. The last only warns: the fault vocabulary is open by
-    design, and a fork adds a name without editing the core.
-    """
+    """Raise the ``UnitError`` this decision stands for, if this is its phase. Returns normally -- doing nothing --
+    when the decision belongs to the other phase, is a response- or handler-phase fault, or names a fault this core has
+    never heard of. The last only warns: the fault vocabulary is open by design, and a fork adds a name without editing
+    the core."""
     if decision.fault in RESPONSE_PHASE_FAULTS:
         # A real fault; it fires from apply_response_fault instead.
+        return
+    if decision.fault in HANDLER_PHASE_FAULTS:
+        # A real fault; the route's own handler answers it.
         return
 
     is_auth_fault = decision.fault in AUTH_PHASE_FAULTS
@@ -219,14 +220,10 @@ because no vendor sent it -- a proxy or load balancer did."""
 
 
 def is_transport_fault(response: UnitResponse) -> bool:
-    """Whether ``response`` came from a transport-fidelity fault
-    (``provenance: "transport"``) rather than any fault at all -- a validator
-    must not fail a ``malformed_body`` response for violating the vendor's
-    schema, but must still validate a ``rate_limit`` 429. Reads the
-    ``vendorfake-fault`` header and looks up its provenance, since every
-    faulted response carries that header regardless of kind
-    (konyklabs/roadmap#73). Unrecognised is not transport.
-    """
+    """Whether ``response`` came from a transport-fidelity fault (``provenance: "transport"``) rather than any fault
+    at all -- a validator must not fail a ``malformed_body`` response for violating the vendor's schema, but must still
+    validate a ``rate_limit`` 429. Reads the ``vendorfake-fault`` header and looks up its provenance, since every
+    faulted response carries that header regardless of kind (konyklabs/roadmap#73). Unrecognised is not transport."""
     fault = response.headers.get("vendorfake-fault")
     if fault is None:
         return False
@@ -249,7 +246,7 @@ def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log
     return _directive(response, fault, params, rule=rule)
 
 
-def _stamp(headers: dict[str, str], fault: str, rule: str) -> None:
+def stamp_mechanism(headers: dict[str, str], fault: str, rule: str) -> None:
     """The two mechanism headers every faulted response carries."""
     headers["vendorfake-fault"] = fault
     headers["vendorfake-rule"] = header_text(rule)
@@ -283,7 +280,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
         body = response.body[:-1] + b","
     else:  # truncate
         body = response.body[: len(response.body) // 2]
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     return UnitResponse(status=status, headers=headers, body=body, delay_ms=response.delay_ms)
 
 
@@ -313,7 +310,7 @@ def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: 
     for raw_op in raw_ops:
         document = _apply_pointer_op(document, raw_op, rule=rule)
     headers = dict(response.headers)
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     return UnitResponse(status=response.status, headers=headers, body=dump_json(document), delay_ms=response.delay_ms)
 
 
@@ -321,7 +318,7 @@ def _directive(response: UnitResponse, fault: str, params: Mapping[str, Any], *,
     """``connection_reset`` / ``empty_response`` / ``slow_body``: leave the
     body alone and attach the instruction a binding interprets."""
     headers = dict(response.headers)
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     directive: TransportDirective
     if fault == "connection_reset":
         directive = TransportDirective(kind="connection_reset")

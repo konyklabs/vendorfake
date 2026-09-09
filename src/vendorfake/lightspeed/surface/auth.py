@@ -3,19 +3,17 @@
 Neither route is in ``api-2026-07.yaml``; both are documented only in prose at
 https://x-series-api.lightspeedhq.com/docs/authorization.
 
-DOCUMENTED: authorize is ``GET /connect?response_type=code&client_id=...&redirect_uri=...
-&state=...&scope=...``; exchange takes ``code``/``client_id``/``client_secret``/
-``grant_type=authorization_code`` plus ``redirect_uri``; refresh takes
-``grant_type=refresh_token``. Response carries ``access_token``, ``token_type``,
-``expires``, ``expires_in``, ``refresh_token``, ``domain_prefix``, ``scope``. Refreshing
-retires the consumed refresh token AND revokes the access token issued with it.
+DOCUMENTED: authorize is ``GET /connect?response_type=code&client_id=...&redirect_uri=...&state=...&scope=...``;
+exchange takes ``code``/``client_id``/``client_secret``/``grant_type=authorization_code`` plus ``redirect_uri``;
+refresh takes ``grant_type=refresh_token``. Response carries ``access_token``, ``token_type``, ``expires``,
+``expires_in``, ``refresh_token``, ``domain_prefix``, ``scope``. Refreshing retires the consumed refresh token AND
+revokes the access token issued with it. The declined-access response is ``{redirect_uri}?error=access_denied``.
 
-JUDGMENT: ``GET /connect`` stands in for the real consent screen on
-``secure.retail.lightspeed.app`` -- it approves automatically and redirects with the
-code (labelled "Stand-in" in ``GET /__unit/routes``). The code's ten-minute, single-use
-lifetime is from roadmap#75. A spent or reused credential is a 401. ``client_secret`` is
-required on refresh too (``model/auth.py``). JSON is accepted alongside the documented
-form encoding, since body parsing here is content-type general.
+JUDGMENT: ``GET /connect`` stands in for the real consent screen on ``secure.retail.lightspeed.app`` -- it approves
+automatically and redirects with the code (labelled "Stand-in" in ``GET /__unit/routes``), unless the
+``authorize_denied`` fault is armed. The code's ten-minute, single-use lifetime is from roadmap#75. A spent or reused
+credential is a 401. ``client_secret`` is required on refresh too (``model/auth.py``). JSON is accepted alongside the
+documented form encoding, since body parsing here is content-type general.
 """
 
 from __future__ import annotations
@@ -122,6 +120,13 @@ class LightspeedAuthSurface:
                 field="redirect_uri",
             )
         state = args.query("state")
+
+        if args.consume_fault("authorize_denied") is not None:
+            # DOCUMENTED: "Declined access response: {redirect_uri}?error=access_denied"
+            # (https://x-series-api.lightspeedhq.com/docs/authorization). JUDGMENT: that page does not say whether
+            # state comes back, so it is echoed per RFC 6749 s4.1.2.1 -- https://www.rfc-editor.org/rfc/rfc6749#section-4.1.2.1
+            return redirect(_with_query(redirect_uri, {"error": "access_denied", "state": state}))
+
         scopes = _split_scopes(args.query("scope")) or tuple(config.scopes)
         unknown = [scope for scope in scopes if scope not in config.scopes]
         if unknown:

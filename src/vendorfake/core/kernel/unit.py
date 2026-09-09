@@ -19,8 +19,9 @@ under a plausible wrong order.
 7. **idempotency** -- lookup and replay, after auth so a stored response never
    reaches a caller who guessed a key, and after the fault phases so an
    injected 500 consumes none. A hit *binds* the replay, so step 9 still runs.
-8. **handler and idempotency store**, on a miss only: the handler runs and its
-   clean 2xx is stored against the key.
+8. **handler and idempotency store**, on a miss only: the handler runs, its
+   clean 2xx is stored against the key, and a handler-phase fault the handler
+   consumed is stamped on the answer it produced instead of its normal reply.
 9. **response-phase fault**, on whichever answer step 8 left, so a decision
    drawn at step 3 is paid out on every answer the *vendor* produced, errors
    included. A framework crash is not a vendor answer and is never faulted.
@@ -52,10 +53,12 @@ from vendorfake.core.capability.gates import CoreCapability, assert_capability_d
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
+    HANDLER_PHASE_FAULTS,
     INTACT_RESPONSE_FAULTS,
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
+    stamp_mechanism,
 )
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
@@ -66,6 +69,7 @@ from vendorfake.core.kernel.reply import normalize
 from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router, is_control_path
 from vendorfake.core.kernel.shaping import assert_error_table_total, header_text
 from vendorfake.core.kernel.types import (
+    ArmedFault,
     AuthResult,
     HandlerArgs,
     Logger,
@@ -289,9 +293,8 @@ class RequestLog:
         limit: int | None = None,
     ) -> tuple[RequestRecord, ...]:
         """Matching records, **newest first**. ``limit`` is applied after filtering, so ``requests(operation_id=X,
-        limit=1)`` is the most recent call to X rather than the most recent call if it happened to be X. Every
-        filter is a conjunction and ``None`` means "do not filter", so ``unmatched=False`` selects only the matched
-        ones."""
+        limit=1)`` is the most recent call to X rather than the most recent call if it happened to be X. Every filter
+        is a conjunction and ``None`` means "do not filter", so ``unmatched=False`` selects only the matched ones."""
         with self._lock:
             found = list(self._records)
         found.reverse()
@@ -673,7 +676,7 @@ class Unit:
             )
             # An error that left by raising is still the answer this caller gets, so a fault armed at step 3 applies
             # to it as step 9 would; otherwise the rule's ``when.times`` budget buys nothing. Nothing applies twice:
-            # step 9 sets the flag before it tries. The attempt can itself raise, so it gets its own ``try`` and
+            # step 9 sets the flag before it tries; the attempt can itself raise, so it gets its own ``try`` and
             # answers the same diagnostic. provenance: judgment.
             if (
                 trace.decision is not None
@@ -734,11 +737,15 @@ class Unit:
         )
         decision = selection.decision
         if decision is not None:
-            # Before the fault is applied, not after: applying it can raise,
-            # and an unrecorded 429 is one a consumer cannot explain.
-            trace.fault = decision.fault
-            trace.rule_id = decision.rule_id
             trace.decision = decision
+            if decision.fault in HANDLER_PHASE_FAULTS:
+                # Armed, not fired: only the route can say the fault happened, so ``_settle_handler_fault`` records it.
+                args.fault = ArmedFault(name=decision.fault, rule_id=decision.rule_id, params=decision.params)
+            else:
+                # Before the fault is applied, not after: applying it can raise,
+                # and an unrecorded 429 is one a consumer cannot explain.
+                trace.fault = decision.fault
+                trace.rule_id = decision.rule_id
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -812,6 +819,8 @@ class Unit:
                         stored_at=self._clock.iso_ms(),
                     )
                 )
+            # After the idempotency store, so a replay of the key returns the vendor's clean answer, not a faulted one.
+            res = self._settle_handler_fault(args, res, trace)
         # 9. response-phase fault, on whichever answer step 8 produced -------
         # It corrupts a REAL answer, so it runs only after the handler produced
         # one, and it never touches ``ctx``. A replay is faulted as a fresh
@@ -822,6 +831,26 @@ class Unit:
             trace.response_fault_attempted = True
             res = apply_response_fault(decision, res, log=self._log)
         return res
+
+    def _settle_handler_fault(self, args: HandlerArgs, res: UnitResponse, trace: _Trace) -> UnitResponse:
+        """Stamp and record a handler-phase fault the route answered. A route the fault means nothing to leaves it
+        unconsumed: that is warned about and recorded as unfaulted, since nothing about the answer changed."""
+        armed = args.fault
+        if armed is None:
+            return res
+        if not args.fault_consumed:
+            self._log.warn(
+                "handler-phase fault not implemented by the route",
+                {"fault": armed.name, "rule": armed.rule_id, "route": args.route.key},
+            )
+            return res
+        trace.fault = armed.name
+        trace.rule_id = armed.rule_id
+        headers = dict(res.headers)
+        stamp_mechanism(headers, armed.name, armed.rule_id)
+        return UnitResponse(
+            status=res.status, headers=headers, body=res.body, delay_ms=res.delay_ms, transport=res.transport
+        )
 
     # -- pipeline helpers ---------------------------------------------------
 

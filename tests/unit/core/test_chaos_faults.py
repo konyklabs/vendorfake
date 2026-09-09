@@ -10,6 +10,7 @@ from vendorfake.core.chaos.engine import ChaosDecision
 from vendorfake.core.chaos.faults import (
     AUTH_PHASE_FAULTS,
     FAULT_PARAM_KEYS,
+    HANDLER_PHASE_FAULTS,
     apply_request_fault,
 )
 from vendorfake.core.chaos.rules import BUILTIN_FAULTS
@@ -219,6 +220,27 @@ def test_a_webhook_scope_fault_named_by_a_request_rule_does_nothing_loudly() -> 
 
     apply_request_fault(_decision("webhook.drop"), "pre", clock=Clock("real"), log=Recording())
     assert warned == ["unknown request-scope fault ignored"]
+
+
+def test_authorize_denied_is_a_handler_phase_fault_the_request_phases_leave_alone() -> None:
+    """The route answers it, so ``apply_request_fault`` neither raises nor
+    warns in either phase -- an "unknown fault" warning here would be wrong."""
+    assert "authorize_denied" in HANDLER_PHASE_FAULTS
+    assert FAULT_PARAM_KEYS["authorize_denied"] == ()
+    warned: list[str] = []
+
+    class Recording(SilentLogger):
+        def warn(self, msg, fields=None):  # type: ignore[no-untyped-def]
+            warned.append(msg)
+
+    for phase in ("pre", "post_auth"):
+        apply_request_fault(
+            _decision("authorize_denied"),
+            phase,  # type: ignore[arg-type]
+            clock=Clock("real"),
+            log=Recording(),
+        )
+    assert warned == []
 
 
 def test_the_parameter_key_table_covers_every_catalogued_fault() -> None:
