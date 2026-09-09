@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at run time
+    from vendorfake.asgi.mount import ASGIApp
     from vendorfake.core.kernel.unit import Unit
     from vendorfake.fidelity.validate import ResponseValidator
 
@@ -43,7 +44,9 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "Vendor to serve (see `vendorfake vendors`). Defaults to $VENDORFAKE_VENDOR; with exactly one "
-            "vendor installed that one is used, otherwise the command refuses and lists them."
+            "vendor installed that one is used, otherwise the command refuses and lists them. `serve` also "
+            "takes a comma-separated list (`clover,square`) and mounts each vendor under /<vendor>/; every "
+            "other subcommand describes one vendor and refuses a list."
         ),
     )
     parser.add_argument(
@@ -258,13 +261,23 @@ def _env_int(env: Mapping[str, str], name: str) -> int | None:
         raise SystemExit(f"{PROG}: {name}={raw!r} is not an integer") from None
 
 
+def _refuse_a_vendor_list(name: str) -> None:
+    """Refuse a comma-separated ``--vendor`` anywhere but ``serve``: every other subcommand describes exactly
+    one unit, and the alternative is picking a name for the caller."""
+    if "," in name:
+        raise SystemExit(f"{PROG}: --vendor names several vendors; only `serve` mounts more than one")
+
+
 def _resolve_vendor_name(args: argparse.Namespace, env: Mapping[str, str]) -> str:
     """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed vendor:
-    ``create_unit``'s own precedence, for a subcommand that builds no unit."""
+    ``create_unit``'s own precedence, for a subcommand that builds no unit. A
+    comma-separated list is refused rather than truncated to its first name --
+    only ``serve`` mounts more than one."""
     from vendorfake.registry import VENDOR_ENV_VAR, available_vendors
 
     name = args.vendor or _env_str(env, VENDOR_ENV_VAR)
     if name:
+        _refuse_a_vendor_list(name)
         return name
     offered = available_vendors()
     if len(offered) == 1:
@@ -297,7 +310,11 @@ def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
     a traceback or a server that starts and 404s everything.
     """
     from vendorfake.core.kernel.types import UnitError
-    from vendorfake.registry import create_unit
+    from vendorfake.registry import VENDOR_ENV_VAR, create_unit
+
+    # These name their vendor through `create_unit`'s resolution, not `_resolve_vendor_name`, so the refusal
+    # is repeated rather than left to the registry.
+    _refuse_a_vendor_list(args.vendor or _env_str(env, VENDOR_ENV_VAR) or "")
 
     try:
         return create_unit(
@@ -314,20 +331,112 @@ def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
 # ---------------------------------------------------------------------------
 
 
-def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Build a unit, put the ASGI adapter in front of it, and listen. The import is
-    inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
-    ``vendorfake --help`` must not pay for it."""
-    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT, create_app, run_server
+def _serve_vendor_names(args: argparse.Namespace, env: Mapping[str, str]) -> tuple[str, ...]:
+    """The vendors ``serve`` was asked to mount, or ``()`` for "just the one" -- not "no vendor": only a comma
+    makes this speak at all, so a name without one resolves as it always did, through ``create_unit``, which
+    knows both ``$VENDORFAKE_VENDOR`` and the sole-installed-vendor case. A list either mounts two or more or
+    is refused, and the flag is read as given, so ``--vendor ''`` stays the empty-name refusal."""
+    from vendorfake.registry import VENDOR_ENV_VAR
 
-    unit = _make_unit(args, env)
+    if args.vendor is not None:
+        raw, source = args.vendor, "--vendor"
+    else:
+        found = _env_str(env, VENDOR_ENV_VAR)
+        if found is None:
+            return ()
+        raw, source = found, VENDOR_ENV_VAR
+    if "," not in raw:
+        return ()
+    names = tuple(part.strip() for part in raw.split(","))
+    if any(not name for name in names):
+        raise SystemExit(f"{PROG}: {source} {raw!r} has an empty vendor name; the list form is `clover,square`")
+    seen: set[str] = set()
+    for name in names:
+        if name in seen:
+            # Two mounts cannot share a prefix, and the second unit would
+            # simply be unreachable -- a silent half-start rather than a
+            # server that answers what the operator asked for.
+            raise SystemExit(f"{PROG}: {source} {raw!r} names {name!r} twice; a vendor is mounted once")
+        seen.add(name)
+    return names
+
+
+def _serve_binding(args: argparse.Namespace, env: Mapping[str, str], unit: Unit) -> tuple[str, int, str]:
+    """Host, port and log level for the socket: flag, environment, profile, default -- the last two from the
+    unit passed, which with several mounted is the *first* named, one socket having one profile to honour."""
+    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT
+
     transport = unit.context.config.transport
-
     host = args.host or _env_str(env, "VENDORFAKE_HOST") or transport.host or DEFAULT_HOST
     port = args.port if args.port is not None else _env_int(env, "VENDORFAKE_PORT")
     if port is None:
         port = transport.port if transport.port else DEFAULT_PORT
     log_level = args.log_level or _env_str(env, "VENDORFAKE_LOG_LEVEL") or unit.context.config.log_level
+    return host, port, log_level
+
+
+def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, names: tuple[str, ...]) -> int:
+    """Build one unit per name and serve them all under ``/<vendor>/``.
+
+    ``$VENDORFAKE_VENDOR`` is dropped from the environment each unit is built with -- it holds the list, not a
+    name; every other ``VENDORFAKE_*`` variable and the single ``--profile`` applies to every mount. A failure
+    part-way through stops what was built: half a mounted process would answer for some vendors and 404 for
+    the rest."""
+    from vendorfake.asgi import create_app, create_mounted_app, run_server
+    from vendorfake.core.kernel.types import UnitError
+    from vendorfake.registry import VENDOR_ENV_VAR, create_unit
+
+    if getattr(args, "validate", False):
+        # One ledger, one summary line, one vendor's declaration: the flag has no meaning spread over several.
+        raise SystemExit(f"{PROG}: --validate serves one vendor")
+
+    per_vendor_env = {key: value for key, value in env.items() if key != VENDOR_ENV_VAR}
+    units: list[Unit] = []
+    apps: dict[str, ASGIApp] = {}
+    try:
+        for name in names:
+            try:
+                built = create_unit(vendor=name, profile=args.profile, env=per_vendor_env)
+            except (ValueError, UnitError) as exc:
+                raise SystemExit(f"{PROG}: {exc}") from None
+            units.append(built)
+            apps[name] = create_app(built)
+
+        host, port, log_level = _serve_binding(args, env, units[0])
+        mounts = ",".join(f"/{name}" for name in names)
+
+        def announce(bound_host: str, bound_port: int) -> None:
+            # The single-vendor line plus where each vendor is.
+            print(
+                f"{PROG}: listening on http://{bound_host}:{bound_port} (vendors={','.join(names)}; mounts={mounts})",
+                file=out,
+                flush=True,
+            )
+
+        run_server(create_mounted_app(apps), host=host, port=port, log_level=log_level, on_bound=announce)
+    except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
+        pass
+    finally:
+        for built in units:
+            built.stop()
+    return 0
+
+
+def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Build a unit, put the ASGI adapter in front of it, and listen. The import is
+    inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
+    ``vendorfake --help`` must not pay for it. A comma-separated ``--vendor``
+    hands off to :func:`_serve_mounted`; one vendor is served by the code below,
+    unchanged."""
+    from vendorfake.asgi import create_app, run_server
+
+    names = _serve_vendor_names(args, env)
+    if names:
+        return _serve_mounted(args, env, out, names)
+
+    unit = _make_unit(args, env)
+
+    host, port, log_level = _serve_binding(args, env, unit)
 
     validator = _response_validator(unit) if getattr(args, "validate", False) else None
     app = create_app(unit, observer=None if validator is None else validator.observe)

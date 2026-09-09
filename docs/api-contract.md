@@ -181,6 +181,9 @@ language be checked against the same contract.
 
 Every subcommand, every flag, and the JSON document `--json` prints. `--json`
 is accepted on either side of the subcommand name and means the same thing.
+`serve --vendor` (and `$VENDORFAKE_VENDOR`) accepts a comma-separated list —
+`clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
+every other subcommand describes one vendor and refuses a list.
 
 ### The profile document
 
@@ -292,6 +295,12 @@ listed there follows the deprecation policy above. The public surface is the
 `__all__` of the modules this page names, pinned by
 `tests/unit/test_public_api.py`; a consumer pins a tag and reads the
 breaking-changes section before each bump.
+
+The shipped scenario's credentials and identity are part of that surface
+too: the app credentials, the seeded bearers and refresh tokens, and the
+tenant ids in the tables of `docs/concepts/seed.md` — a consumer may copy
+them into its own store, and they change only with a minor version and a
+changelog entry.
 
 This round's release is 0.6.0, a breaking minor under this policy. Its removals (konyklabs/vendorfake#49
 and #51): `agent-setup`, the file-drop transport and `FileSink`,

@@ -1049,3 +1049,53 @@ def test_re_storing_a_key_does_not_move_it_to_the_back_of_the_queue() -> None:
     store.put_idempotent(record(key="new"))
     assert store.get_idempotent("CreateOrder", "k0") is None
     assert store.get_idempotent("CreateOrder", "new") is not None
+
+
+# ---------------------------------------------------------------------------
+# muted(): the seam a `commit: after` request runs its handler through
+# ---------------------------------------------------------------------------
+
+
+def test_a_listener_hears_nothing_for_a_write_inside_muted_and_hears_the_next_one() -> None:
+    """The named failure: a `commit: after` request that still prepared a
+    webhook event would deliver an event for a mutation that was rolled back."""
+    store = make_store()
+    heard: list[JournalEntry] = []
+    store.on_journal(heard.append)
+    with store.muted():
+        store.collection("orders").insert({"id": "o1"})
+    assert heard == []
+    store.collection("orders").insert({"id": "o2"})
+    assert [e.id for e in heard] == ["o2"]
+
+
+def test_muted_still_appends_the_entry_and_moves_the_sequence() -> None:
+    """Muting suppresses the dispatch, not the journal: the caller restores a
+    snapshot to undo the write itself."""
+    store = make_store()
+    with store.muted():
+        store.collection("orders").insert({"id": "o1"})
+    assert store.journal_seq == 1
+    assert [e.id for e in store.journal()] == ["o1"]
+
+
+def test_muted_is_lifted_when_the_block_raises() -> None:
+    store = make_store()
+    heard: list[JournalEntry] = []
+    store.on_journal(heard.append)
+    with pytest.raises(ValueError), store.muted():
+        raise ValueError("handler blew up")
+    store.collection("orders").insert({"id": "o1"})
+    assert [e.id for e in heard] == ["o1"]
+
+
+def test_restore_returns_the_sequence_to_the_snapshots_value() -> None:
+    """What lets a rolled-back request report the journal as unmoved."""
+    store = seeded()
+    snap = store.snapshot()
+    assert snap.seq == 2
+    store.collection("orders").insert({"id": "o3"})
+    assert store.journal_seq == 3
+    store.restore(snap)
+    assert store.journal_seq == 2
+    assert store.collection("orders").get("o3") is None

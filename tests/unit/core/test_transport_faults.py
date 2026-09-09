@@ -322,7 +322,9 @@ def test_is_transport_fault_is_true_for_each_of_the_five_transport_kinds(fault: 
     assert is_transport_fault(_apply(fault, **params)) is True
 
 
-@pytest.mark.parametrize("fault", ["rate_limit", "server_error", "unavailable", "timeout", "token_expiry"])
+@pytest.mark.parametrize(
+    "fault", ["rate_limit", "server_error", "unavailable", "timeout", "token_expiry", "refresh_rejected"]
+)
 def test_is_transport_fault_is_false_for_a_vendor_provenance_fault(fault: str) -> None:
     """A request-scope fault never reaches ``apply_response_fault`` -- its
     ``vendorfake-fault`` header comes from ``kernel/unit.py``'s ``_shape``

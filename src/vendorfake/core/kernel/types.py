@@ -35,6 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from vendorfake.core.webhooks.models import DeliveryMetadata
 
 __all__ = [
+    "ArmedFault",
     "AuthAdapter",
     "AuthCredential",
     "AuthMode",
@@ -284,6 +285,8 @@ class RequestRecord:
     #: ``True`` when the handler committed and the caller still did not get its clean answer. ``slow_body`` delivers
     #: intact, only late, so it does not count. The mutation stands; it is discarded only from the caller's view.
     discarded_mutation: bool = False
+    #: ``params.commit`` of the response-phase fault that fired: ``"after"`` means nothing was committed at all.
+    fault_commit: Literal["before", "after"] | None = None
 
     def as_json(self) -> dict[str, Any]:
         """``matched``, ``near_misses`` and ``discarded_mutation`` are always present, being the three a caller filters
@@ -305,6 +308,7 @@ class RequestRecord:
             ("fault", self.fault),
             ("rule_id", self.rule_id),
             ("committed_journal_seq", self.committed_journal_seq),
+            ("fault_commit", self.fault_commit),
         ):
             if value is not None:
                 body[key] = value
@@ -493,13 +497,33 @@ class FormData(Mapping[str, str]):
         return out
 
 
+@dataclass(frozen=True, slots=True)
+class ArmedFault:
+    """A handler-phase fault armed for one request, for the route to answer itself."""
+
+    name: str
+    rule_id: str
+    params: Mapping[str, Any]
+
+
 class HandlerArgs:
     """Everything a handler is handed, and the only way it reads its request. ``body()`` accepts JSON and form encoding
     alike, so a consumer reaching an OAuth route with a form-encoded client fails on the thing under test rather
     than on a content type. JUDGMENT; keeping that decision out of the transport adapter is what the
     framework-free-core invariant requires."""
 
-    __slots__ = ("_form", "_json_parsed", "_json_value", "auth", "ctx", "params", "req", "route")
+    __slots__ = (
+        "_form",
+        "_json_parsed",
+        "_json_value",
+        "auth",
+        "ctx",
+        "fault",
+        "fault_consumed",
+        "params",
+        "req",
+        "route",
+    )
 
     def __init__(
         self,
@@ -516,6 +540,9 @@ class HandlerArgs:
         self.route = route
         #: Resolved by the vendor auth adapter when ``route.auth`` is set.
         self.auth = auth
+        #: Set by the pipeline when a handler-phase fault is armed for this request.
+        self.fault: ArmedFault | None = None
+        self.fault_consumed = False
         self._json_parsed = False
         self._json_value: Any = None
         self._form: FormData | None = None
@@ -580,6 +607,13 @@ class HandlerArgs:
 
     def header(self, name: str) -> str | None:
         return self.req.headers.get(name.lower())
+
+    def consume_fault(self, name: str) -> ArmedFault | None:
+        """:attr:`fault` when it is ``name``, marked consumed so the pipeline stamps it; ``None`` otherwise."""
+        if self.fault is None or self.fault.name != name:
+            return None
+        self.fault_consumed = True
+        return self.fault
 
 
 # The journal.
@@ -721,10 +755,10 @@ class ErrorShaper(Protocol):
 @runtime_checkable
 class SeedingVendor(Protocol):
     """A vendor that publishes its own seed object, so ``unit("<name>").seed`` answers instead of refusing: the
-    optional half of :class:`VendorDefinition`, discovered structurally by ``isinstance`` because for a seed "there
-    is none" is a legitimate, permanent answer. The return type is ``object`` deliberately: the hook must satisfy
-    ``vendorfake.testing.Seed``, the core may not import that module, and a second copy of the protocol here would
-    put "a seed" in two places. ``seed_for`` is where a hook returning the wrong shape is caught."""
+    optional half of :class:`VendorDefinition`, discovered structurally by ``isinstance`` because for a seed "there is
+    none" is a legitimate, permanent answer. The return type is ``object`` deliberately: the hook must satisfy
+    ``vendorfake.testing.Seed``, the core may not import that module, and a second copy of the protocol here would put
+    "a seed" in two places. ``seed_for`` is where a hook returning the wrong shape is caught."""
 
     def seed(self, vendor_config: Mapping[str, object]) -> object:
         """This vendor's seed object for a unit built on ``vendor_config``, the resolved profile's ``vendor`` block.

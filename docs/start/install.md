@@ -56,6 +56,12 @@ curl -s http://localhost:8080/__unit/health
 # -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
 ```
 
+`VENDORFAKE_VENDOR` (and `serve --vendor`) also takes a comma-separated list —
+`-e VENDORFAKE_VENDOR=clover,square` serves both from one container, each
+under its own prefix (`http://localhost:8080/clover`, `.../square`, control
+planes at `/clover/__unit/...`), with the root `/__unit/info` listing them;
+see [Bindings → Docker compose](bindings.md#docker-compose).
+
 Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
 plane is deliberately unauthenticated — it hands out the seeded credentials
 and will POST webhooks at any URL it is told — so a fake published to the

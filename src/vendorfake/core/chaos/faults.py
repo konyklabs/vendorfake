@@ -1,16 +1,12 @@
-"""What an armed request-scope fault does: turns a :class:`ChaosDecision` into
-the ``UnitError`` the pipeline raises, in one place.
-INVARIANT: which phase a fault fires in is a property of the fault, not the
-call site. ``token_expiry`` fires only after authentication; every other
-request-scope fault fires before it, and the pipeline calls this function
-twice, unconditionally, once per phase.
-``timeout`` never parks on a virtual timer, which would deadlock the request
-lock; real mode reports the delay on :attr:`UnitError.delay_ms`, virtual mode
-advances :class:`Clock` and reports ``delay_ms=0`` (konyklabs/roadmap#101,
-item 18). Parameters are coerced, never indexed -- :data:`FAULT_PARAM_KEYS` is
-the promise of which keys each fault reads. Response-scope faults
-(:data:`RESPONSE_PHASE_FAULTS`) are a third phase, run by
-:func:`apply_response_fault` once an answer exists to corrupt.
+"""What an armed request-scope fault does: turns a :class:`ChaosDecision` into the ``UnitError`` the pipeline raises,
+in one place. INVARIANT: which phase a fault fires in is a property of the fault, not the call site. ``token_expiry``
+fires only after authentication; every other request-scope fault fires before it, and the pipeline calls this function
+twice, unconditionally, once per phase. ``timeout`` never parks on a virtual timer, which would deadlock the request
+lock; real mode reports the delay on :attr:`UnitError.delay_ms`, virtual mode advances :class:`Clock` and reports
+``delay_ms=0`` (konyklabs/roadmap#101, item 18). Parameters are coerced, never indexed -- :data:`FAULT_PARAM_KEYS` is
+the promise of which keys each fault reads. Response-scope faults (:data:`RESPONSE_PHASE_FAULTS`) are a third phase,
+run by :func:`apply_response_fault` once an answer exists to corrupt; handler-phase ones
+(:data:`HANDLER_PHASE_FAULTS`) are a fourth, answered by the route itself.
 """
 
 from __future__ import annotations
@@ -21,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from vendorfake.core.chaos.engine import ChaosDecision
-from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultProvenance
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS, ChaosRule, FaultProvenance
 from vendorfake.core.chaos.rules import FaultPhase as _PublishedPhase
 from vendorfake.core.kernel.shaping import header_text
 from vendorfake.core.kernel.types import (
@@ -37,18 +33,25 @@ from vendorfake.core.util.numbers import as_float, as_int, as_str, js_number, js
 
 __all__ = [
     "AUTH_PHASE_FAULTS",
+    "COMMIT_FAULTS",
+    "COMMIT_MODES",
+    "DEFAULT_REFRESH_REJECTED_DETAIL",
     "DEFAULT_RETRY_AFTER_SECONDS",
     "DEFAULT_TIMEOUT_DELAY_MS",
     "FAULT_DESCRIPTIONS",
     "FAULT_PARAM_KEYS",
     "FAULT_PHASE",
     "FAULT_PROVENANCE",
+    "HANDLER_PHASE_FAULTS",
     "INTACT_RESPONSE_FAULTS",
     "RESPONSE_PHASE_FAULTS",
     "RequestMoment",
     "apply_request_fault",
     "apply_response_fault",
+    "commit_mode",
     "is_transport_fault",
+    "stamp_mechanism",
+    "validate_fault_params",
 ]
 
 RequestMoment = Literal["pre", "post_auth"]
@@ -64,13 +67,28 @@ FAULT_PHASE: Mapping[str, _PublishedPhase] = {spec.name: spec.phase for spec in 
 RESPONSE_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "response")
 """Faults applied to a successful handler response -- see :func:`apply_response_fault`."""
 
+HANDLER_PHASE_FAULTS: frozenset[str] = frozenset(name for name, phase in FAULT_PHASE.items() if phase == "handler")
+"""Faults the route's own handler answers, through ``HandlerArgs.consume_fault``."""
+
 INTACT_RESPONSE_FAULTS: frozenset[str] = frozenset({"slow_body"})
 """Response-phase faults that hand back the handler's answer *unchanged* and
 only shape how it travels (``kernel/unit.py``'s ``discarded_mutation``)."""
 
+COMMIT_FAULTS: frozenset[str] = RESPONSE_PHASE_FAULTS - INTACT_RESPONSE_FAULTS
+"""The response-phase faults ``params.commit`` is accepted on: the ones that
+discard or corrupt the answer, so whether the handler committed is observable."""
+
+COMMIT_MODES: tuple[str, ...] = ("before", "after")
+"""``params.commit``: commit the handler's work, then fault the answer, or run
+the handler inside a snapshot that is always restored."""
+
 #: Defaults when a fault's own param is absent.
 DEFAULT_TIMEOUT_DELAY_MS = 100.0
 DEFAULT_RETRY_AFTER_SECONDS = 1
+
+#: JUDGMENT: the phrase Clover's and Square's refresh routes answer for an unknown, used or expired refresh
+#: token; ``params.detail`` overrides it for a vendor whose own phrase differs (Toast's login message).
+DEFAULT_REFRESH_REJECTED_DETAIL = "The refresh token is invalid."
 
 FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "rate_limit": ("retry_after_seconds",),
@@ -78,16 +96,18 @@ FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "unavailable": (),
     "timeout": ("delay_ms",),
     "token_expiry": (),
+    "refresh_rejected": ("detail",),
     "webhook.duplicate": ("copies",),
     "webhook.delay": ("delay_ms",),
     "webhook.out_of_order": (),
     "webhook.drop_ack": (),
     "webhook.drop": (),
-    "malformed_body": ("mode", "status"),
-    "body_mutation": ("ops",),
-    "connection_reset": (),
-    "empty_response": (),
+    "malformed_body": ("mode", "status", "commit"),
+    "body_mutation": ("ops", "commit"),
+    "connection_reset": ("commit",),
+    "empty_response": ("commit",),
     "slow_body": ("chunk_bytes", "chunk_delay_ms"),
+    "authorize_denied": (),
 }
 """Every parameter key a built-in fault reads, snake_case, keyed by fault
 name -- checkable against the catalogue in ``chaos/rules.py``."""
@@ -102,10 +122,8 @@ FAULT_PROVENANCE: Mapping[str, FaultProvenance] = {spec.name: spec.provenance fo
 
 
 def _delay_owed(clock: Clock, delay_ms: float) -> int:
-    """What the binding still owes in wall-clock milliseconds: zero on a
-    virtual clock, ``delay_ms`` on a real one. ``math.ceil``, not ``round`` --
-    banker's rounding would send ``0.4`` and ``0.5`` both to zero.
-    """
+    """What the binding still owes in wall-clock milliseconds: zero on a virtual clock, ``delay_ms`` on a real one.
+    ``math.ceil``, not ``round`` -- banker's rounding would send ``0.4`` and ``0.5`` both to zero."""
     if delay_ms <= 0:
         return 0
     if clock.mode == "virtual":
@@ -121,14 +139,15 @@ def apply_request_fault(
     clock: Clock,
     log: Logger,
 ) -> None:
-    """Raise the ``UnitError`` this decision stands for, if this is its phase.
-    Returns normally -- doing nothing -- when the decision belongs to the
-    other phase, is a response-scope fault, or names a fault this core has
-    never heard of. The last only warns: the fault vocabulary is open by
-    design, and a fork adds a name without editing the core.
-    """
+    """Raise the ``UnitError`` this decision stands for, if this is its phase. Returns normally -- doing nothing --
+    when the decision belongs to the other phase, is a response- or handler-phase fault, or names a fault this core has
+    never heard of. The last only warns: the fault vocabulary is open by design, and a fork adds a name without editing
+    the core."""
     if decision.fault in RESPONSE_PHASE_FAULTS:
         # A real fault; it fires from apply_response_fault instead.
+        return
+    if decision.fault in HANDLER_PHASE_FAULTS:
+        # A real fault; the route's own handler answers it.
         return
 
     is_auth_fault = decision.fault in AUTH_PHASE_FAULTS
@@ -187,8 +206,56 @@ def apply_request_fault(
             fault=decision.fault,
             rule_id=rule,
         )
+    if decision.fault == "refresh_rejected":
+        # Pre-auth, instead of the handler: nothing is committed, and the vendor's ErrorShaper renders the 401.
+        raise UnitError(
+            UnitErrorKind.UNAUTHORIZED,
+            detail=as_str(params.get("detail"), DEFAULT_REFRESH_REJECTED_DETAIL),
+            field="refresh_token",
+            info={"chaos_rule": rule},
+            fault=decision.fault,
+            rule_id=rule,
+        )
 
     log.warn("unknown request-scope fault ignored", {"fault": decision.fault, "rule": rule})
+
+
+def validate_fault_params(rule: ChaosRule) -> None:
+    """Refuse at arm time what :func:`commit_mode` would refuse on every matching request; ``params`` is otherwise
+    coerced, never refused, so this is the one key checked when a rule is written."""
+    if rule.params and "commit" in rule.params:
+        commit_mode(ChaosDecision(rule_id=rule.id, fault=rule.fault, params=dict(rule.params), occurrence=0))
+
+
+def commit_mode(decision: ChaosDecision) -> Literal["before", "after"]:
+    """Whether this decision's fault fires on committed work (``before``, the default) or on a handler run inside a
+    snapshot the kernel always restores (``after``). JUDGMENT: no vendor documents which of the two its edge
+    implements, so the fake offers both and defaults to the one every earlier release had."""
+    params = decision.params
+    if "commit" not in params:
+        return "before"
+    raw = params.get("commit")
+    if decision.fault not in COMMIT_FAULTS:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{decision.fault} rule {decision.rule_id!r}: params.commit is accepted only on "
+                f"{', '.join(sorted(COMMIT_FAULTS))}, which discard or corrupt the answer."
+            ),
+            field="params.commit",
+            rule_id=decision.rule_id,
+        )
+    if raw not in COMMIT_MODES:
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail=(
+                f"{decision.fault} rule {decision.rule_id!r}: params.commit must be one of "
+                f"{', '.join(COMMIT_MODES)}; got {raw!r}."
+            ),
+            field="params.commit",
+            rule_id=decision.rule_id,
+        )
+    return "after" if raw == "after" else "before"
 
 
 # -- Response-scope faults: transport-fidelity, provenance: transport. -------
@@ -203,14 +270,10 @@ because no vendor sent it -- a proxy or load balancer did."""
 
 
 def is_transport_fault(response: UnitResponse) -> bool:
-    """Whether ``response`` came from a transport-fidelity fault
-    (``provenance: "transport"``) rather than any fault at all -- a validator
-    must not fail a ``malformed_body`` response for violating the vendor's
-    schema, but must still validate a ``rate_limit`` 429. Reads the
-    ``vendorfake-fault`` header and looks up its provenance, since every
-    faulted response carries that header regardless of kind
-    (konyklabs/roadmap#73). Unrecognised is not transport.
-    """
+    """Whether ``response`` came from a transport-fidelity fault (``provenance: "transport"``) rather than any fault
+    at all -- a validator must not fail a ``malformed_body`` response for violating the vendor's schema, but must still
+    validate a ``rate_limit`` 429. Reads the ``vendorfake-fault`` header and looks up its provenance, since every
+    faulted response carries that header regardless of kind (konyklabs/roadmap#73). Unrecognised is not transport."""
     fault = response.headers.get("vendorfake-fault")
     if fault is None:
         return False
@@ -224,6 +287,8 @@ def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log
     fault = decision.fault
     if fault not in RESPONSE_PHASE_FAULTS:
         return response
+    # Re-checked here so a refusal raised pre-handler is answered cleanly rather than corrupted by its own rule.
+    commit_mode(decision)
     rule = decision.rule_id
     params = decision.params
     if fault == "malformed_body":
@@ -233,7 +298,7 @@ def apply_response_fault(decision: ChaosDecision, response: UnitResponse, *, log
     return _directive(response, fault, params, rule=rule)
 
 
-def _stamp(headers: dict[str, str], fault: str, rule: str) -> None:
+def stamp_mechanism(headers: dict[str, str], fault: str, rule: str) -> None:
     """The two mechanism headers every faulted response carries."""
     headers["vendorfake-fault"] = fault
     headers["vendorfake-rule"] = header_text(rule)
@@ -267,7 +332,7 @@ def _malformed_body(response: UnitResponse, params: Mapping[str, Any], *, fault:
         body = response.body[:-1] + b","
     else:  # truncate
         body = response.body[: len(response.body) // 2]
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     return UnitResponse(status=status, headers=headers, body=body, delay_ms=response.delay_ms)
 
 
@@ -297,7 +362,7 @@ def _body_mutation(response: UnitResponse, params: Mapping[str, Any], *, fault: 
     for raw_op in raw_ops:
         document = _apply_pointer_op(document, raw_op, rule=rule)
     headers = dict(response.headers)
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     return UnitResponse(status=response.status, headers=headers, body=dump_json(document), delay_ms=response.delay_ms)
 
 
@@ -305,7 +370,7 @@ def _directive(response: UnitResponse, fault: str, params: Mapping[str, Any], *,
     """``connection_reset`` / ``empty_response`` / ``slow_body``: leave the
     body alone and attach the instruction a binding interprets."""
     headers = dict(response.headers)
-    _stamp(headers, fault, rule)
+    stamp_mechanism(headers, fault, rule)
     directive: TransportDirective
     if fault == "connection_reset":
         directive = TransportDirective(kind="connection_reset")

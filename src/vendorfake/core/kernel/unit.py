@@ -19,8 +19,9 @@ under a plausible wrong order.
 7. **idempotency** -- lookup and replay, after auth so a stored response never
    reaches a caller who guessed a key, and after the fault phases so an
    injected 500 consumes none. A hit *binds* the replay, so step 9 still runs.
-8. **handler and idempotency store**, on a miss only: the handler runs and its
-   clean 2xx is stored against the key.
+8. **handler and idempotency store**, on a miss only: the handler runs, its
+   clean 2xx is stored against the key, and a handler-phase fault the handler
+   consumed is stamped on the answer it produced instead of its normal reply.
 9. **response-phase fault**, on whichever answer step 8 left, so a decision
    drawn at step 3 is paid out on every answer the *vendor* produced, errors
    included. A framework crash is not a vendor answer and is never faulted.
@@ -39,23 +40,28 @@ it.
 from __future__ import annotations
 
 import collections
+import contextlib
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import parse_qsl
 
 from vendorfake.core.capability.gates import CoreCapability, assert_capability_declarations
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
+    COMMIT_FAULTS,
+    HANDLER_PHASE_FAULTS,
     INTACT_RESPONSE_FAULTS,
     RESPONSE_PHASE_FAULTS,
     apply_request_fault,
     apply_response_fault,
+    commit_mode,
+    stamp_mechanism,
 )
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
@@ -66,6 +72,7 @@ from vendorfake.core.kernel.reply import normalize
 from vendorfake.core.kernel.router import Match, MethodNotAllowed, Router, is_control_path
 from vendorfake.core.kernel.shaping import assert_error_table_total, header_text
 from vendorfake.core.kernel.types import (
+    ArmedFault,
     AuthResult,
     HandlerArgs,
     Logger,
@@ -289,9 +296,8 @@ class RequestLog:
         limit: int | None = None,
     ) -> tuple[RequestRecord, ...]:
         """Matching records, **newest first**. ``limit`` is applied after filtering, so ``requests(operation_id=X,
-        limit=1)`` is the most recent call to X rather than the most recent call if it happened to be X. Every
-        filter is a conjunction and ``None`` means "do not filter", so ``unmatched=False`` selects only the matched
-        ones."""
+        limit=1)`` is the most recent call to X rather than the most recent call if it happened to be X. Every filter
+        is a conjunction and ``None`` means "do not filter", so ``unmatched=False`` selects only the matched ones."""
         with self._lock:
             found = list(self._records)
         found.reverse()
@@ -338,6 +344,8 @@ class _Trace:
     #: Whether the payout has already been *tried*. Set before the attempt, not after, because the attempt itself
     #: can raise, and the error path would otherwise call it again from inside the ``except`` clause.
     response_fault_attempted: bool = False
+    #: ``params.commit`` of an armed response-phase fault, resolved before the handler runs.
+    fault_commit: Literal["before", "after"] | None = None
     near_misses: tuple[NearMiss, ...] = ()
 
 
@@ -673,7 +681,7 @@ class Unit:
             )
             # An error that left by raising is still the answer this caller gets, so a fault armed at step 3 applies
             # to it as step 9 would; otherwise the rule's ``when.times`` budget buys nothing. Nothing applies twice:
-            # step 9 sets the flag before it tries. The attempt can itself raise, so it gets its own ``try`` and
+            # step 9 sets the flag before it tries; the attempt can itself raise, so it gets its own ``try`` and
             # answers the same diagnostic. provenance: judgment.
             if (
                 trace.decision is not None
@@ -734,11 +742,20 @@ class Unit:
         )
         decision = selection.decision
         if decision is not None:
-            # Before the fault is applied, not after: applying it can raise,
-            # and an unrecorded 429 is one a consumer cannot explain.
-            trace.fault = decision.fault
-            trace.rule_id = decision.rule_id
             trace.decision = decision
+            if decision.fault in HANDLER_PHASE_FAULTS:
+                # Armed, not fired: only the route can say the fault happened, so ``_settle_handler_fault`` records it.
+                args.fault = ArmedFault(name=decision.fault, rule_id=decision.rule_id, params=decision.params)
+            else:
+                # Before the fault is applied, not after: applying it can raise,
+                # and an unrecorded 429 is one a consumer cannot explain.
+                trace.fault = decision.fault
+                trace.rule_id = decision.rule_id
+            # Here, not at step 8: a bad ``params.commit`` refuses before the handler runs, whatever the fault's own
+            # phase, so a request-phase rule carrying it is refused too.
+            mode = commit_mode(decision)
+            if decision.fault in COMMIT_FAULTS:
+                trace.fault_commit = mode
 
         # 4. pre-auth faults -------------------------------------------------
         if decision is not None:
@@ -790,17 +807,33 @@ class Unit:
         if replayed is not None:
             res = replayed
         else:
+            # ``commit: after``: the handler runs inside a snapshot restored whatever it did, with journal listeners
+            # muted, so no entity, journal entry, webhook event or idempotency record survives the request.
+            uncommitted = trace.fault_commit == "after"
+            snapshot = self._store.snapshot() if uncommitted else None
             trace.journal_seq_before = self._store.journal_seq
             try:
-                res = normalize(route.handler(args))
+                with (
+                    self._store.muted() if uncommitted else contextlib.nullcontext(),
+                    self._webhooks.muted() if uncommitted else contextlib.nullcontext(),
+                ):
+                    res = normalize(route.handler(args))
+            except UnitError:
+                # A refusal pre-empted the route's own denial branch: log it and give the budget back.
+                self._warn_unconsumed(args, "handler-phase fault not reached: the route refused first")
+                raise
             finally:
                 # In a ``finally``: a handler that committed and then raised has still committed.
                 trace.journal_seq_after = self._store.journal_seq
+                if snapshot is not None:
+                    self._store.restore(snapshot)
+                    trace.journal_seq_after = trace.journal_seq_before
             # INVARIANT: what is recorded is the handler's CLEAN answer, before any response-phase fault touches it.
             # The handler has committed and this store has no rollback, so a retry replays what the vendor really
             # committed; recording the faulted answer would stamp every later replay, and skipping the record would
-            # let a retry charge the caller twice. provenance: judgment.
-            if idem is not None and idem_key is not None and 200 <= res.status < 300:
+            # let a retry charge the caller twice. Under ``commit: after`` there is nothing to replay, so the key is
+            # left unstored and the retry runs the handler again. provenance: judgment.
+            if not uncommitted and idem is not None and idem_key is not None and 200 <= res.status < 300:
                 self._store.put_idempotent(
                     IdempotencyRecord(
                         scope=idem.scope,
@@ -812,6 +845,8 @@ class Unit:
                         stored_at=self._clock.iso_ms(),
                     )
                 )
+            # After the idempotency store, so a replay of the key returns the vendor's clean answer, not a faulted one.
+            res = self._settle_handler_fault(args, res, trace)
         # 9. response-phase fault, on whichever answer step 8 produced -------
         # It corrupts a REAL answer, so it runs only after the handler produced
         # one, and it never touches ``ctx``. A replay is faulted as a fresh
@@ -822,6 +857,31 @@ class Unit:
             trace.response_fault_attempted = True
             res = apply_response_fault(decision, res, log=self._log)
         return res
+
+    def _warn_unconsumed(self, args: HandlerArgs, message: str) -> None:
+        """An armed handler-phase fault the route never consumed, logged with the rule that spent its budget on it."""
+        armed = args.fault
+        if armed is not None and not args.fault_consumed:
+            # Nothing fired, so the rule's budget is given back and ``fires`` does not count it.
+            self._chaos.refund(armed.rule_id)
+            self._log.warn(message, {"fault": armed.name, "rule": armed.rule_id, "route": args.route.key})
+
+    def _settle_handler_fault(self, args: HandlerArgs, res: UnitResponse, trace: _Trace) -> UnitResponse:
+        """Stamp and record a handler-phase fault the route answered. A route the fault means nothing to leaves it
+        unconsumed: that is warned about and recorded as unfaulted, since nothing about the answer changed."""
+        armed = args.fault
+        if armed is None:
+            return res
+        if not args.fault_consumed:
+            self._warn_unconsumed(args, "handler-phase fault not implemented by the route")
+            return res
+        trace.fault = armed.name
+        trace.rule_id = armed.rule_id
+        headers = dict(res.headers)
+        stamp_mechanism(headers, armed.name, armed.rule_id)
+        return UnitResponse(
+            status=res.status, headers=headers, body=res.body, delay_ms=res.delay_ms, transport=res.transport
+        )
 
     # -- pipeline helpers ---------------------------------------------------
 
@@ -947,6 +1007,7 @@ class Unit:
                     near_misses=trace.near_misses,
                     committed_journal_seq=trace.journal_seq_after if committed else None,
                     discarded_mutation=committed and deprived,
+                    fault_commit=trace.fault_commit if trace.response_fault_attempted else None,
                 )
             )
         # ``decorate`` sees only the headers: the delay and the connection are not vendor opinions.

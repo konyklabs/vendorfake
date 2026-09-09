@@ -52,6 +52,7 @@ from tests.conformance.mutants.seams import (
     LeakyFaultSelector,
     LoopBreakingFaultSelector,
     PermissiveStateMachine,
+    RefreshRejectedSwallowingFaultSelector,
     SignerOverlay,
     UngatedWebhookDispatcher,
     VendorOverlay,
@@ -1448,13 +1449,14 @@ register(
             "Measured, not assumed: this is the exact failure the mutant run against this fixture showed "
             "before this line was added."
         ),
-        # C08, C12 and C27 all declare Requires(chaos=True); their precondition
-        # check (conformance/env.py::unmet_precondition) reads the same lying
-        # document, so all three correctly report the capability as off and SKIP
-        # rather than run -- an accurate consequence of the lie, not a second
-        # undiscovered defect. (C27 joined when the konyklabs/roadmap#15 stack
-        # landed beside this mutant.)
-        skips_everywhere=frozenset({"C08", "C12", "C27"}),
+        # C08, C12, C27 and C37 all declare Requires(chaos=True); their
+        # precondition check (conformance/env.py::unmet_precondition) reads the
+        # same lying document, so all four correctly report the capability as
+        # off and SKIP rather than run -- an accurate consequence of the lie,
+        # not a second undiscovered defect. (C27 joined when the
+        # konyklabs/roadmap#15 stack landed beside this mutant; C37 joined with
+        # konyklabs/roadmap#131's refresh_rejected fault.)
+        skips_everywhere=frozenset({"C08", "C12", "C27", "C37"}),
         control=replace_control_route("GET", "/__unit/capabilities", rewrite_document(_report_chaos_disabled)),
         profiles=("no-chaos",),
     )
@@ -1598,3 +1600,28 @@ register(
         vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_replay_marker)),
     )
 )
+
+
+# ---------------------------------------------------------------------------
+# C37 -- refresh_rejected is the vendor's own 401 and commits nothing.
+# ---------------------------------------------------------------------------
+
+
+register(
+    Mutant(
+        id="M58",
+        name="refresh-rejected-swallowed-by-the-selector",
+        defect=(
+            "A standing refresh_rejected rule matches and would fire, but the fault selector "
+            "discards that one decision, so the request falls through to the handler as if no "
+            "rule existed at all -- no 401, no vendorfake-fault header, and the call succeeds."
+        ),
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C37"}),
+        selector=lambda engine, capabilities: RefreshRejectedSwallowingFaultSelector(engine, capabilities),
+    )
+)
+"""konyklabs/roadmap#131. The narrowest defect that still isolates the check:
+every other request-scope fault is untouched, so this mutant does not also
+trip C08, C12, C14 or C27 -- only C37, which is the one contract that reads a
+one-shot refresh_rejected rule from arm to fire."""

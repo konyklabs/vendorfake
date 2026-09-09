@@ -93,6 +93,7 @@ __all__ = [
     "LeakyFaultSelector",
     "LoopBreakingFaultSelector",
     "PermissiveStateMachine",
+    "RefreshRejectedSwallowingFaultSelector",
     "SignerOverlay",
     "UngatedWebhookDispatcher",
     "VendorOverlay",
@@ -563,6 +564,30 @@ class LeakyFaultSelector(FaultSelector):
             # what makes the leak invisible without C12's counter comparison.
             self._engine.evaluate(subject)
         return super().select_request(subject, in_band)
+
+
+class RefreshRejectedSwallowingFaultSelector(FaultSelector):
+    """A selector that discards a ``refresh_rejected`` decision before it
+    reaches the pipeline.
+
+    The defect C37 exists to catch: a standing ``refresh_rejected`` rule is
+    armed, matches, and would fire -- but this selector reports "nothing
+    decided" for that one fault name instead of the engine's real decision,
+    so the request falls through to the handler as if no rule existed. The
+    seam is the only one a selector-level defect can ride in through, and it
+    is deliberately narrow (only this one fault name is swallowed) so the
+    mutant does not also trip every other request-scope contract.
+    """
+
+    def select_request(
+        self,
+        subject: ChaosSubject,
+        in_band: Callable[[], MagicExtraction] | None = None,
+    ) -> FaultSelection:
+        selection = super().select_request(subject, in_band)
+        if selection.decision is not None and selection.decision.fault == "refresh_rejected":
+            return FaultSelection()
+        return selection
 
 
 class LoopBreakingFaultSelector(FaultSelector):

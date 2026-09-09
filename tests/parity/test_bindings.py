@@ -163,7 +163,7 @@ def test_a_python_driver_raises_on_an_unmatched_path_by_default(
     binding: str, open_unit: Callable[..., Iterator[Bound]]
 ) -> None:
     if binding == "cli":
-        pytest.skip("the bare CLI has no Python driver; the wire answer is the case above")
+        pytest.skip(f"binding={binding!r} has no Python driver; the wire answer is the case above")
     with open_unit() as bound, pytest.raises(UnmatchedRequest, match="ListLocations"):
         bound.client.get("/v2/locationz", headers=_auth(bound))
 
@@ -238,6 +238,32 @@ def test_a_chaos_rule_fires_the_same(binding: str, open_unit: Callable[..., Iter
 
 
 @pytest.mark.parametrize("binding", ALL)
+def test_a_refresh_rejected_fault_is_the_same_401_on_every_binding(
+    binding: str, open_unit: Callable[..., Iterator[Bound]]
+) -> None:
+    """konyklabs/roadmap#131: the fault is the vendor's own 401, whatever the
+    binding -- and a one-shot rule leaves the second call unfaulted on all
+    three, not just in process."""
+    with open_unit() as bound:
+        armed = bound.client.post(
+            "/__unit/chaos/rules",
+            json={
+                "id": "refresh-rejected-parity",
+                "scope": "request",
+                "fault": "refresh_rejected",
+                "match": {"route": "GET /v2/locations"},
+                "when": {"times": 1},
+            },
+        )
+        assert armed.status_code in (200, 201), armed.text
+        faulted = bound.client.get("/v2/locations", headers=_auth(bound))
+        assert faulted.status_code == 401
+        assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+        second = bound.client.get("/v2/locations", headers=_auth(bound))
+        assert "vendorfake-fault" not in second.headers
+
+
+@pytest.mark.parametrize("binding", ALL)
 def test_a_reset_returns_the_unit_to_its_seed(binding: str, open_unit: Callable[..., Iterator[Bound]]) -> None:
     with open_unit() as bound:
         auth = _auth(bound)
@@ -260,7 +286,7 @@ def test_a_body_over_the_limit_is_the_vendors_bad_request(
     """The ASGI adapter's 8 MiB cap answers as the vendor's own error over a real
     socket too; in process there is no framing to cap, so the unit reads the body."""
     if binding == "unit":
-        pytest.skip("the in-process transport hands the body over in memory; the cap is the ASGI adapter's")
+        pytest.skip(f"binding={binding!r} hands the body over in memory; the cap is the ASGI adapter's")
     with open_unit(unmatched="vendor-404") as bound:
         body = b"{" + b" " * (8 * 1024 * 1024) + b"}"
         response = bound.client.post(

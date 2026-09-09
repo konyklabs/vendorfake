@@ -11,11 +11,12 @@ while a record is only observable after :meth:`drain`.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -102,6 +103,7 @@ class WebhookDispatcher:
         "_held_for_reorder",
         "_log",
         "_log_lock",
+        "_muted",
         "_on_log",
         "_prepared",
         "_request_lock",
@@ -139,6 +141,7 @@ class WebhookDispatcher:
         self._worker = DeliveryWorker()
         #: Bounded, newest kept; written on the worker thread and read under `_log_lock`.
         self._log: deque[DeliveryRecord] = deque(maxlen=DELIVERY_LOG_CAPACITY)
+        self._muted = False
         self._log_lock = threading.Lock()
         self._delivery_seq = 0
         #: Re-entrant: `enqueue` runs inside a journal listener and may read the store.
@@ -273,10 +276,19 @@ class WebhookDispatcher:
         digest = sha256_hex(f"{event_type}|{entry.collection}|{entry.id}|{entry.seq}|{seq}")
         return "-".join((digest[0:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]))
 
+    @contextlib.contextmanager
+    def muted(self) -> Iterator[None]:
+        """Nothing is prepared or queued inside the block: the kernel's ``commit: after`` runs a handler here."""
+        self._muted = True
+        try:
+            yield
+        finally:
+            self._muted = False
+
     def enqueue(self, event: PreparedEvent) -> None:
         """Fan one event out to every subscriber that asked for its type, completing each
         first attempt's preparation first. A disabled subscriber records nothing at all."""
-        if not self.enabled:
+        if not self.enabled or self._muted:
             return
 
         # Resolved before ``_request_lock`` is taken, for the lock order set out on
@@ -294,7 +306,7 @@ class WebhookDispatcher:
         having named this subscription. Returns False, queueing nothing, when delivery
         is disabled or the subscriber is unknown or disabled, so a caller knows there
         is no attempt to wait for."""
-        if not self.enabled:
+        if not self.enabled or self._muted:
             return False
 
         # LOCK ORDER: the store lock is taken and released BEFORE ``_request_lock``, because

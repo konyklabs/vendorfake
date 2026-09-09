@@ -17,6 +17,8 @@ try:
 except ImportError as exc:
     raise ImportError("vendorfake serve needs the 'serve' extra: pip install 'vendorfake[serve]'") from exc
 
+from vendorfake.asgi.mount import ASGIApp
+
 __all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server", "serve_in_thread"]
 
 _THREAD_STARTUP_TIMEOUT_S = 30.0
@@ -46,7 +48,7 @@ def bound_port(sock: socket.socket) -> int:
 
 
 def run_server(
-    app: FastAPI,
+    app: FastAPI | ASGIApp,
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
@@ -55,7 +57,8 @@ def run_server(
 ) -> None:
     """Serve ``app`` until interrupted. Blocking. ``on_bound`` is called once with
     the host and real port before uvicorn takes over, so ``--port 0`` is readable
-    by a parent process."""
+    by a parent process. ``app`` is any ASGI application: with several vendors
+    named the CLI hands over ``mount``'s instead of a ``FastAPI`` one."""
     sock = bind(host, port)
     if on_bound is not None:
         on_bound(host, bound_port(sock))

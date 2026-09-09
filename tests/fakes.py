@@ -258,6 +258,7 @@ def make_unit(
     vendor: FakeVendor | None = None,
     control_routes: object = None,
     sink: object = None,
+    logger: object = None,
     **config_kwargs: object,
 ) -> object:
     """A started :class:`Unit` over a fake vendor. Returns the unit."""
@@ -269,6 +270,7 @@ def make_unit(
         vendor=definition,  # type: ignore[arg-type]
         config=make_config(**config_kwargs),  # type: ignore[arg-type]
         sink=sink,  # type: ignore[arg-type]
+        logger=logger,  # type: ignore[arg-type]
         control_routes=control_routes,  # type: ignore[arg-type]
     )
     unit.start()

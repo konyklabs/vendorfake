@@ -1,19 +1,15 @@
 """The OAuth v2 surface: authorize, token exchange, refresh.
 
-DOCUMENTED: authorize redirects with ``merchant_id``, ``client_id``,
-``code``; token exchange answers the four-field
-``{access_token, access_token_expiration, refresh_token,
-refresh_token_expiration}``; refresh is ``{client_id, refresh_token}``,
-single-use, no secret
+DOCUMENTED: authorize redirects with ``merchant_id``, ``client_id``, ``code``; token exchange answers the four-field
+``{access_token, access_token_expiration, refresh_token, refresh_token_expiration}``; refresh is
+``{client_id, refresh_token}``, single-use, no secret
 (https://docs.clover.com/dev/docs/high-trust-app-auth-flow,
 https://docs.clover.com/dev/docs/generate-oauth-expiring-access-and-refresh-token,
 https://docs.clover.com/dev/docs/refresh-access-tokens,
-https://docs.clover.com/dev/docs/oauth-and-tokens-faqs). Everything else
-(error bodies/status, PKCE via RFC 7636, code TTL) is JUDGMENT, labelled at
-each site.
+https://docs.clover.com/dev/docs/oauth-and-tokens-faqs). Everything else (error bodies/status, PKCE via RFC 7636,
+code TTL) is JUDGMENT, labelled at each site.
 
-Invariant: no 4xx leaves a journal entry -- every refusal is checked before
-its write.
+Invariant: no 4xx leaves a journal entry -- every refusal is checked before its write.
 """
 
 from __future__ import annotations
@@ -113,6 +109,16 @@ class CloverOAuthSurface:
                 field="redirect_uri",
             )
         redirect_uri = supplied_redirect or config.redirect_uri
+        state = args.query("state")
+
+        if args.consume_fault("authorize_denied") is not None:
+            # JUDGMENT: Clover documents only the approved redirect, so the denial takes RFC 6749 s4.1.2.1's
+            # shape -- error=access_denied, state echoed back exactly when the client sent one.
+            # https://datatracker.ietf.org/doc/html/rfc6749#section-4.1.2.1
+            denial = {"error": "access_denied"}
+            if state is not None:
+                denial["state"] = state
+            return redirect(_with_query(redirect_uri, denial))
 
         challenge = _query(args, "code_challenge")
         method = _query(args, "code_challenge_method")
@@ -141,7 +147,6 @@ class CloverOAuthSurface:
             {"operation_id": "Authorize"},
         )
         params = {"merchant_id": merchant.id, "client_id": client_id, "code": code}
-        state = args.query("state")
         if state is not None:
             params["state"] = state
         return redirect(_with_query(redirect_uri, params))
