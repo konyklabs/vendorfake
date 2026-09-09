@@ -8,6 +8,7 @@ why each one names the thing that would be there if the property broke.
 
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 
@@ -15,6 +16,7 @@ import pytest
 
 from tests.unit.asgi.test_adapt import call
 from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, create_app, registered_methods
+from vendorfake.asgi.adapt import MAX_BODY_BYTES
 from vendorfake.core.transport.inprocess import in_process
 
 EXPECTED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
@@ -30,6 +32,15 @@ def test_the_verb_set_is_complete(app: Any) -> None:
     """
     assert set(HTTP_METHODS) == EXPECTED_METHODS
     assert registered_methods(app) == EXPECTED_METHODS
+
+
+def test_the_catch_all_declares_no_typed_parameter(app: Any) -> None:
+    """The route takes the raw request and nothing else: a ``Depends``, ``Header``,
+    ``Body`` or ``Cookie`` parameter would let the framework validate, parse or
+    reject before the unit sees the request."""
+    catch_all = next(r for r in app.routes if getattr(r, "path", None) == "/{full_path:path}")
+    parameters = list(inspect.signature(catch_all.endpoint).parameters)
+    assert parameters == ["request"], parameters
 
 
 def test_there_is_exactly_one_catch_all_route(app: Any) -> None:
@@ -80,6 +91,46 @@ def test_a_malformed_json_body_is_400_and_never_422(app: Any) -> None:
     )
     assert response.status_code == 400
     assert response.headers["x-unit-error"] == "invalid_json"
+
+
+def test_a_body_at_exactly_the_limit_is_accepted(app: Any) -> None:
+    """The boundary itself must not be refused: the limit is "exceeds", not
+    "reaches"."""
+    payload = b"x" * MAX_BODY_BYTES
+    response = call(app, "POST", "/v2/orders/abc", content=payload)
+    assert response.status_code == 200
+    assert response.json()["raw_len"] == MAX_BODY_BYTES
+
+
+def test_an_oversized_body_is_refused_unread_as_the_vendor_s_bad_request(app: Any) -> None:
+    """audit O4: a body over ``MAX_BODY_BYTES`` gets the vendor's own 400, and
+    the adapter never finishes reading it.
+
+    The body is a generator that counts every byte it yields, so this proves
+    the second half by construction rather than by timing: if the adapter had
+    read the whole 9 MiB before answering, ``sent[0]`` would equal it. The
+    generator has no declared length, so httpx cannot short-circuit this by
+    setting ``content-length`` itself -- the adapter's own streaming cutoff is
+    what stops the read.
+    """
+    total_bytes = MAX_BODY_BYTES + 1024 * 1024  # 9 MiB
+    chunk_bytes = 64 * 1024
+    sent = [0]
+
+    async def counting_body() -> Any:
+        remaining = total_bytes
+        while remaining > 0:
+            piece = min(chunk_bytes, remaining)
+            sent[0] += piece
+            remaining -= piece
+            yield b"x" * piece
+
+    response = call(app, "POST", "/v2/orders/abc", content=counting_body())
+    assert response.status_code == 400
+    assert response.headers["x-unit-error"] == "bad_request"
+    assert response.json()["error"]["code"] == "bad_request"
+    assert str(MAX_BODY_BYTES) in response.json()["error"]["detail"]
+    assert sent[0] < total_bytes, f"the adapter read all {sent[0]} bytes instead of stopping at the limit"
 
 
 def test_a_form_encoded_body_is_understood_over_the_transport(app: Any) -> None:
@@ -252,3 +303,54 @@ def test_create_app_is_a_factory(unit: Any) -> None:
     first = create_app(unit)
     second = create_app(unit)
     assert first is not second
+
+
+# ---------------------------------------------------------------------------
+# The response observer: the served-side validator's one seam.
+# ---------------------------------------------------------------------------
+
+
+def test_an_observer_sees_the_request_and_the_answer_and_cannot_change_them(unit: Any) -> None:
+    """It is handed the very ``UnitRequest`` the unit answered and the
+    ``UnitResponse`` it gave, before either is converted back to HTTP -- which is
+    what lets a schema check over a socket be the same check as in process."""
+    seen: list[tuple[Any, Any]] = []
+    app = create_app(unit, observer=lambda request, response: seen.append((request, response)))
+    response = call(app, "POST", "/v2/orders/abc?q=1", content=b'{"note":"hi"}')
+    assert response.status_code == 200
+    assert len(seen) == 1
+    request, answered = seen[0]
+    assert (request.method, request.path, dict(request.query)) == ("POST", "/v2/orders/abc", {"q": "1"})
+    assert request.raw_body == b'{"note":"hi"}'
+    assert answered.status == 200
+    # Untouched: the observer read, and the consumer got what the unit produced.
+    assert response.json()["order_id"] == "abc"
+
+
+def test_an_observer_that_refuses_turns_the_answer_into_the_vendor_s_500(unit: Any) -> None:
+    """A violation a consumer can see. Not a log line and not a framework 500:
+    the point of serving with ``--validate`` is that a fake which drifts from the
+    vendor's document fails the test driving it, over the wire, in the vendor's
+    own error shape."""
+
+    def refuse(request: Any, response: Any) -> None:
+        raise AssertionError("GET /v2/orders/{order_id} answered 200 with a body that fails")
+
+    app = create_app(unit, observer=refuse)
+    response = call(app, "GET", "/v2/orders/abc")
+    assert response.status_code == 500
+    assert response.headers["x-unit-error"] == "internal"
+    body = response.json()
+    assert body["error"]["code"] == "internal"
+    assert "a body that fails" in body["error"]["detail"]
+
+
+def test_a_silent_observer_changes_no_byte_of_the_answer(unit: Any, app: Any) -> None:
+    """The observer is a witness: with one that says nothing, the wire answer is
+    the same bytes as with none, headers included but for the request id."""
+    plain = call(app, "GET", "/v2/orders/abc")
+    observed = call(create_app(unit, observer=lambda request, response: None), "GET", "/v2/orders/abc")
+    assert (observed.status_code, observed.content) == (plain.status_code, plain.content)
+    assert {k: v for k, v in observed.headers.items() if k != "x-unit-request-id"} == {
+        k: v for k, v in plain.headers.items() if k != "x-unit-request-id"
+    }

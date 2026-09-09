@@ -20,14 +20,38 @@ if [ "${1:-}" = "--quick" ]; then QUICK=1; fi
 
 names=()
 codes=()
+kinds=()
 
+# Every non-zero exit is a FAIL. `skippable_step` is the one exception, opted
+# into per step: exit 3 means a named, deliberate skip (T1,
+# konyklabs/roadmap#116) -- no network and no cache for a fetched-not-committed
+# fidelity extract -- printed as SKIP in yellow and never counted as a FAIL.
+# pytest exits 3 on an internal error, so an ordinary `step` must not read it
+# as a skip.
+_record_step() {
+  local name="$1" code="$2" skippable="$3"
+  names+=("$name")
+  codes+=("$code")
+  if [ "$code" -eq 0 ]; then
+    kinds+=("PASS")
+  elif [ "$skippable" -eq 1 ] && [ "$code" -eq 3 ]; then
+    kinds+=("SKIP")
+  else
+    kinds+=("FAIL")
+  fi
+}
 step() {
   local name="$1"; shift
   printf '\n\033[1m== %s ==\033[0m\n' "$name"
   "$@"
-  local code=$?
-  names+=("$name")
-  codes+=("$code")
+  _record_step "$name" $? 0
+  return 0
+}
+skippable_step() {
+  local name="$1"; shift
+  printf '\n\033[1m== %s ==\033[0m\n' "$name"
+  "$@"
+  _record_step "$name" $? 1
   return 0
 }
 
@@ -97,14 +121,47 @@ if [ "$QUICK" -eq 0 ]; then
   for entry in "${FIDELITY_FETCH_TARGETS[@]}"; do
     vendor="${entry%%=*}"
     TARGET="${entry#*=}"
-    step "fidelity fetch ($vendor)" \
+    skippable_step "fidelity fetch ($vendor)" \
       uv run python -m vendorfake.fidelity fetch --target "$TARGET"
   done
 fi
 if [ "$QUICK" -eq 0 ]; then
-  step "pytest"          uv run pytest
+  # Coverage is collected by pytest-cov and judged by a separate step: the
+  # floor is the measured number, only ever raised (docs/testing.md), and a
+  # separate `coverage report` fails on its own exit code where pytest-cov's
+  # in-session check does not reach the step's exit status on a full run.
+  step "pytest"          uv run pytest --cov=vendorfake --cov-report=
+  step "coverage floor"  uv run coverage report --skip-covered --fail-under=89
 fi
 step "wheel data"        uv run python tools/check_wheel_data.py
+# The in-process path must work from a wheel installed WITHOUT the `serve`
+# extra, and importing the ASGI package must then name the extra to install.
+_serve_extra_step() {
+  local scratch
+  scratch="$(mktemp -d)"
+  uv build --wheel --out-dir "$scratch/dist" -q || return 1
+  uv venv -q "$scratch/venv" || return 1
+  uv pip install -q --python "$scratch/venv/bin/python" "$scratch"/dist/*.whl || return 1
+  "$scratch/venv/bin/python" - <<'PY' || return 1
+import sys
+from vendorfake.testing import unit
+with unit("square") as started:
+    assert started.health()["status"] == "ok"
+for name in ("fastapi", "uvicorn", "starlette"):
+    assert name not in sys.modules, f"{name} was imported by the in-process path"
+try:
+    import vendorfake.asgi
+except ImportError as exc:
+    assert "vendorfake[serve]" in str(exc), exc
+else:
+    raise SystemExit("importing vendorfake.asgi without the extra did not raise")
+print("wheel without the serve extra: unit() works, vendorfake.asgi names the extra")
+PY
+  rm -rf "$scratch"
+}
+if [ "$QUICK" -eq 0 ]; then
+  step "serve extra"       _serve_extra_step
+fi
 step "docs"              _docs_step
 
 # Security scanners, full run only (konyklabs/roadmap#105): pip-audit over the
@@ -138,10 +195,8 @@ fi
 # checkout (konyklabs/roadmap#105). It is what a consumer copies, and until
 # this step existed a documented behaviour change (a paid Toast check answers
 # CLOSED, not PAID) broke both examples on main with every other step green.
-# `--reinstall-package vendorfake` because the example pins vendorfake as a
-# non-editable path dependency, which uv would otherwise serve from its cache.
 _example_step() {
-  (cd examples/pytest-consumer && uv sync -q --reinstall-package vendorfake && uv run pytest -q -p no:randomly)
+  (cd examples/pytest-consumer && uv sync -q && uv run pytest -q -p no:randomly)
 }
 if [ "$QUICK" -eq 0 ]; then
   step "example (pytest)"  _example_step
@@ -189,21 +244,30 @@ for entry in "${FIDELITY_TARGETS[@]}"; do
     printf '\n\033[1m== fidelity (%s) ==\033[0m\nskipped under --quick: the extract is fetched, never committed\n' "$vendor"
     continue
   fi
-  step "fidelity pin ($vendor)" \
+  # A fetched-not-committed extract may be unavailable (exit 3): SKIP, not FAIL.
+  runner=step
+  if printf '%s\n' "${FIDELITY_FETCH_TARGETS[@]}" | grep -qx "$entry"; then runner=skippable_step; fi
+  "$runner" "fidelity pin ($vendor)" \
     uv run python -m vendorfake.fidelity pin --check --offline --target "$TARGET"
-  step "fidelity report ($vendor)" \
+  "$runner" "fidelity report ($vendor)" \
     uv run python -m vendorfake.fidelity report --target "$TARGET"
 done
 
 printf '\n\033[1m== summary ==\033[0m\n'
 failed=0
 for i in "${!names[@]}"; do
-  if [ "${codes[$i]}" -eq 0 ]; then
-    printf '  %-20s PASS\n' "${names[$i]}"
-  else
-    printf '  %-20s FAIL (exit %s)\n' "${names[$i]}" "${codes[$i]}"
-    failed=1
-  fi
+  case "${kinds[$i]}" in
+    PASS)
+      printf '  %-20s PASS\n' "${names[$i]}"
+      ;;
+    SKIP)
+      printf '  %-20s \033[33mSKIP\033[0m (exit %s)\n' "${names[$i]}" "${codes[$i]}"
+      ;;
+    *)
+      printf '  %-20s FAIL (exit %s)\n' "${names[$i]}" "${codes[$i]}"
+      failed=1
+      ;;
+  esac
 done
 
 if [ "$failed" -ne 0 ]; then

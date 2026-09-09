@@ -1,11 +1,9 @@
-"""``vendorfake`` -- the command line, and the one place that reads ``os.environ``.
+"""``vendorfake`` -- the command line.
 
-Invariant: this is the only module that resolves a unit's config from
-``os.environ``. ``create_unit``'s ``env`` defaults to an empty mapping, so a
-variable set by one test cannot change the profile a unit built by another
-resolves to. ``vendorfake.testing.served()`` is the one documented exception,
-spawning this module's ``serve`` subcommand as a child that inherits the real
-environment by construction.
+Invariant: the process environment reaches a unit through one function,
+``registry.ambient_env()``, which this module, ``unit()`` and ``served()`` all
+layer explicit configuration over; ``create_unit``'s ``env`` itself defaults to
+an empty mapping.
 
 Invariant: ``vendorfake --help`` imports no web framework. Every first-party
 import happens inside a subcommand body, and ``serve`` is the only one that
@@ -21,11 +19,12 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at run time
     from vendorfake.core.kernel.unit import Unit
+    from vendorfake.fidelity.validate import ResponseValidator
 
 __all__ = ["main"]
 
@@ -83,7 +82,7 @@ def _wants_json(args: argparse.Namespace) -> bool:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Run or describe a high-fidelity fake of a third-party vendor API.",
+        description="Run or describe a fake of a third-party vendor API, checked against its published schema.",
         epilog=(
             "Unofficial. Not affiliated with, endorsed by, or connected to any vendor whose public API "
             "a module here imitates."
@@ -107,6 +106,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL, then the profile's.",
     )
+    serve.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Check every answer against the vendor's own published schema, and answer 500 naming the "
+            "violation when one fails. Refused for a vendor with no fidelity leg."
+        ),
+    )
 
     # already the only thing each of these prints; --json accepted so a caller need not special-case it
     info = subcommands.add_parser(
@@ -122,6 +129,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-internal",
         action="store_true",
         help="Omit the /__unit/* control plane, describing only the vendor surface.",
+    )
+
+    manifest = subcommands.add_parser(
+        "manifest",
+        help="Print the world-neutral manifest: credentials, webhook keys and entity ids.",
+        parents=[_json_flag_parent()],
+    )
+    _add_unit_flags(manifest)
+    manifest.add_argument(
+        "--base-url",
+        default=None,
+        help="The address the unit will be reached at, recorded in the document. Omitted, base_url is null.",
     )
 
     subcommands.add_parser("vendors", help="List the vendors that would resolve here.", parents=[_json_flag_parent()])
@@ -310,20 +329,74 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
         port = transport.port if transport.port else DEFAULT_PORT
     log_level = args.log_level or _env_str(env, "VENDORFAKE_LOG_LEVEL") or unit.context.config.log_level
 
-    app = create_app(unit)
+    validator = _response_validator(unit) if getattr(args, "validate", False) else None
+    app = create_app(unit, observer=None if validator is None else validator.observe)
 
     def announce(bound_host: str, bound_port: int) -> None:
         # One line, flushed, before a single request can arrive, so `--port 0`
         # reaches the parent while it is still reading.
         print(f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name})", file=out, flush=True)
 
+    reported = False
+
+    def report() -> None:
+        """The ledger summary, once, however the server ends: a served unit has no other moment at which the
+        session is over. Flushed because stderr is a pipe to whoever spawned this."""
+        nonlocal reported
+        if validator is None or reported:
+            return
+        reported = True
+        unit.context.log.info(validator.ledger.summary())
+        sys.stderr.flush()
+
+    if validator is not None:
+        _report_before_terminating(report)
     try:
         run_server(app, host=host, port=port, log_level=log_level, on_bound=announce)
     except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
         pass
     finally:
+        report()
         unit.stop()
     return 0
+
+
+def _report_before_terminating(report: Callable[[], None]) -> None:
+    """Make ``report`` run on ``SIGTERM``, then terminate as if it had not.
+
+    uvicorn restores each caught signal's previous handler and re-raises it on its way out
+    (``Server.capture_signals``), so with the default handler the process dies inside ``run_server`` and no
+    ``finally`` after it ever runs -- and ``served(validate=True)`` stops its child with exactly this signal. The
+    exit status is unchanged: the handler puts the default back and raises the signal again.
+    """
+    import signal
+
+    def on_terminate(signum: int, frame: object) -> None:
+        report()
+        signal.signal(signum, signal.SIG_DFL)
+        signal.raise_signal(signum)
+
+    signal.signal(signal.SIGTERM, on_terminate)
+
+
+def _response_validator(unit: Unit) -> ResponseValidator:
+    """The fidelity validator for the unit ``--validate`` is serving, or a refusal: a vendor with no declaration
+    has nothing to check against, and serving anyway would leave the flag reading as satisfied."""
+    from vendorfake.fidelity.validate import ResponseValidator
+    from vendorfake.testing.fidelity import surface_for, target_for
+
+    target = target_for(unit.name)
+    if target is None:
+        raise SystemExit(f"{PROG}: {unit.name} has no fidelity leg, so --validate has nothing to check against")
+    # Not strict: a route the declaration has not caught up with is counted, never turned into a 500 on a
+    # unit somebody is developing against.
+    from vendorfake.fidelity.cache import Unavailable
+
+    try:
+        surface = surface_for(target)
+    except Unavailable as exc:
+        raise SystemExit(f"{PROG}: --validate: {exc}") from None
+    return ResponseValidator(unit, surface, strict_undeclared=False)
 
 
 def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
@@ -337,6 +410,26 @@ def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
         response = in_process(unit).get("/__unit/info")
         print(response.text, file=out)
         return 0 if response.status == 200 else 1
+    finally:
+        unit.stop()
+
+
+def _manifest(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print the document ``GET /__unit/manifest`` serves, without a server.
+
+    The same function builds both, so the two cannot drift. ``--json`` is
+    implicit -- the output *is* the document, and nothing else goes to stdout --
+    and ``--base-url`` is the one thing a process with no request cannot infer:
+    a unit reached over a container port mapping does not know its own address.
+    """
+    from vendorfake.core.control.plane import manifest_document
+    from vendorfake.core.util.json import dump_json
+
+    unit = _make_unit(args, env)
+    try:
+        document = manifest_document(unit.context, base_url=args.base_url)
+        print(dump_json(document).decode("utf-8"), file=out)
+        return 0
     finally:
         unit.stop()
 
@@ -562,9 +655,8 @@ def _conformance(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse, dispatch, and return an exit code. ``os.environ`` is read here and
-    nowhere else, copied into a plain ``dict`` so nothing downstream can mutate
-    the process environment and a test can substitute one."""
+    """Parse, dispatch, and return an exit code. The environment is copied into a
+    plain ``dict`` so nothing downstream can mutate it and a test can substitute one."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     env: Mapping[str, str] = dict(os.environ)
@@ -584,6 +676,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _serve(args, env, out)
     if args.command == "info":
         return _info(args, env, out)
+    if args.command == "manifest":
+        return _manifest(args, env, out)
     if args.command == "openapi":
         return _openapi(args, env, out)
     if args.command == "vendors":
