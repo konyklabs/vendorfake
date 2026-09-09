@@ -246,6 +246,20 @@ def test_the_mount_prefix_is_forwarded() -> None:
     assert recorder.header(b"x-forwarded-prefix") == [b"/clover"]
 
 
+def test_a_forwarded_prefix_list_is_extended_on_its_first_entry() -> None:
+    """The manifest reads the first comma-separated entry, so that is the one
+    the mount extends; a trailing slash on it does not double up."""
+    recorder = Recorder()
+    response = call(
+        create_mounted_app({"clover": recorder}),
+        "GET",
+        "/clover/v3/nope",
+        headers={"x-forwarded-prefix": "/edge/, /older"},
+    )
+    assert response.status_code == 204
+    assert recorder.header(b"x-forwarded-prefix") == [b"/edge/clover, /older"]
+
+
 def test_a_callers_forwarded_prefix_keeps_its_place() -> None:
     """A proxy in front of this process already said where the client is; the
     mount extends that prefix rather than replacing it, so ``/edge`` plus a

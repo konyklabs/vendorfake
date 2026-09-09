@@ -26,14 +26,17 @@ from tests.fakes import (
 from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
+    HandlerArgs,
     IdempotencySpec,
     MagicTriggerSpec,
     PaginationSpec,
+    ReplyInit,
     UnitError,
     UnitErrorKind,
 )
 from vendorfake.core.kernel.unit import REQUEST_ID_HEADER, RouteInfo, Unit, make_request
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.webhooks.models import PreparedEvent
 from vendorfake.core.webhooks.sink import MemorySink
 
 # ---------------------------------------------------------------------------
@@ -254,6 +257,34 @@ def test_a_route_that_ignores_the_fault_answers_normally_and_is_warned_about() -
         "rule": "decline-once",
         "route": "GET /oauth/authorize",
     }
+    rules = in_process(unit).get("/__unit/chaos").json()["rules"]
+    assert [r["fires"] for r in rules if r["id"] == "decline-once"] == [0]
+
+
+def test_a_route_that_refuses_before_reaching_its_denial_keeps_the_budget_and_says_so() -> None:
+    """A malformed authorize request is refused before the handler reaches its
+    denial branch: the miss is logged, the refusal is recorded unfaulted, and
+    the rule keeps its budget for the call that can consume it."""
+
+    def refusing(args: HandlerArgs) -> ReplyInit:
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail="redirect_uri is not registered.", field="redirect_uri")
+
+    log = _Warnings()
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", refusing)],
+        control_routes=control_plane_routes,
+        logger=log,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 400
+    assert res.header("vendorfake-fault") is None
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [r.get("fault") for r in records] == [None]
+    assert [msg for msg, _ in log.warned] == ["handler-phase fault not reached: the route refused first"]
+    assert log.warned[0][1] == {"fault": "authorize_denied", "rule": "decline-once", "route": "GET /oauth/authorize"}
+    rules = in_process(unit).get("/__unit/chaos").json()["rules"]
+    assert [r["fires"] for r in rules if r["id"] == "decline-once"] == [0]
 
 
 def test_a_times_one_handler_phase_rule_denies_the_first_call_only() -> None:
@@ -1108,6 +1139,44 @@ def test_commit_after_rolls_the_handlers_whole_commit_back_and_still_corrupts_th
     unit.stop()
 
 
+def test_commit_after_withholds_an_event_the_handler_queued_directly() -> None:
+    """Some routes hand the dispatcher an event themselves instead of journalling
+    a mutation for it. Muting journal listeners alone would let that event out;
+    ``commit: after`` must withhold it too, or the rollback lies."""
+
+    def queueing(args: HandlerArgs) -> ReplyInit:
+        args.ctx.webhooks.enqueue(
+            PreparedEvent(
+                type="order.created",
+                event_id="evt-direct",
+                entity_id="o1",
+                created_at="2024-01-01T00:00:00.000Z",
+                body={"id": "o1"},
+            )
+        )
+        return json_({"queued": True})
+
+    sink = MemorySink()
+    vendor = FakeVendor(capabilities=WEBHOOK_CAPABILITIES, not_supported={}, signer=FakeSigner(), events=FakeEvents())
+    for commit, expected in (("after", 0), ("before", 1)):
+        unit = make_unit(
+            [route("POST", "/v2/orders", queueing)],
+            vendor=vendor,
+            sink=sink,
+            control_routes=control_plane_routes,
+            capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
+            subscribers=(_SUBSCRIBER,),
+            schedule_ms=(1,),
+            chaos_rules=[_malformed(commit)],
+        )
+        assert in_process(unit).post("/v2/orders", {}).header("vendorfake-fault") == "malformed_body"
+        assert len(unit.webhooks.prepared()) == expected, commit
+        unit.webhooks.drain()
+        assert len(sink.received) == expected, commit
+        sink.received.clear()
+        unit.stop()
+
+
 def test_commit_before_is_the_default_and_leaves_the_mutation_standing() -> None:
     """Today's behaviour, unchanged, whether the key is written or absent."""
     for rule in (_malformed("before"), _malformed()):
@@ -1130,16 +1199,22 @@ def test_commit_before_is_the_default_and_leaves_the_mutation_standing() -> None
         unit.stop()
 
 
-def test_an_unfaulted_request_carries_no_fault_commit_at_all() -> None:
-    """The key is a property of the fault that fired, not of every row."""
+def test_fault_commit_is_a_property_of_the_fault_that_fired_not_of_every_row() -> None:
+    """Present on a row a commit-capable fault corrupted; absent on a
+    request-phase refusal and on ``slow_body``, which delivers intact and
+    refuses ``commit`` outright."""
     calls: list[str] = []
     unit, _ = _commit_unit(_malformed("after"), calls)
-    assert in_process(unit).get("/__unit/health").status == 200
+    assert in_process(unit).post("/v2/orders", {}).status == 200
+    assert _newest(unit)["fault_commit"] == "after"
     unit2, _ = _commit_unit({"id": "r1", "scope": "request", "fault": "rate_limit"}, calls)
     assert in_process(unit2).post("/v2/orders", {}).status == 429
     assert "fault_commit" not in _newest(unit2)
-    unit.stop()
-    unit2.stop()
+    unit3, _ = _commit_unit({"id": "r1", "scope": "request", "fault": "slow_body"}, calls)
+    assert in_process(unit3).post("/v2/orders", {}).status == 200
+    assert "fault_commit" not in _newest(unit3)
+    for u in (unit, unit2, unit3):
+        u.stop()
 
 
 def test_commit_after_leaves_the_idempotency_key_free_so_the_retry_really_runs() -> None:

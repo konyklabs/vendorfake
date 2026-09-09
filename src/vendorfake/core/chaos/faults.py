@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 from vendorfake.core.chaos.engine import ChaosDecision
-from vendorfake.core.chaos.rules import BUILTIN_FAULTS, FaultProvenance
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS, ChaosRule, FaultProvenance
 from vendorfake.core.chaos.rules import FaultPhase as _PublishedPhase
 from vendorfake.core.kernel.shaping import header_text
 from vendorfake.core.kernel.types import (
@@ -51,6 +51,7 @@ __all__ = [
     "commit_mode",
     "is_transport_fault",
     "stamp_mechanism",
+    "validate_fault_params",
 ]
 
 RequestMoment = Literal["pre", "post_auth"]
@@ -217,6 +218,13 @@ def apply_request_fault(
         )
 
     log.warn("unknown request-scope fault ignored", {"fault": decision.fault, "rule": rule})
+
+
+def validate_fault_params(rule: ChaosRule) -> None:
+    """Refuse at arm time what :func:`commit_mode` would refuse on every matching request; ``params`` is otherwise
+    coerced, never refused, so this is the one key checked when a rule is written."""
+    if rule.params and "commit" in rule.params:
+        commit_mode(ChaosDecision(rule_id=rule.id, fault=rule.fault, params=dict(rule.params), occurrence=0))
 
 
 def commit_mode(decision: ChaosDecision) -> Literal["before", "after"]:

@@ -87,7 +87,10 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
   is committed. The mechanism headers and the request record name the fault
   only when the route implements it; a route the fault means nothing to
   ignores it, which is logged (`handler-phase fault not implemented by the
-  route`) and recorded as unfaulted.
+  route`) and recorded as unfaulted, and the rule's budget is given back
+  (`fires` does not count it). The same holds for a request the route refuses
+  before it reaches its denial branch (a malformed authorize call), logged as
+  `handler-phase fault not reached: the route refused first`.
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
   the journal has it; with four of the five the caller never saw it succeed
@@ -167,7 +170,7 @@ retry. What each vendor sends back:
 | Vendor | Route | Denial redirect |
 | --- | --- | --- |
 | Square | `GET /oauth2/authorize` | `?error=access_denied&error_description=user_denied` plus `state` |
-| Clover | `GET /oauth/v2/authorize` | `?error=access_denied` plus `state` when the request carried one |
+| Clover | `GET /oauth/v2/authorize` | `?error=access_denied` plus `state` when the request carried one — JUDGMENT: Clover documents only the approved redirect, so this is RFC 6749 §4.1.2.1's shape |
 | Lightspeed | `GET /connect` | `?error=access_denied` plus `state` when the request carried one |
 
 Square's `?unit_prompt=deny` is the same answer reached in band, for a test
@@ -240,6 +243,11 @@ Each vendor answers in its own documented shape:
 - **Lightspeed** (`POST /api/1.0/token`, form-encoded
   `grant_type=refresh_token`): 401 `{"error": "Unauthorized", "message":
   ...}`.
+
+  Square's and Lightspeed's token endpoint also serves the code exchange, and
+  the fault fires on the match alone, so add `"body_contains":
+  "refresh_token"` to `match` there — a code exchange never carries that
+  string, a refresh always does — or a one-shot rule is spent on the exchange.
 - **Toast** has no refresh route at all — a client logs in again when its
   token expires — so the rule is matched on
   `POST /authentication/v1/authentication/login` instead, with

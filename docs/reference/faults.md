@@ -22,4 +22,4 @@ Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor 
 | `connection_reset` | request | transport | response | commit | Drop the connection after the response starts, before it completes. |
 | `empty_response` | request | transport | response | commit | Drop the connection as close to before any bytes as the binding can manage. |
 | `slow_body` | request | transport | response | chunk_bytes, chunk_delay_ms | Stream a successful response body in chunks, with a delay between them. |
-| `authorize_denied` | request | vendor | handler |  | The merchant declines on the consent screen: the authorize route redirects with the vendor's documented denial (error=access_denied, state passed through) and mints no code. |
+| `authorize_denied` | request | vendor | handler |  | The merchant declines on the consent screen: the authorize route redirects with error=access_denied and state passed through (the vendor's documented shape where one is published, RFC 6749 s4.1.2.1 elsewhere) and mints no code. |

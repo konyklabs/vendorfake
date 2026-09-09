@@ -31,6 +31,7 @@ from typing import Any
 
 from vendorfake.core.capability.gates import CORE_GATED_CAPABILITIES
 from vendorfake.core.capability.registry import CONTROL_CAPABILITY, apply_capability_delta
+from vendorfake.core.chaos.faults import validate_fault_params
 from vendorfake.core.chaos.rules import BUILTIN_FAULTS, ChaosRule, matched_routes, parse_rule
 from vendorfake.core.control.schemas import (
     CapabilitiesBody,
@@ -1117,6 +1118,7 @@ def _validated_rule(document: Mapping[str, Any], ctx: UnitContext, route_keys: S
     behaviour capability has no surface of its own to answer "disabled" from.
     """
     rule = parse_rule(document, source="POST /__unit/chaos/rules")
+    validate_fault_params(rule)
     if rule.scope == "webhook":
         ctx.capabilities.assert_enabled("webhooks.chaos", "POST /__unit/chaos/rules")
     resolved = matched_routes(rule, route_keys)

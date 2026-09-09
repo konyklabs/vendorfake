@@ -289,6 +289,14 @@ class ChaosEngine:
                 self._history.append(ChaosEvent.of(decision, at=self._now_iso(), subject=subject.label()))
             return decision
 
+    def refund(self, rule_id: str) -> None:
+        """Give back one fire a handler-phase decision never spent: no route consumed it, so ``when.times`` and
+        the published ``fires`` must not count it."""
+        with self._lock:
+            state = self._state.get(rule_id)
+            if state is not None and state.fires > 0:
+                state.fires -= 1
+
     def _matches(self, rule: ChaosRule, subject: ChaosSubject) -> bool:
         """Conditions are ANDed; an absent one is not a veto."""
         criteria = rule.match

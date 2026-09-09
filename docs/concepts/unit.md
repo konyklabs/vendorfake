@@ -289,8 +289,8 @@ it is discarded only from the caller's point of view — which, against a
 single-use rotation, means a credential spent by a call that looked like it
 failed. `fault_commit` (present only when a response-phase fault fired) says
 which of the two commit models the rule asked for: `"before"`, the default, or
-`"after"`, where the handler's work was rolled back and there is therefore no
-`committed_journal_seq` and no `discarded_mutation`. See
+`"after"`, where the handler's work was rolled back, so `committed_journal_seq`
+is absent and `discarded_mutation` (always present) is `false`. See
 [Chaos → Phase](chaos.md#phase-does-the-handler-commit).
 
 ```python

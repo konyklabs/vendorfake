@@ -415,6 +415,28 @@ def test_a_rule_reports_the_routes_it_actually_resolves_to() -> None:
     assert res.json()["rules"][0]["matched_routes"] == ["GET /v2/orders"]
 
 
+def test_a_bad_params_commit_is_refused_when_the_rule_is_written() -> None:
+    """A rule that cannot fire says so when written, not on every matching
+    request: an unknown mode, or ``commit`` on a fault that delivers intact
+    or fires before the handler, is a 400 naming ``params.commit``."""
+    api, _ = _api()
+    for fault, params in (
+        ("malformed_body", {"mode": "invalid_json", "commit": "After"}),
+        ("slow_body", {"commit": "after"}),
+        ("rate_limit", {"commit": "after"}),
+    ):
+        res = api.post("/__unit/chaos/rules", {"id": "r1", "scope": "request", "fault": fault, "params": params})
+        assert res.status == 400, (fault, res.text)
+        assert res.header("x-unit-error") == "invalid_value"
+        assert res.header("vendorfake-rule-error") == "r1"
+        assert '"field":"params.commit"' in res.text
+    ok = api.post(
+        "/__unit/chaos/rules",
+        {"id": "r1", "scope": "request", "fault": "connection_reset", "params": {"commit": "after"}},
+    )
+    assert ok.status == 200, ok.text
+
+
 def test_matched_routes_never_counts_a_control_route() -> None:
     """The pipeline short-circuits internal routes before fault selection ever
     runs, so counting them would report a rule as matching routes it can never

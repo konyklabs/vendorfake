@@ -54,6 +54,7 @@ from vendorfake.core.capability.gates import CoreCapability, assert_capability_d
 from vendorfake.core.capability.registry import CapabilityRegistry
 from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
 from vendorfake.core.chaos.faults import (
+    COMMIT_FAULTS,
     HANDLER_PHASE_FAULTS,
     INTACT_RESPONSE_FAULTS,
     RESPONSE_PHASE_FAULTS,
@@ -753,7 +754,7 @@ class Unit:
             # Here, not at step 8: a bad ``params.commit`` refuses before the handler runs, whatever the fault's own
             # phase, so a request-phase rule carrying it is refused too.
             mode = commit_mode(decision)
-            if decision.fault in RESPONSE_PHASE_FAULTS:
+            if decision.fault in COMMIT_FAULTS:
                 trace.fault_commit = mode
 
         # 4. pre-auth faults -------------------------------------------------
@@ -812,8 +813,15 @@ class Unit:
             snapshot = self._store.snapshot() if uncommitted else None
             trace.journal_seq_before = self._store.journal_seq
             try:
-                with self._store.muted() if uncommitted else contextlib.nullcontext():
+                with (
+                    self._store.muted() if uncommitted else contextlib.nullcontext(),
+                    self._webhooks.muted() if uncommitted else contextlib.nullcontext(),
+                ):
                     res = normalize(route.handler(args))
+            except UnitError:
+                # A refusal pre-empted the route's own denial branch: log it and give the budget back.
+                self._warn_unconsumed(args, "handler-phase fault not reached: the route refused first")
+                raise
             finally:
                 # In a ``finally``: a handler that committed and then raised has still committed.
                 trace.journal_seq_after = self._store.journal_seq
@@ -850,6 +858,14 @@ class Unit:
             res = apply_response_fault(decision, res, log=self._log)
         return res
 
+    def _warn_unconsumed(self, args: HandlerArgs, message: str) -> None:
+        """An armed handler-phase fault the route never consumed, logged with the rule that spent its budget on it."""
+        armed = args.fault
+        if armed is not None and not args.fault_consumed:
+            # Nothing fired, so the rule's budget is given back and ``fires`` does not count it.
+            self._chaos.refund(armed.rule_id)
+            self._log.warn(message, {"fault": armed.name, "rule": armed.rule_id, "route": args.route.key})
+
     def _settle_handler_fault(self, args: HandlerArgs, res: UnitResponse, trace: _Trace) -> UnitResponse:
         """Stamp and record a handler-phase fault the route answered. A route the fault means nothing to leaves it
         unconsumed: that is warned about and recorded as unfaulted, since nothing about the answer changed."""
@@ -857,10 +873,7 @@ class Unit:
         if armed is None:
             return res
         if not args.fault_consumed:
-            self._log.warn(
-                "handler-phase fault not implemented by the route",
-                {"fault": armed.name, "rule": armed.rule_id, "route": args.route.key},
-            )
+            self._warn_unconsumed(args, "handler-phase fault not implemented by the route")
             return res
         trace.fault = armed.name
         trace.rule_id = armed.rule_id

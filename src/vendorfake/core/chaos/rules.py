@@ -245,8 +245,9 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
     FaultSpec(
         "authorize_denied",
         "request",
-        "The merchant declines on the consent screen: the authorize route redirects with the vendor's "
-        "documented denial (error=access_denied, state passed through) and mints no code.",
+        "The merchant declines on the consent screen: the authorize route redirects with error=access_denied "
+        "and state passed through (the vendor's documented shape where one is published, RFC 6749 s4.1.2.1 "
+        "elsewhere) and mints no code.",
         provenance="vendor",
         phase="handler",
     ),

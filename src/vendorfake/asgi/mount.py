@@ -144,7 +144,9 @@ def _forwarded(headers: Iterable[Any], prefix: str) -> list[tuple[bytes, bytes]]
     found = False
     for name, value in headers:
         if not found and bytes(name).lower() == FORWARDED_PREFIX_HEADER:
-            out.append((bytes(name), bytes(value) + encoded))
+            # Extend the FIRST comma-separated entry, the one the manifest reads.
+            first, sep, rest = bytes(value).partition(b",")
+            out.append((bytes(name), first.rstrip(b"/") + encoded + sep + rest))
             found = True
         else:
             out.append((bytes(name), bytes(value)))
