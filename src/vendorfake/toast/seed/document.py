@@ -101,12 +101,21 @@ class SeedPartner(BaseModel):
 
 
 class SeedToken(BaseModel):
+    """No ``merchant_id``/``restaurant_guid`` field: every seed token is bound
+    to the document's one restaurant, published at ``.seed.token.tenant_id``
+    (see ``docs/concepts/seed.md``)."""
+
     model_config = _SEED
 
     id: str = Field(min_length=1)
     access_token: str = Field(min_length=1)
     scopes: list[str] | None = None
     client_id: str | None = None
+    #: Lifetime from unit start, in ms (JUDGMENT: relative-lifetime seed
+    #: vocabulary, matching Square's ``expires_in_ms``). ``0`` = expired the
+    #: moment the unit starts. Absent means the configured access-token TTL,
+    #: as before.
+    expires_in_ms: int | None = Field(default=None, ge=0, strict=True)
 
 
 # -- config/v2 ---------------------------------------------------------------

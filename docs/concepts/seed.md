@@ -52,6 +52,74 @@ vendors:
   `subscribe()` on a [driver](unit.md#driver) refuses a name that will never
   fire rather than registering it silently.
 
+## Token lifetimes
+
+A test driving the double's virtual clock ([Unit](unit.md)) toward a token's
+expiry needs one that is already near-expired, or a way to make it so
+mid-run. Two routes, and neither is a lie about the vendor: whether a token
+is expired is JUDGMENT the moment it is set from something other than the
+real OAuth grant, exactly as the rest of the seeded scenario is.
+
+**At hydrate, in the seed document.** Every seed token field is a lifetime
+*relative to unit start*, in the vocabulary Square's `expires_in_ms` already
+used:
+
+| Vendor | Seed field(s) | Unit |
+| --- | --- | --- |
+| Square | `expires_in_ms` | ms |
+| Clover | `access_token_expires_in_ms`, `refresh_token_expires_in_ms` | ms |
+| Toast | `expires_in_ms` | ms |
+| Lightspeed | `expires_in_s` (access token only; a seeded refresh token has no expiry field because the real API documents no refresh-token lifetime) | s |
+
+`0` means expired the instant the unit starts. Absent means the configured
+TTL, as before this field existed. There is no `merchant_id`
+(`restaurant_guid`/`retailer_id`) on a seed token: every seed token is bound
+to the document's one merchant/restaurant/retailer, and that binding is
+already published as `.seed.token.tenant_id` (also `GET /__unit/auth`) — a
+seed document only ever describes one tenant.
+
+Because `tokens` [cannot be overlaid](#the-credentials-and-the-identity-cannot-be-overlaid)
+— it is one of the collections `.seed` is built from — a custom lifetime
+needs a whole seed document of your own: the profile's `seed` key, or
+`VENDORFAKE_SEED` (typically a file mounted into a container).
+
+**On a running unit, by patching the entity.** `POST /__unit/state/update`
+on collection `tokens` (`refresh_tokens` too, for Lightspeed) reaches the
+fields the entity already carries, named per vendor:
+
+| Vendor | Access-token field | Refresh-token field | Tenant field |
+| --- | --- | --- | --- |
+| Square | `expires_at` (RFC 3339, seconds) | `refresh_token_expires_at` (RFC 3339, seconds; `None` on a code-flow token, which Square documents as never expiring — PKCE only) | `merchant_id` |
+| Clover | `access_token_expiration_ms` (epoch ms) | `refresh_token_expiration_ms` (epoch ms) | `merchant_id` |
+| Toast | `expires_at_ms` (epoch ms) | n/a (no refresh token) | n/a |
+| Lightspeed | `expires_at_ms` (epoch ms) | n/a (the `refresh_tokens` collection has no expiry field) | n/a |
+
+Pair a patch with `POST /__unit/clock/advance` on a
+[virtual clock](../reference/control-plane.md) to move the double *to* the
+expiry rather than seeding it already past — a worked example, Clover:
+
+```sh
+export VENDORFAKE_CLOCK=virtual
+export VENDORFAKE_CLOCK_START=2026-01-01T00:00:00Z
+vendorfake serve --vendor clover &
+
+# The seeded bearer works.
+curl -s -H "Authorization: Bearer unit-seeded-clover-access-token-full-permissions" \
+  http://localhost:8080/v3/merchants/HRVSTRYE12345 -o /dev/null -w '%{http_code}\n'  # 200
+
+# Patch its expiry to 60s from the clock's current instant.
+curl -s -X POST http://localhost:8080/__unit/state/update \
+  -H 'content-type: application/json' \
+  -d '{"collection": "tokens", "id": "tok_seed_full", "patch": {"access_token_expiration_ms": 1767225660000}}'
+
+# Advance the virtual clock past it.
+curl -s -X POST http://localhost:8080/__unit/clock/advance -H 'content-type: application/json' -d '{"ms": 61000}'
+
+# Now expired.
+curl -s -H "Authorization: Bearer unit-seeded-clover-access-token-full-permissions" \
+  http://localhost:8080/v3/merchants/HRVSTRYE12345 -o /dev/null -w '%{http_code}\n'  # 401, x-unit-error: token_expired
+```
+
 ## Ids are deterministic, not unique
 
 Two `unit("square")` blocks mint the same order ids, tokens and codes in
@@ -216,8 +284,8 @@ on the other three.
 |---|---|
 | App credentials | `sandbox-sq0idb-unit-square-application` / `sandbox-sq0csb-unit-square-secret` |
 | OAuth shape | authorize redirect (`https://example.test/oauth/callback`) + code exchange |
-| Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` |
-| Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` |
+| Full-access bearer | `EAAAl-unit-seeded-access-token-full-scopes` (refresh `EQAAl-unit-seeded-refresh-token-full-scopes`) |
+| Read-only bearer | `EAAAl-unit-seeded-access-token-read-only` (refresh `EQAAl-unit-seeded-refresh-token-read-only`) |
 | Tenant, and how requests name it | merchant `MLQW2MYBY81PZ` (implicit in the token) |
 | Location / order type | location `18YC4JDH91E1H` (Grant Park), kiosk `057P5VYJ4A5X1` |
 | Catalog | Tea `W62UWFY35CWMYGVWK6TWJDNI` with variations Mug `2TZFAOHWGG7PAK2QEXWYPZSP` (150) and Pot; Cold Brew `BJNQCF2FJ6S6UIDT65ABHLRX` |
@@ -232,8 +300,8 @@ on the other three.
 |---|---|
 | App credentials | `UNITCLOVERAPP` / `unit-clover-app-secret` |
 | OAuth shape | authorize redirect (same URI) + code exchange, single-use refresh |
-| Full-access bearer | `unit-seeded-clover-access-token-full-permissions` |
-| Read-only bearer | `unit-seeded-clover-access-token-read-only` |
+| Full-access bearer | `unit-seeded-clover-access-token-full-permissions` (refresh `unit-seeded-clover-refresh-token-full-permissions`) |
+| Read-only bearer | `unit-seeded-clover-access-token-read-only` (refresh `unit-seeded-clover-refresh-token-read-only`) |
 | Tenant, and how requests name it | merchant `HRVSTRYE12345` ("Harvest & Rye") in every `/v3` **path** |
 | Location / order type | order types `KFRPRVCZ73JHM` (dine-in), `ORDTYPETAKE01` |
 | Catalog | items `CRAFTBEER0750` (750), `ESPRESSO00300` (300, modifier group `MODGROUPMILK1`: oat `MODIFIEROAT01`, soy `MODIFIERSOY01`), `CROISSANT0450` (450) |

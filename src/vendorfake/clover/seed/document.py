@@ -228,8 +228,12 @@ class SeedOrder(BaseModel):
 
 class SeedToken(BaseModel):
     """A pre-minted bearer. ``permissions`` defaults to the app's full set;
-    the expirations are stamped at hydrate from the configured TTLs, which
-    is why they are not in the document."""
+    the expirations are stamped at hydrate from the configured TTLs unless
+    overridden here (JUDGMENT: relative-lifetime seed vocabulary, matching
+    Square's ``expires_in_ms``), which is why a document that names neither
+    field keeps today's TTL-derived behaviour. No ``merchant_id`` field: every
+    seed token is bound to the document's one merchant, published at
+    ``.seed.token.tenant_id`` (see ``docs/concepts/seed.md``)."""
 
     model_config = _SEED
 
@@ -238,6 +242,11 @@ class SeedToken(BaseModel):
     refresh_token: str = Field(min_length=1)
     permissions: list[str] | None = None
     client_id: str | None = None
+    #: Lifetime from unit start, in ms. ``0`` = expired the moment the unit
+    #: starts. Absent means the configured access-token TTL, as before.
+    access_token_expires_in_ms: int | None = Field(default=None, ge=0, strict=True)
+    #: Same semantics, for the refresh token.
+    refresh_token_expires_in_ms: int | None = Field(default=None, ge=0, strict=True)
 
 
 class SeedWebhookSubscription(BaseModel):

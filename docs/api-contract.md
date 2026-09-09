@@ -293,6 +293,12 @@ listed there follows the deprecation policy above. The public surface is the
 `tests/unit/test_public_api.py`; a consumer pins a tag and reads the
 breaking-changes section before each bump.
 
+The shipped scenario's credentials and identity are part of that surface
+too: the app credentials, the seeded bearers and refresh tokens, and the
+tenant ids in the tables of `docs/concepts/seed.md` — a consumer may copy
+them into its own store, and they change only with a minor version and a
+changelog entry.
+
 This round's release is 0.6.0, a breaking minor under this policy. Its removals (konyklabs/vendorfake#49
 and #51): `agent-setup`, the file-drop transport and `FileSink`,
 `VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`, `VENDORFAKE_UNMATCHED` and
