@@ -1064,10 +1064,8 @@ def _request_base_url(req: UnitRequest) -> str | None:
     A unit does not know its own address -- it may be behind a container port
     mapping or a compose network alias -- so the only honest answer is the one
     the caller reached it at. ``x-forwarded-proto`` and ``x-forwarded-prefix``
-    win where a proxy set them: a request that arrived under a path prefix (one
-    process serving several units, each under its own) is reachable again only
-    through it. Both are read first-value-first, a proxy chain appending to the
-    outermost one the caller actually spoke to.
+    (one process serving several units, each under its own prefix) win where a
+    proxy set them, first value first.
     """
     host = req.headers.get("host")
     if not host:

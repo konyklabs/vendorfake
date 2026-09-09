@@ -73,14 +73,8 @@ only shape how it travels (``kernel/unit.py``'s ``discarded_mutation``)."""
 DEFAULT_TIMEOUT_DELAY_MS = 100.0
 DEFAULT_RETRY_AFTER_SECONDS = 1
 
-#: JUDGMENT: this exact phrase is not one wire document; it is what Clover's
-#: and Square's refresh routes answer for an unknown, used or expired refresh
-#: token (Clover ``POST /oauth/v2/refresh`` -> ``{"message": "The refresh
-#: token is invalid."}``; Square ``POST /oauth2/token`` -> an
-#: ``AUTHENTICATION_ERROR``/``UNAUTHORIZED`` envelope with this detail).
-#: ``params.detail`` overrides it for a vendor whose own phrase differs, e.g.
-#: Toast's ``INVALID_CREDENTIALS_MESSAGE`` ("The credentials in your request
-#: are not valid.").
+#: JUDGMENT: the phrase Clover's and Square's refresh routes answer for an unknown, used or expired refresh
+#: token; ``params.detail`` overrides it for a vendor whose own phrase differs (Toast's login message).
 DEFAULT_REFRESH_REJECTED_DETAIL = "The refresh token is invalid."
 
 FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
@@ -200,10 +194,7 @@ def apply_request_fault(
             rule_id=rule,
         )
     if decision.fault == "refresh_rejected":
-        # Fires pre-auth, instead of the handler -- like server_error --
-        # so a refresh route never runs and nothing is committed. Each
-        # vendor's own ErrorShaper renders its documented 401 envelope for
-        # UNAUTHORIZED; this module names no vendor.
+        # Pre-auth, instead of the handler: nothing is committed, and the vendor's ErrorShaper renders the 401.
         raise UnitError(
             UnitErrorKind.UNAUTHORIZED,
             detail=as_str(params.get("detail"), DEFAULT_REFRESH_REJECTED_DETAIL),
