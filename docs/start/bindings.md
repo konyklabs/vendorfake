@@ -240,6 +240,45 @@ app only once the unit has hydrated its seed and is answering. The `app`
 service reaches it over the compose network's internal DNS; publishing the
 port is only for a developer who wants `curl localhost:8080` from the host.
 
+Or one service for all of them: `VENDORFAKE_VENDOR` takes a comma-separated
+list, and the process mounts one unit per vendor under `/<vendor>/`.
+
+```yaml
+  vendorfake:
+    build: https://github.com/konyklabs/vendorfake.git
+    environment:
+      VENDORFAKE_VENDOR: clover,square
+      VENDORFAKE_PROFILE: full
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/info', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      CLOVER_BASE_URL: http://vendorfake:8080/clover
+      SQUARE_BASE_URL: http://vendorfake:8080/square
+    depends_on:
+      vendorfake:
+        condition: service_healthy
+```
+
+Each mount is a whole unit with its own control plane, so everything the
+single-vendor form serves at `/__unit/...` is at `/clover/__unit/...` here —
+reset Clover without touching Square, and `GET /clover/__unit/manifest`
+reports a `base_url` that carries the prefix. The `HEALTHCHECK` is unchanged:
+the root `/__unit/info` answers for the whole process, listing every vendor it
+mounted, and is 200 only once all of them have hydrated their seeds, so one
+`service_healthy` still gates the app on all of them. One `--profile` applies
+to every vendor in the list; different profiles per vendor need a service per
+vendor. A path naming no mount is a 404 carrying a `vendorfake-mounts` header,
+which is worth checking first when a base URL looks right and everything 404s.
+
 [`examples/pytest-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/pytest-consumer)
 ships a Testcontainers variant, for a test process that would rather own the
 container's lifecycle in code.

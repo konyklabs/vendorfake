@@ -181,6 +181,9 @@ language be checked against the same contract.
 
 Every subcommand, every flag, and the JSON document `--json` prints. `--json`
 is accepted on either side of the subcommand name and means the same thing.
+`serve --vendor` (and `$VENDORFAKE_VENDOR`) accepts a comma-separated list —
+`clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
+every other subcommand describes one vendor and refuses a list.
 
 ### The profile document
 

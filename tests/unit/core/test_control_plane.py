@@ -1081,6 +1081,29 @@ def test_the_manifest_takes_its_base_url_from_the_host_that_was_asked() -> None:
     assert api.get("/__unit/manifest").json()["base_url"] is None
 
 
+def test_the_manifest_base_url_carries_the_prefix_a_request_arrived_under() -> None:
+    """One process can serve several units, each mounted under its own prefix
+    (``vendorfake serve --vendor clover,square``), and the mount tells the unit
+    where it is with ``x-forwarded-prefix``. Without it the manifest would
+    publish a base URL that answers nothing: the host is right and the path is
+    a mount short. The value is normalised the way a proxy chain leaves it --
+    first value of the list, one leading slash, no trailing one."""
+    api, _ = _api()
+
+    def base_url(**headers: str) -> object:
+        return api.get("/__unit/manifest", headers={"host": "unit.internal:8080", **headers}).json()["base_url"]
+
+    assert base_url() == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "/clover"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "/clover/"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "clover"}) == "http://unit.internal:8080/clover"
+    # A chain of proxies appends; the outermost prefix is the one the caller spoke to.
+    assert base_url(**{"x-forwarded-prefix": "/edge/clover, /clover"}) == "http://unit.internal:8080/edge/clover"
+    # An empty or bare-slash value is a proxy saying "no prefix", not a trailing slash to keep.
+    assert base_url(**{"x-forwarded-prefix": "/"}) == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "", "x-forwarded-proto": "https"}) == "https://unit.internal:8080"
+
+
 def test_the_manifest_names_its_schema_and_the_unit_it_describes() -> None:
     """`schema` is what a consumer branches on and what a hand-written
     deployed-world manifest has to declare; without it a later shape is

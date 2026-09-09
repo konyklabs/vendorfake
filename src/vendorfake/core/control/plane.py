@@ -1059,19 +1059,25 @@ def _distribution_version() -> str:
 
 
 def _request_base_url(req: UnitRequest) -> str | None:
-    """``scheme://host`` from the request that asked, or ``None``.
+    """``scheme://host``, plus any prefix the request was forwarded under, or ``None``.
 
     A unit does not know its own address -- it may be behind a container port
     mapping or a compose network alias -- so the only honest answer is the one
-    the caller reached it at. ``x-forwarded-proto`` wins where a proxy set it,
-    since the caller's scheme is the one a webhook URL has to carry.
+    the caller reached it at. ``x-forwarded-proto`` and ``x-forwarded-prefix``
+    win where a proxy set them: a request that arrived under a path prefix (one
+    process serving several units, each under its own) is reachable again only
+    through it. Both are read first-value-first, a proxy chain appending to the
+    outermost one the caller actually spoke to.
     """
     host = req.headers.get("host")
     if not host:
         return None
     forwarded = req.headers.get("x-forwarded-proto", "")
     scheme = forwarded.split(",")[0].strip().lower() or "http"
-    return f"{scheme}://{host}"
+    prefix = req.headers.get("x-forwarded-prefix", "").split(",")[0].strip().rstrip("/")
+    if prefix and not prefix.startswith("/"):
+        prefix = f"/{prefix}"
+    return f"{scheme}://{host}{prefix}"
 
 
 # Helpers. Module level so a test can reach them without building a unit.
