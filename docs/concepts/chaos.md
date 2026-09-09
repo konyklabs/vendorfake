@@ -53,7 +53,9 @@ Three families:
 **Vendor faults** (`provenance: vendor`) reproduce something the vendor
 itself documents: `rate_limit`, `server_error`, `unavailable`, `timeout`,
 `token_expiry` (one 401 without touching the stored token — the transient
-case a deactivate-on-401 handler gets wrong).
+case a deactivate-on-401 handler gets wrong), `refresh_rejected` (the
+vendor's own "refresh token invalid" 401, before the handler runs, without
+rotating anything).
 
 **Delivery faults** (`webhook` scope, `provenance: vendor`):
 `webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
@@ -78,8 +80,8 @@ phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
 `vendorfake explain fault <name>`):
 
 - `phase: request` — fires **instead of** the handler. `rate_limit`,
-  `server_error`, `unavailable`, `timeout`, `token_expiry`. Nothing is
-  committed; a retry starts clean.
+  `server_error`, `unavailable`, `timeout`, `token_expiry`,
+  `refresh_rejected`. Nothing is committed; a retry starts clean.
 - `phase: response` — fires **on the answer, after the handler ran and
   committed**. All five transport faults. The store keeps the mutation and
   the journal has it; with four of the five the caller never saw it succeed
@@ -138,6 +140,49 @@ curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: appli
 For a *permanent* revocation, use the vendor's own revoke endpoint instead;
 for an expiry a client's own clock would notice, advance a
 [virtual clock](unit.md#virtual) past `expires_at`.
+
+## Rehearsing a rejected refresh
+
+`refresh_rejected` answers one refresh call with the vendor's own "refresh
+token invalid" 401 — fired **before** the handler runs, so nothing is
+rotated and the stored token is untouched:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "reject-one-refresh", "scope": "request", "fault": "refresh_rejected",
+  "match": {"path": "/oauth/v2/refresh"}, "when": {"times": 1}
+}'
+```
+
+Each vendor answers in its own documented shape:
+
+- **Clover** (`POST /oauth/v2/refresh`): 401 `{"message": "The refresh token
+  is invalid."}`.
+- **Square** (`POST /oauth2/token`, `grant_type: refresh_token`): 401,
+  `errors[0]` carries `category: "AUTHENTICATION_ERROR"`,
+  `code: "UNAUTHORIZED"`.
+- **Lightspeed** (`POST /api/1.0/token`, form-encoded
+  `grant_type=refresh_token`): 401 `{"error": "Unauthorized", "message":
+  ...}`.
+- **Toast** has no refresh route at all — a client logs in again when its
+  token expires — so the rule is matched on
+  `POST /authentication/v1/authentication/login` instead, with
+  `params.detail` set to the login surface's own documented phrase
+  (`INVALID_CREDENTIALS_MESSAGE`, "The credentials in your request are not
+  valid."): 401 code `10007`.
+
+The stored token is never touched — the fault fires instead of the handler,
+so there is nothing to roll back — and the next call succeeds exactly as if
+the rule had never been armed. `GET /__unit/requests?operation_id=RefreshToken`
+shows the faulted call with `fault: "refresh_rejected"` (Clover's dedicated
+refresh route has that operation id; Square's and Lightspeed's token
+endpoints share one operation id across both grant types, so filter those by
+route or rule instead).
+
+Under `strict_rules`, only `match.route` is checked against the route table
+at arm time — a `match.path` rule (as above) is never refused as dead, even
+when the path is misspelled. A typo there shows up only as `fires: 0` at
+`GET /__unit/chaos`, not as a 400 on arming.
 
 ## From an SDK: in-band triggers
 

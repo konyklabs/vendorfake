@@ -58,6 +58,7 @@ CLOVER_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C27": ("no-faults",),
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C37": ("no-faults",),
 }
 
 CLOVER_INAPPLICABLE: Mapping[str, str] = {
@@ -87,6 +88,7 @@ TOAST_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C27": ("no-faults",),
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C37": ("no-faults",),
 }
 
 _TOAST_NO_IDEMPOTENCY_KEY = (
@@ -122,11 +124,13 @@ LIGHTSPEED_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C27": ("no-faults",),
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C37": ("no-faults",),
 }
 """Which contract skips on which Lightspeed profile: ``oauth-only`` enables only
-the token endpoint, ``orders-only`` has no webhooks, ``no-faults`` no chaos, the
-delivery-scope contracts need ``webhooks.chaos``, and the retry-cascade and
-clock-independence contracts run only on the virtual-clock profile."""
+the token endpoint, ``orders-only`` has no webhooks, ``no-faults`` no chaos
+(including C37), the delivery-scope contracts need ``webhooks.chaos``, and the
+retry-cascade and clock-independence contracts run only on the virtual-clock
+profile."""
 
 _LIGHTSPEED_NO_IDEMPOTENCY_KEY = (
     "Lightspeed's API documents no idempotency key on any endpoint -- there is no Idempotency-Key header and "

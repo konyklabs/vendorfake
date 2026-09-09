@@ -64,6 +64,30 @@ def test_the_phase_split_is_data_and_not_a_hard_coded_comparison() -> None:
     assert set(AUTH_PHASE_FAULTS) == {"token_expiry"}
 
 
+def test_refresh_rejected_raises_unauthorized_on_the_refresh_token_field_in_the_pre_phase() -> None:
+    with pytest.raises(UnitError) as caught:
+        _apply("refresh_rejected")
+    assert caught.value.kind is UnitErrorKind.UNAUTHORIZED
+    assert caught.value.field == "refresh_token"
+    assert caught.value.detail == "The refresh token is invalid."
+    assert caught.value.info is not None
+    assert caught.value.info["chaos_rule"] == "r1"
+
+
+def test_refresh_rejected_does_nothing_in_the_post_auth_phase() -> None:
+    _apply("refresh_rejected", "post_auth")
+
+
+def test_refresh_rejected_detail_is_overridden_by_params() -> None:
+    with pytest.raises(UnitError) as caught:
+        _apply("refresh_rejected", detail="The credentials in your request are not valid.")
+    assert caught.value.detail == "The credentials in your request are not valid."
+
+
+def test_refresh_rejected_param_keys_are_exactly_detail() -> None:
+    assert FAULT_PARAM_KEYS["refresh_rejected"] == ("detail",)
+
+
 def test_retry_after_seconds_is_coerced_from_a_string() -> None:
     """It arrives as text on the in-band path -- ``chaos:rate_limit:
     retry_after_seconds=3`` is split textually -- and as arbitrary JSON on the

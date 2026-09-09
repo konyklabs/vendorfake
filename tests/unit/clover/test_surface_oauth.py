@@ -362,6 +362,44 @@ def test_a_refresh_token_issued_to_another_app_is_refused_before_any_write(h: Ha
     assert stored.refresh_used_at_ms is None  # not rotated
 
 
+def test_a_refresh_rejected_fault_answers_clovers_own_401_and_rotates_nothing(h: Harness) -> None:
+    """konyklabs/roadmap#131: a one-shot ``refresh_rejected`` rule reproduces
+    the vendor's own "refresh token invalid" 401 -- Clover's phrase verbatim
+    (https://docs.clover.com/dev/docs/refresh-access-tokens) -- without
+    touching stored state, then lets the next call succeed."""
+    first = h.exchange()
+    armed = h.api.post(
+        "/__unit/chaos/rules",
+        {
+            "id": "refresh-rejected-clover",
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"path": "/oauth/v2/refresh"},
+            "when": {"times": 1},
+        },
+    )
+    assert armed.status == 200, armed.text
+
+    faulted = h.refresh(refresh_token=first["refresh_token"])
+    assert faulted.status == 401
+    assert faulted.json()["message"] == "The refresh token is invalid."
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+
+    tokens = h.unit.context.store.collection(COL.tokens)
+    record = TokenEntity.from_entity(
+        tokens.find(lambda entity: entity.get("access_token") == first["access_token"]) or {}
+    )
+    assert record.refresh_used_at_ms is None  # nothing rotated by the faulted call
+
+    second = h.refresh(refresh_token=first["refresh_token"])
+    assert second.status == 200, second.text
+    assert "vendorfake-fault" not in second.headers
+
+    recorded = h.api.get("/__unit/requests?limit=2").json()["requests"]
+    assert recorded[1]["fault"] == "refresh_rejected"
+    assert recorded[1]["rule_id"] == "refresh-rejected-clover"
+
+
 def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
     first = h.exchange()
     tokens = h.unit.context.store.collection(COL.tokens)

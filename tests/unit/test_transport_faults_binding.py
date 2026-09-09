@@ -284,6 +284,7 @@ def test_provenance_transport_appears_in_info_which_the_cli_prints_verbatim() ->
         ("unavailable", {}),
         ("timeout", {"delay_ms": 1}),
         ("token_expiry", {}),
+        ("refresh_rejected", {}),
     ],
 )
 def test_a_pre_existing_fault_is_also_stamped(fault: str, params: dict[str, object]) -> None:

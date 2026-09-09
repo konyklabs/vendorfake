@@ -27,7 +27,7 @@ from typing import Any
 
 import pytest
 
-from tests.unit.square.harness import Harness, first_error
+from tests.unit.square.harness import APPLICATION_SECRET, Harness, first_error
 from tests.unit.square.harness import harness as build_harness
 from vendorfake.core.webhooks.sink import MemorySink
 from vendorfake.square.events import ORDER_CREATED, ORDER_UPDATED
@@ -144,6 +144,42 @@ def test_a_rule_expires_the_token_mid_flow_without_changing_stored_state(h: Harn
     assert first_error(expired)["code"] == "ACCESS_TOKEN_EXPIRED"
     # The token was never revoked, so the next call succeeds.
     assert h.api.get(f"/v2/orders/{SEED_OPEN_ORDER_ID}", headers=h.auth).status == 200
+
+
+def test_a_refresh_rejected_fault_answers_squares_own_401_and_rotates_nothing(h: Harness) -> None:
+    """konyklabs/roadmap#131: a one-shot ``refresh_rejected`` rule reproduces
+    Square's own AUTHENTICATION_ERROR/UNAUTHORIZED 401 on the token endpoint's
+    refresh grant, without rotating the stored token, then lets the next call
+    succeed."""
+    code = h.code()
+    first = h.token(client_secret=APPLICATION_SECRET, grant_type="authorization_code", code=code).json()
+    add_rule(
+        h,
+        id="refresh-rejected-square",
+        scope="request",
+        fault="refresh_rejected",
+        match={"path": "/oauth2/token"},
+        when={"times": 1},
+    )
+
+    faulted = h.token(
+        client_secret=APPLICATION_SECRET, grant_type="refresh_token", refresh_token=first["refresh_token"]
+    )
+    assert faulted.status == 401
+    error = first_error(faulted)
+    assert error["category"] == "AUTHENTICATION_ERROR"
+    assert error["code"] == "UNAUTHORIZED"
+    assert error["detail"] == "The refresh token is invalid."
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+
+    second = h.token(client_secret=APPLICATION_SECRET, grant_type="refresh_token", refresh_token=first["refresh_token"])
+    assert second.status == 200, second.text
+    assert second.json()["access_token"] != first["access_token"]
+    assert "vendorfake-fault" not in second.headers
+
+    recorded = h.api.get("/__unit/requests?limit=2").json()["requests"]
+    assert recorded[1]["fault"] == "refresh_rejected"
+    assert recorded[1]["rule_id"] == "refresh-rejected-square"
 
 
 def test_a_rule_injects_a_shaped_five_hundred(h: Harness) -> None:

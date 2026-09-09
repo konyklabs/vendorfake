@@ -163,6 +163,15 @@ BUILTIN_FAULTS: tuple[FaultSpec, ...] = (
         phase="request",
     ),
     FaultSpec(
+        "refresh_rejected",
+        "request",
+        "Reject the request as the vendor rejects an unknown, used or expired refresh token: "
+        "its own 401 shape, without touching stored state.",
+        "detail? (overrides the message)",
+        provenance="vendor",
+        phase="request",
+    ),
+    FaultSpec(
         "webhook.duplicate",
         "webhook",
         "Deliver the same event body more than once.",

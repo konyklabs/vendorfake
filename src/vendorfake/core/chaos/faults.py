@@ -37,6 +37,7 @@ from vendorfake.core.util.numbers import as_float, as_int, as_str, js_number, js
 
 __all__ = [
     "AUTH_PHASE_FAULTS",
+    "DEFAULT_REFRESH_REJECTED_DETAIL",
     "DEFAULT_RETRY_AFTER_SECONDS",
     "DEFAULT_TIMEOUT_DELAY_MS",
     "FAULT_DESCRIPTIONS",
@@ -72,12 +73,23 @@ only shape how it travels (``kernel/unit.py``'s ``discarded_mutation``)."""
 DEFAULT_TIMEOUT_DELAY_MS = 100.0
 DEFAULT_RETRY_AFTER_SECONDS = 1
 
+#: JUDGMENT: this exact phrase is not one wire document; it is what Clover's
+#: and Square's refresh routes answer for an unknown, used or expired refresh
+#: token (Clover ``POST /oauth/v2/refresh`` -> ``{"message": "The refresh
+#: token is invalid."}``; Square ``POST /oauth2/token`` -> an
+#: ``AUTHENTICATION_ERROR``/``UNAUTHORIZED`` envelope with this detail).
+#: ``params.detail`` overrides it for a vendor whose own phrase differs, e.g.
+#: Toast's ``INVALID_CREDENTIALS_MESSAGE`` ("The credentials in your request
+#: are not valid.").
+DEFAULT_REFRESH_REJECTED_DETAIL = "The refresh token is invalid."
+
 FAULT_PARAM_KEYS: Mapping[str, tuple[str, ...]] = {
     "rate_limit": ("retry_after_seconds",),
     "server_error": (),
     "unavailable": (),
     "timeout": ("delay_ms",),
     "token_expiry": (),
+    "refresh_rejected": ("detail",),
     "webhook.duplicate": ("copies",),
     "webhook.delay": ("delay_ms",),
     "webhook.out_of_order": (),
@@ -183,6 +195,19 @@ def apply_request_fault(
         raise UnitError(
             UnitErrorKind.TOKEN_EXPIRED,
             detail="The access token expired while the request was in flight.",
+            info={"chaos_rule": rule},
+            fault=decision.fault,
+            rule_id=rule,
+        )
+    if decision.fault == "refresh_rejected":
+        # Fires pre-auth, instead of the handler -- like server_error --
+        # so a refresh route never runs and nothing is committed. Each
+        # vendor's own ErrorShaper renders its documented 401 envelope for
+        # UNAUTHORIZED; this module names no vendor.
+        raise UnitError(
+            UnitErrorKind.UNAUTHORIZED,
+            detail=as_str(params.get("detail"), DEFAULT_REFRESH_REJECTED_DETAIL),
+            field="refresh_token",
             info={"chaos_rule": rule},
             fault=decision.fault,
             rule_id=rule,

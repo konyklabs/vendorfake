@@ -11,6 +11,7 @@ Every built-in fault. `provenance: vendor` reproduces a failure mode the vendor 
 | `unavailable` | request | vendor | request |  | Fail the request as temporarily unavailable. |
 | `timeout` | request | vendor | request | delay_ms | Stall the request, then fail it. |
 | `token_expiry` | request | vendor | request |  | Treat the caller token as expired mid-flow, without touching stored state. |
+| `refresh_rejected` | request | vendor | request | detail | Reject the request as the vendor rejects an unknown, used or expired refresh token: its own 401 shape, without touching stored state. |
 | `webhook.duplicate` | webhook | vendor | delivery | copies | Deliver the same event body more than once. |
 | `webhook.delay` | webhook | vendor | delivery | delay_ms | Delay delivery. |
 | `webhook.out_of_order` | webhook | vendor | delivery |  | Hold this event until the next one has been delivered. |

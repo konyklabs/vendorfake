@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from urllib.parse import parse_qsl, urlsplit
 
-from tests.unit.lightspeed.harness import Harness
+from tests.unit.lightspeed.harness import TOKEN_PATH, Harness
 from vendorfake.lightspeed.entities import COL, TokenEntity
 from vendorfake.lightspeed.model.auth import TOKEN_TYPE
 from vendorfake.lightspeed.seed.constants import (
@@ -184,6 +184,43 @@ def test_the_new_refresh_token_works_once(h: Harness) -> None:
 def test_a_refresh_needs_the_client_secret(h: Harness) -> None:
     answered = h.refresh(client_secret="wrong")
     assert answered.status == 401
+
+
+def test_a_refresh_rejected_fault_answers_lightspeeds_own_401_and_leaves_the_token_live(h: Harness) -> None:
+    """konyklabs/roadmap#131: a one-shot ``refresh_rejected`` rule reproduces
+    Lightspeed's own 401 shape on the token endpoint's refresh grant, without
+    revoking the access token the refresh would otherwise have retired, then
+    lets the next call succeed."""
+    armed = h.api.post(
+        "/__unit/chaos/rules",
+        {
+            "id": "refresh-rejected-lightspeed",
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"path": TOKEN_PATH},
+            "when": {"times": 1},
+        },
+    )
+    assert armed.status == 200, armed.text
+
+    faulted = h.refresh()
+    assert faulted.status == 401
+    body = faulted.json()
+    assert body["error"] == "Unauthorized"
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+
+    newest = h.api.get("/__unit/requests?limit=1").json()["requests"][0]
+    assert newest["fault"] == "refresh_rejected"
+    assert newest["rule_id"] == "refresh-rejected-lightspeed"
+
+    # The fault fired instead of the handler, so the access token it would
+    # have revoked is still live.
+    assert h.get(h.path("/retailer")).status == 200
+
+    second = h.refresh()
+    assert second.status == 200, second.text
+    assert second.json()["access_token"] != SEED_ACCESS_TOKEN
+    assert "vendorfake-fault" not in second.headers
 
 
 # -- presenting a credential -------------------------------------------------
