@@ -12,7 +12,8 @@ reaches :mod:`vendorfake.asgi` -- the single named exception in
 
 Precedence, in every subcommand: an explicit flag beats a ``VENDORFAKE_*``
 variable, which beats the profile document, which beats the built-in default.
-``--profile`` is the one exception -- see ``serve --help``.
+``serve --profile``'s shared bare item, with several vendors mounted, is the
+one exception -- see ``serve --help``.
 """
 
 from __future__ import annotations
@@ -100,11 +101,11 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_unit_flags(
         serve,
         profile_help=(
-            "Profile name or path. With several --vendor mounts (or a single one named explicitly), also "
-            "takes a comma list of vendor=profile pairs plus at most one bare item as the shared default, "
-            "e.g. `full,square=oauth-only`. Precedence per mount, most specific first: a vendor=profile pair "
-            "here, $VENDORFAKE_PROFILE_<VENDOR> (e.g. VENDORFAKE_PROFILE_SQUARE), the bare --profile, "
-            "$VENDORFAKE_PROFILE, then the vendor's default."
+            "Profile name or path: with one vendor mounted, this vendor's profile outright, beating "
+            "$VENDORFAKE_PROFILE_<VENDOR> (e.g. VENDORFAKE_PROFILE_SQUARE), which beats $VENDORFAKE_PROFILE. "
+            "With several --vendor mounts, also takes a comma list of vendor=profile pairs plus at most one "
+            "bare item as the shared default, e.g. `full,square=oauth-only`: a pair naming a mount wins for "
+            "it, otherwise that mount's own $VENDORFAKE_PROFILE_<VENDOR> beats the bare item."
         ),
     )
     serve.add_argument("--host", default=None, help="Interface to bind. Defaults to $VENDORFAKE_HOST, then loopback.")
@@ -457,10 +458,9 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
     """Build one unit per name and serve them all under ``/<vendor>/``.
 
     ``$VENDORFAKE_VENDOR`` is dropped from the environment each unit is built with -- it holds the list, not a
-    name. ``--profile`` is the shared default unless a ``vendor=profile`` pair names this vendor, in which case
-    its own ``VENDORFAKE_PROFILE_<VENDOR>`` is dropped from its mount's environment too, so the pair is not
-    beaten by a variable one tier down. A failure part-way through stops what was built: half a mounted
-    process would answer for some vendors and 404 for the rest."""
+    name. Per mount, most specific first: a ``vendor=profile`` pair naming it, that vendor's own
+    ``VENDORFAKE_PROFILE_<VENDOR>``, then the bare ``--profile`` as the shared default. A failure part-way
+    through stops what was built: half a mounted process would answer for some vendors and 404 for the rest."""
     from vendorfake.asgi import create_app, create_mounted_app, run_server
     from vendorfake.core.config.profile import profile_env_var
     from vendorfake.core.kernel.types import UnitError
@@ -472,17 +472,17 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
 
     bare, pairs = _serve_profile_pairs(args.profile, names) if args.profile is not None else (None, {})
 
-    base_env = {key: value for key, value in env.items() if key != VENDOR_ENV_VAR}
+    per_vendor_env = {key: value for key, value in env.items() if key != VENDOR_ENV_VAR}
     units: list[Unit] = []
     apps: dict[str, ASGIApp] = {}
     try:
         for name in names:
-            vendor_profile = pairs.get(name, bare)
-            per_vendor_env = base_env
             if name in pairs:
-                pinned_key = profile_env_var(name)
-                if pinned_key in per_vendor_env:
-                    per_vendor_env = {key: value for key, value in per_vendor_env.items() if key != pinned_key}
+                vendor_profile = pairs[name]
+            elif profile_env_var(name) in per_vendor_env:
+                vendor_profile = None  # this mount's own pin beats the shared bare item
+            else:
+                vendor_profile = bare
             try:
                 built = create_unit(vendor=name, profile=vendor_profile, env=per_vendor_env)
             except (ValueError, UnitError) as exc:
@@ -514,10 +514,9 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     """Build a unit, put the ASGI adapter in front of it, and listen. The import is
     inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
     ``vendorfake --help`` must not pay for it. A comma-separated ``--vendor``
-    hands off to :func:`_serve_mounted`; one vendor is served below, a
-    ``vendor=profile`` pair naming it honoured too since this is still ``serve``."""
+    hands off to :func:`_serve_mounted`; one vendor is served below, ``--profile``
+    naming that one unit's profile outright, beating any ``VENDORFAKE_PROFILE_<VENDOR>``."""
     from vendorfake.asgi import create_app, run_server
-    from vendorfake.core.config.profile import profile_env_var
 
     _warn_unknown_profile_suffixes(env)
 
@@ -529,13 +528,7 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
         vendor_name = _resolve_vendor_name(args, env)
         bare, pairs = _serve_profile_pairs(args.profile, (vendor_name,))
         args.vendor = vendor_name
-        if vendor_name in pairs:
-            args.profile = pairs[vendor_name]
-            pinned_key = profile_env_var(vendor_name)
-            if pinned_key in env:
-                env = {key: value for key, value in env.items() if key != pinned_key}
-        else:
-            args.profile = bare
+        args.profile = pairs.get(vendor_name, bare)
 
     unit = _make_unit(args, env)
 

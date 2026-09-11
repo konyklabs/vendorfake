@@ -296,6 +296,17 @@ def test_unit_resolves_profile_through_the_argument_then_env_then_the_default() 
         assert square.profile == "no-faults"
 
 
+def test_unit_s_explicit_profile_beats_the_per_vendor_variable_too() -> None:
+    """konyklabs/roadmap#134: ``VENDORFAKE_PROFILE_SQUARE`` sits between the
+    argument and the bare ``VENDORFAKE_PROFILE`` in the order above, not ahead
+    of the argument -- explicit configuration still beats every
+    ``VENDORFAKE_*`` variable."""
+    with unit("square", env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as square:
+        assert square.profile == "oauth-only"  # no argument: the pin applies
+    with unit("square", "no-faults", env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as square:
+        assert square.profile == "no-faults"  # the argument wins outright
+
+
 def test_a_memory_sink_captures_instead_of_delivering() -> None:
     sink = MemorySink()
     with unit("square", sink=sink) as square:
@@ -373,6 +384,18 @@ def test_served_honours_an_ambient_profile_and_an_explicit_one_beats_it(monkeypa
         assert child.profile == "no-faults"
     with served("square", "oauth-only") as child:
         assert child.profile == "oauth-only"
+
+
+def test_served_honours_an_ambient_per_vendor_pin_and_an_explicit_one_beats_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """konyklabs/roadmap#134: the parent's own pre-check and the child it spawns must agree, so this is
+    asserted the same way as the bare ``VENDORFAKE_PROFILE`` case above."""
+    monkeypatch.setenv("VENDORFAKE_PROFILE_SQUARE", "oauth-only")
+    with served("square") as child:
+        assert child.profile == "oauth-only"
+    with served("square", "no-faults") as child:
+        assert child.profile == "no-faults"
 
 
 def test_served_offers_an_async_client_onto_the_child() -> None:

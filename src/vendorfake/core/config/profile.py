@@ -424,13 +424,16 @@ def profile_env_var(vendor: str) -> str:
 
 
 def resolve_profile_name(name: str | None, environ: Mapping[str, str], *, vendor: str | None = None) -> str:
-    """Most specific first: ``VENDORFAKE_PROFILE_<VENDOR>`` (when ``vendor`` is given), ``name``, the bare
-    ``VENDORFAKE_PROFILE``, then :data:`DEFAULT_PROFILE_NAME`."""
+    """``name`` first -- explicit configuration beats every ``VENDORFAKE_*`` variable -- then
+    ``VENDORFAKE_PROFILE_<VENDOR>`` (when ``vendor`` is given), the bare ``VENDORFAKE_PROFILE``, then
+    :data:`DEFAULT_PROFILE_NAME`."""
+    if name:
+        return name
     if vendor is not None:
         pinned = environ.get(profile_env_var(vendor))
         if pinned:
             return pinned
-    return name or environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
+    return environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
 
 
 def profile_path(profile_dir: Path, name: str) -> Path:
@@ -455,7 +458,7 @@ def load_profile(
 ) -> LoadedProfile:
     """Read a profile, layer defaults under it and the environment over it: the profile document beats
     ``defaults`` (a vendor's own document) and the environment beats both. ``vendor`` lets
-    ``VENDORFAKE_PROFILE_<VENDOR>`` outrank ``name`` too -- see :func:`resolve_profile_name`."""
+    ``VENDORFAKE_PROFILE_<VENDOR>`` stand in for ``name`` when it is omitted -- see :func:`resolve_profile_name`."""
     environ: Mapping[str, str] = {} if env is None else env
     resolved_name = resolve_profile_name(name, environ, vendor=vendor)
     source_path = profile_path(profile_dir, resolved_name)

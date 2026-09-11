@@ -583,9 +583,9 @@ def unit(
     The overloads bind the seed type, a plain ``str`` vendor yielding
     ``StartedUnit[Seed]``; the implementation delegates to a private generator
     because ``@contextmanager`` and overloads do not compose in either checker.
-    ``profile=None`` resolves the way ``vendorfake serve`` does: ``VENDORFAKE_PROFILE_<VENDOR>`` in this
-    call's ``env=``, the argument, the bare ``VENDORFAKE_PROFILE``, then ``full``; ``profile`` and
-    ``capabilities`` together is a ``ValueError``.
+    A ``profile`` argument beats every ``VENDORFAKE_*`` variable; ``profile=None`` then resolves
+    ``VENDORFAKE_PROFILE_<VENDOR>`` in this call's ``env=``, the bare ``VENDORFAKE_PROFILE``, then ``full``;
+    ``profile`` and ``capabilities`` together is a ``ValueError``.
     ``seed_overlay`` is a partial seed document merged over the profile's, typed
     per vendor literal, whose ``tokens`` and identity collections are refused.
     """

@@ -185,17 +185,23 @@ is accepted on either side of the subcommand name and means the same thing.
 `clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
 every other subcommand describes one vendor and refuses a list.
 
+With one vendor mounted, `--profile` names that unit's profile outright,
+beating `$VENDORFAKE_PROFILE_<VENDOR>`, which beats the bare `$VENDORFAKE_PROFILE`
+— the same order every binding resolves a profile in, explicit configuration
+first.
+
 `serve --profile` (konyklabs/roadmap#134) also accepts a comma list of
 `vendor=profile` pairs plus at most one bare item as the shared default —
 `full,square=oauth-only` gives every other mount `full` and `square` its own
 `oauth-only`. Per mount, most specific first: the `vendor=profile` pair here,
-then `$VENDORFAKE_PROFILE_<VENDOR>`, then the bare `--profile`, then
-`$VENDORFAKE_PROFILE`, then the vendor's default. A pair naming a vendor this
-`serve` does not mount, two bare items, the same vendor twice, or an empty
-item are each refused; a `$VENDORFAKE_PROFILE_<SUFFIX>` naming no installed
-vendor is not refused (one environment may feed several processes) but logs a
-warning naming it and the installed vendors. Every other subcommand keeps
-taking one profile and refuses the pair form with a message naming `serve`.
+then `$VENDORFAKE_PROFILE_<VENDOR>`, then the bare `--profile` as the shared
+default, then `$VENDORFAKE_PROFILE`, then the vendor's default. A pair naming
+a vendor this `serve` does not mount, two bare items, the same vendor twice,
+or an empty item are each refused; a `$VENDORFAKE_PROFILE_<SUFFIX>` naming no
+installed vendor is not refused (one environment may feed several processes)
+but logs a warning naming it and the installed vendors. Every other
+subcommand keeps taking one profile and refuses the pair form with a message
+naming `serve`.
 
 ### The profile document
 

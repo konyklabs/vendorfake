@@ -883,6 +883,16 @@ def test_serve_plain_profile_path_is_unchanged_with_the_pair_grammar_added(monke
     assert seen == {"clover": "full", "square": "full"}
 
 
+def test_serve_with_one_vendor_the_flag_beats_the_per_vendor_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One vendor mounted: `--profile` names that unit's own profile outright,
+    the same as an explicit `profile=` on any other binding, so it is not
+    silently beaten by that vendor's own `VENDORFAKE_PROFILE_<VENDOR>`."""
+    seen = _serve_and_capture_profiles(
+        monkeypatch, ["--vendor", "square", "--profile", "full"], {"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}
+    )
+    assert seen == {"square": "full"}
+
+
 @pytest.mark.parametrize(
     ("profile_arg", "fragment"),
     [

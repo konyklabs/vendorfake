@@ -111,13 +111,16 @@ def _vendor_with_a_second_profile(tmp_path: Path) -> FakeVendor:
     return FakeVendor(profile_dir=directory, base_dir=tmp_path)
 
 
-def test_a_per_vendor_profile_variable_beats_the_profile_argument(tmp_path: Path) -> None:
-    """konyklabs/roadmap#134: ``create_unit`` passes the resolved vendor's name
-    down to ``load_profile`` as ``vendor=``, so ``VENDORFAKE_PROFILE_ACME``
-    outranks the ``profile=`` argument for a vendor named ``acme``."""
+def test_the_profile_argument_beats_a_per_vendor_profile_variable(tmp_path: Path) -> None:
+    """konyklabs/roadmap#134: explicit configuration beats every ``VENDORFAKE_*`` variable, so an explicit
+    ``profile=`` wins outright over ``VENDORFAKE_PROFILE_ACME`` even though ``create_unit`` passes the
+    resolved vendor's name down to ``load_profile`` as ``vendor=``. Omitting ``profile=`` lets the pin apply."""
     vendor = _vendor_with_a_second_profile(tmp_path)
-    unit = create_unit(vendor=vendor, profile="test", env={"VENDORFAKE_PROFILE_ACME": "pinned"})
-    assert unit.context.config.profile == "pinned"
+    pinned_env = {"VENDORFAKE_PROFILE_ACME": "pinned"}
+    explicit = create_unit(vendor=vendor, profile="test", env=pinned_env)
+    assert explicit.context.config.profile == "test"
+    omitted = create_unit(vendor=vendor, profile=None, env=pinned_env)
+    assert omitted.context.config.profile == "pinned"
 
 
 def test_a_per_vendor_profile_variable_for_another_vendor_is_ignored(tmp_path: Path) -> None:

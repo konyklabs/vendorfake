@@ -240,11 +240,11 @@ def test_resolve_profile_name_ignores_a_pin_for_a_different_vendor() -> None:
     assert resolved == DEFAULT_PROFILE_NAME
 
 
-def test_resolve_profile_name_pin_beats_the_bare_variable_and_the_argument() -> None:
-    """The vendor-specific pin outranks both the plain argument and the bare
-    ``VENDORFAKE_PROFILE`` -- the most specific choice for this one mount wins."""
+def test_resolve_profile_name_the_argument_beats_the_pin_which_beats_the_bare_variable() -> None:
+    """Explicit configuration beats every ``VENDORFAKE_*`` variable: the argument wins outright when given;
+    only when it is omitted does the vendor-specific pin outrank the bare ``VENDORFAKE_PROFILE``."""
     environ = {"VENDORFAKE_PROFILE": "full", "VENDORFAKE_PROFILE_SQUARE": "oauth-only"}
-    assert resolve_profile_name("no-faults", environ, vendor="square") == "oauth-only"
+    assert resolve_profile_name("no-faults", environ, vendor="square") == "no-faults"
     assert resolve_profile_name(None, environ, vendor="square") == "oauth-only"
     # No vendor given at all: the pin cannot apply, so the ordinary precedence holds.
     assert resolve_profile_name(None, environ, vendor=None) == "full"

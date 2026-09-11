@@ -167,9 +167,9 @@ with the child's. Four variables behave specially:
 - `VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — refused with
   a `ValueError` naming the parameter to use, rather than silently beaten by
   the flag `served()` passes.
-- `VENDORFAKE_PROFILE` — honoured; an explicit `profile=` beats it,
-  `VENDORFAKE_PROFILE_<VENDOR>` (konyklabs/roadmap#134) beats `profile=` in
-  turn, and `served(capabilities=)` resolves the way `unit()`'s does.
+- `VENDORFAKE_PROFILE` — honoured; an explicit `profile=` beats
+  `VENDORFAKE_PROFILE_<VENDOR>` (konyklabs/roadmap#134), which beats this
+  bare variable, and `served(capabilities=)` resolves the way `unit()`'s does.
 - `VENDORFAKE_SEED` — refused, because `.seed` is derived from the vendor's
   constants and could not describe a child hydrated from another document.
 - `VENDORFAKE_SEED_OVERLAY` — refused in favour of

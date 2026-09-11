@@ -300,7 +300,8 @@ def create_unit(
     profile that is a superset of it, and ``full`` plus
     ``VENDORFAKE_CAPABILITIES`` when none qualifies. ``GET /__unit/info`` reports
     the original request under ``requested_capabilities``. The resolved vendor's name goes to
-    :func:`load_profile` as ``vendor=``, so ``VENDORFAKE_PROFILE_<VENDOR>`` outranks ``profile`` here too.
+    :func:`load_profile` as ``vendor=``, so an explicit ``profile`` still beats
+    ``VENDORFAKE_PROFILE_<VENDOR>``, which stands in for it when omitted.
     """
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
