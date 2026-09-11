@@ -437,6 +437,17 @@ def test_an_escaped_identifier_still_matches_its_unescaped_copy(document: bytes)
     assert list(prose_leaks(copied, [document])) == ["corpus/g.json"]
 
 
+def test_markdown_emphasis_underscores_do_not_hide_a_copied_sentence() -> None:
+    """An underscore now joins a word, so the edges must be trimmed: a vendor
+    sentence set in Markdown emphasis (``_a ... always_``) and its plain copy
+    have to tokenize alike, as they did when an underscore was a separator."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"_a tax rate applies to every order line always_\n"
+    copied = {"corpus/h.json": '{"note": "a tax rate applies to every order line always"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/h.json"]
+
+
 def test_urls_with_identifier_like_segments_remain_ignored() -> None:
     """A URL is stripped whole before tokenization, underscores in its path
     notwithstanding."""
