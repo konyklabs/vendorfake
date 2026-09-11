@@ -1015,6 +1015,47 @@ def test_serve_with_several_vendors_applies_a_profile_path_to_every_mount(
 
 
 @pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("full", False),
+        ("full,square=oauth-only", True),
+        ("square=oauth-only", True),
+        ("square=/tmp/x.json", True),
+        ("full,square=/tmp/x.json", True),
+        ("/ci/build=42/p.json", False),
+        ("./profiles/tenant=a.json", False),
+        ("/home/me/a,b/p.json", False),
+        ("a,b", True),
+        ("Square=full", False),
+    ],
+)
+def test_looks_like_a_profile_pair_list_classifies_by_shape(raw: str, expected: bool) -> None:
+    """konyklabs/roadmap#134 follow-up: a pair's value may itself be a path (`square=/tmp/x.json`), so this
+    decides by each comma-item's shape, never by calling `is_profile_path` on the whole string -- that would
+    wrongly accept `square=/tmp/x.json` as one profile just for ending in `.json`."""
+    import vendorfake.cli as cli_module
+
+    assert cli_module._looks_like_a_profile_pair_list(raw) is expected
+
+
+def test_serve_with_several_vendors_a_pairs_value_may_be_a_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`square=<path>` must load that file for square, not be misread as one whole profile because the
+    value happens to end in `.json`."""
+    from vendorfake.registry import resolve_vendor
+
+    shipped = (resolve_vendor("square").profile_dir / "oauth-only.json").read_text(encoding="utf-8")
+    path = tmp_path / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    seen = _serve_and_capture_profiles(
+        monkeypatch, ["--vendor", "clover,square", "--profile", f"full,square={path}"], {}
+    )
+    assert seen == {"clover": "full", "square": "oauth-only"}
+
+
+@pytest.mark.parametrize(
     ("profile_arg", "fragment"),
     [
         ("full,square=oauth-only,toast=full", "does not mount"),

@@ -107,9 +107,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "$VENDORFAKE_PROFILE_<VENDOR> (e.g. VENDORFAKE_PROFILE_SQUARE), which beats $VENDORFAKE_PROFILE. "
             "With several --vendor mounts, also takes a comma list of vendor=profile pairs plus at most one "
             "bare item as the shared default, e.g. `full,square=oauth-only`: a pair naming a mount wins for "
-            "it, otherwise that mount's own $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. An absolute "
-            "path or one ending in .json is always one profile, whatever `=` or `,` it contains, so a path "
-            "cannot sit inside a pair list."
+            "it, otherwise that mount's own $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. A pair's value "
+            "may itself be a path (`square=/tmp/x.json`); a lone profile, name or path, is never split just "
+            "because it happens to contain `=` or `,`."
         ),
     )
     serve.add_argument("--host", default=None, help="Interface to bind. Defaults to $VENDORFAKE_HOST, then loopback.")
@@ -286,27 +286,25 @@ def _refuse_a_vendor_list(name: str) -> None:
         raise SystemExit(f"{PROG}: --vendor names several vendors; only `serve` mounts more than one")
 
 
-_VENDOR_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
+_PAIR_ITEM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*=.+$")
+"""A ``vendor=value`` item: a vendor-slug-shaped left side, then any non-empty right side -- the value may
+itself be a path, so this is not ``is_profile_path`` applied to the item."""
+_BARE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+"""A bare profile *name* as an item of the pair grammar: no ``/`` or ``.``, so a path never matches this --
+a path is decided by shape here too, not by calling :func:`~vendorfake.core.config.profile.is_profile_path`
+on the whole value, which would wrongly accept ``square=/tmp/x.json`` for ending in ``.json``."""
 
 
 def _looks_like_a_profile_pair_list(raw: str) -> bool:
-    """Whether ``raw`` is ``serve``'s ``vendor=profile`` grammar rather than one profile: a path (see
-    :func:`~vendorfake.core.config.profile.is_profile_path`) never is, however many ``=``/``,`` it carries,
-    since a path is a single profile by definition. Otherwise it is a pair list only when every
-    comma-separated item is a bare name or ``<vendor>=<value>`` with a vendor-shaped left side and a
-    non-empty right side -- anything else (a malformed pair aside) is a bare profile that happens to
-    contain one of the two characters."""
-    if "=" not in raw and "," not in raw:
+    """Whether ``raw`` is ``serve``'s ``vendor=profile`` grammar rather than one profile (a name or a path):
+    every comma-separated item must be a pair or a bare name (an empty item -- a stray comma -- is let
+    through here so :func:`_serve_profile_pairs` can refuse it by name), and there must be more than one
+    item or at least one pair, a lone bare item being just a name."""
+    items = [item.strip() for item in raw.split(",")]
+    is_pair = [bool(_PAIR_ITEM_PATTERN.match(item)) for item in items]
+    if not all(pair or not item or _BARE_NAME_PATTERN.match(item) for pair, item in zip(is_pair, items, strict=True)):
         return False
-    from vendorfake.core.config.profile import is_profile_path
-
-    if is_profile_path(raw):
-        return False
-    for item in raw.split(","):
-        vendor_name, sep, value = item.strip().partition("=")
-        if sep and (not _VENDOR_NAME_PATTERN.match(vendor_name.strip()) or not value.strip()):
-            return False
-    return True
+    return len(items) > 1 or any(is_pair)
 
 
 def _refuse_a_profile_pair_list(raw: str | None) -> None:

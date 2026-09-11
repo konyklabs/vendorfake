@@ -62,10 +62,11 @@ options:
                         at most one bare item as the shared default, e.g.
                         `full,square=oauth-only`: a pair naming a mount wins
                         for it, otherwise that mount's own
-                        $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. An
-                        absolute path or one ending in .json is always one
-                        profile, whatever `=` or `,` it contains, so a path
-                        cannot sit inside a pair list.
+                        $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. A
+                        pair's value may itself be a path
+                        (`square=/tmp/x.json`); a lone profile, name or path,
+                        is never split just because it happens to contain `=`
+                        or `,`.
   --host HOST           Interface to bind. Defaults to $VENDORFAKE_HOST, then
                         loopback.
   --port PORT           Port to bind; 0 picks a free one and prints it.
