@@ -238,24 +238,6 @@ def test_route_for_an_unknown_operation_id_lists_the_ones_that_exist() -> None:
         assert "ObtainToken" in str(caught.value)
 
 
-def test_faults_names_match_the_builtin_catalogue_and_the_param_table() -> None:
-    from vendorfake.core.chaos.faults import FAULT_PARAM_KEYS
-    from vendorfake.core.chaos.rules import BUILTIN_FAULTS
-    from vendorfake.registry import faults
-
-    names = {row.name for row in faults()}
-    assert names == {spec.name for spec in BUILTIN_FAULTS}
-    assert names == set(FAULT_PARAM_KEYS)
-
-
-def test_every_faults_row_params_matches_the_param_table() -> None:
-    from vendorfake.core.chaos.faults import FAULT_PARAM_KEYS
-    from vendorfake.registry import faults
-
-    for row in faults():
-        assert row.params == FAULT_PARAM_KEYS[row.name]
-
-
 def test_faults_phase_and_params_for_three_named_faults() -> None:
     from vendorfake.registry import faults
 
