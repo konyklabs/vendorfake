@@ -298,12 +298,15 @@ that safe. Both are off unless set, and neither changes the vendor surface.
   404, and the control port answers a vendor path with a 404 naming the vendor
   port. With several vendors mounted, the root index moves to the control port.
 - **A token.** With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request
-  but `GET /__unit/health` must carry it in the `vendorfake-control-token`
-  header, or it gets the vendor's 401. The check runs before routing, so an
-  unknown control path is refused the same way. No response echoes the token,
-  and `GET /__unit/info` reports only `control.token_required`. A profile
-  document has no key for it. `unit()`, `async_unit()`, `serve_in_thread()` and
-  `served()` send it on control-plane paths for you.
+  but `GET` or `HEAD /__unit/health` must carry it in the
+  `vendorfake-control-token` header, or it gets a 401: the vendor's own from a
+  unit, and a JSON `message` from the root of a process mounting several
+  vendors. The check runs before routing, so an unknown control path is refused
+  the same way. No response echoes the token, and `GET /__unit/info` reports
+  only `control.token_required`. A profile document has no key for it.
+  `unit()`, `async_unit()`, `serve_in_thread()` and `served()` send it for a
+  unit they start themselves; a runner talking to an already-running networked
+  fake sends the `vendorfake-control-token` header itself.
 
 Docker networks do not filter ports, so keeping the control port off the
 service's network means binding each listener to one network's address. The
@@ -342,7 +345,7 @@ services:
   tests:
     build: ./tests
     environment:
-      VENDORFAKE_CONTROL_URL: http://172.31.0.10:8081
+      FAKE_CONTROL_URL: http://172.31.0.10:8081
       VENDORFAKE_CONTROL_TOKEN: ${VENDORFAKE_CONTROL_TOKEN:?export it from your CI secret store}
     networks: [runner]
     depends_on:

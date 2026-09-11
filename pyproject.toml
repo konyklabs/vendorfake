@@ -52,7 +52,7 @@ dependencies = [
 [project.optional-dependencies]
 serve = [
   "fastapi>=0.115",
-  "uvicorn>=0.30",
+  "uvicorn>=0.36",
 ]
 
 [project.urls]
@@ -94,7 +94,7 @@ dev = [
   # on a checkout of this repository needs them even though a consumer
   # installing the published package only gets them via `vendorfake[serve]`.
   "fastapi>=0.115",
-  "uvicorn>=0.30",
+  "uvicorn>=0.36",
   # Not used by a single test in this repository directly. It is installed so
   # that tests/unit/test_pytest_plugin_async.py can run a *consumer's* suite
   # under it, in both strict and auto mode, and prove the claim the README

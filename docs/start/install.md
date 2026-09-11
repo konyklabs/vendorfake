@@ -71,7 +71,7 @@ network (or use Testcontainers, as the [docker compose
 section](bindings.md#docker-compose) does) rather than widening the host
 bind. Two opt-ins exist for a fake that must be networked: a control plane on
 its own port (`VENDORFAKE_CONTROL_PORT`), and a token every control-plane call
-but the health probe must carry (`VENDORFAKE_CONTROL_TOKEN`). See [Bindings →
+but `GET` or `HEAD /__unit/health` must carry (`VENDORFAKE_CONTROL_TOKEN`). See [Bindings →
 A control plane on its own port](bindings.md#a-control-plane-on-its-own-port).
 
 The image runs as a non-root user, listens on 8080, and carries a

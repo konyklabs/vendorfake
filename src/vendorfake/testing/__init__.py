@@ -1062,6 +1062,7 @@ def served(
     precedence and the names the mapping may not carry. ``seed_overlay`` reaches
     the child as ``VENDORFAKE_SEED_OVERLAY``. A session-scoped ``served()``
     against a vendor with rotating state needs :meth:`Driver.reset` between tests.
+    The child serves one listener, so an exported ``VENDORFAKE_CONTROL_PORT``/``_HOST`` never reaches it.
 
     ``validate=True`` passes ``--validate`` to the child: every answer is checked
     against the vendor's published schema and a violation comes back as a 500
@@ -1150,6 +1151,12 @@ def _served(
         )
     # The same refusal for the variables an explicit flag below would silently
     # beat: an entry that changes nothing is worse than one that is refused.
+    split = sorted(_SPLIT_LISTENER_ENV & set(layer))
+    if split:
+        raise ValueError(
+            f"served(env=...) cannot carry {', '.join(split)}: served() drives one listener, the control plane "
+            "included. A control plane on a port of its own belongs to `vendorfake serve --control-port`."
+        )
     beaten = sorted(_FLAG_BEATEN_ENV & set(layer))
     if beaten:
         raise ValueError(
@@ -1216,7 +1223,8 @@ def _served(
     # The second documented exception to `cli.py`'s `os.environ` invariant:
     # `Popen`'s `env=` replaces rather than layers, so adding one variable to the
     # environment it would otherwise inherit has no path that avoids this read.
-    child_env = None if not layer else {**os.environ, **layer}
+    inherited = {key: value for key, value in os.environ.items() if key not in _SPLIT_LISTENER_ENV}
+    child_env = None if not layer and len(inherited) == len(os.environ) else {**inherited, **layer}
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=child_env)
     output = _ChildOutput(process)
     try:
@@ -1252,6 +1260,9 @@ _FLAG_BEATEN_ENV: frozenset[str] = frozenset({"VENDORFAKE_HOST", "VENDORFAKE_POR
 the child getting each as a flag that beats the variable."""
 
 _FLAG_BEATEN_HINT = "host=, port= and log_level="
+
+_SPLIT_LISTENER_ENV: frozenset[str] = frozenset({"VENDORFAKE_CONTROL_PORT", "VENDORFAKE_CONTROL_HOST"})
+"""Never handed to a :func:`served` child, whose driver talks to one listener."""
 
 SERVE_COMMAND: tuple[str, ...] = (sys.executable, "-m", "vendorfake", "serve")
 """What :func:`served` runs, before the flags. A module attribute so a test of

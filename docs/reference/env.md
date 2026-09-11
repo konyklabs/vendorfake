@@ -21,7 +21,7 @@ Every environment variable `load_profile` reads.
 | `VENDORFAKE_ERROR_SIDECAR` | errors.sidecar | Where the 'unit_error' sidecar is emitted: 'headers' (default), 'body' or 'both'. |
 | `VENDORFAKE_PORT` | transport.port | Port for the HTTP binding. |
 | `VENDORFAKE_HOST` | transport.host | Interface for the HTTP binding. |
-| `VENDORFAKE_CONTROL_TOKEN` | control.token | Every /__unit/* request but GET /__unit/health must carry it in vendorfake-control-token. Environment only: the profile document has no key for it. |
+| `VENDORFAKE_CONTROL_TOKEN` | control.token | Every /__unit/* request but GET or HEAD /__unit/health must carry it in vendorfake-control-token. Environment only: the profile document has no key for it. |
 | `VENDORFAKE_LOG_LEVEL` | log_level | Minimum level the unit's logger emits. |
 | `VENDORFAKE_VENDOR_<suffix>` | vendor_config | Prefix: the remainder becomes a snake_case vendor-config key. |
 | `VENDORFAKE_REQUEST_LOG_CAPACITY` | requests.capacity | How many requests the in-memory request log keeps before evicting the oldest. |

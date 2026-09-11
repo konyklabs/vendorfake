@@ -68,8 +68,18 @@ else
   fi
 fi
 
-# The HEALTHCHECK's command, copied: a change to one without the other fails the exec step below.
+# The HEALTHCHECK's command, copied: the next step fails unless the built image's HEALTHCHECK carries it verbatim.
 HEALTHCHECK_PY="import os, sys, urllib.request; port = os.environ.get('VENDORFAKE_CONTROL_PORT') or os.environ.get('VENDORFAKE_PORT', '8080'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/__unit/health', timeout=2).status == 200 else 1)"
+
+say "the image's HEALTHCHECK is the command this script runs"
+# Matched as one quoted JSON array element; the command holds no <, > or &, which Go's JSON would escape.
+if ! healthcheck=$(docker inspect --format '{{json .Config.Healthcheck.Test}}' "$IMAGE"); then
+  fail "could not read the image's HEALTHCHECK (docker inspect failed)"
+elif printf '%s' "$healthcheck" | grep -qF -- "\"$HEALTHCHECK_PY\""; then
+  ok "the Dockerfile HEALTHCHECK is HEALTHCHECK_PY"
+else
+  fail "the Dockerfile HEALTHCHECK differs from HEALTHCHECK_PY in this script; change both together. The image has: $healthcheck"
+fi
 
 wait_healthy() {
   local status="starting"

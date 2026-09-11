@@ -439,6 +439,7 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
 
         host, port, log_level = _serve_binding(args, env, units[0])
         control = _control_listener(args, env, host, port)
+        control_token = units[0].context.config.control.token
         mounts = ",".join(f"/{name}" for name in names)
 
         def announce(bound_host: str, bound_port: int, *control_at: str | int) -> None:
@@ -451,7 +452,13 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
             )
 
         if control is None:
-            run_server(create_mounted_app(apps), host=host, port=port, log_level=log_level, on_bound=announce)
+            run_server(
+                create_mounted_app(apps, control_token=control_token),
+                host=host,
+                port=port,
+                log_level=log_level,
+                on_bound=announce,
+            )
         else:
             run_split_server(
                 lambda vendor_port: (
@@ -463,7 +470,8 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
                         {
                             name: create_app(built, surface="control", vendor_port=vendor_port)
                             for name, built in zip(names, units, strict=True)
-                        }
+                        },
+                        control_token=control_token,
                     ),
                 ),
                 host=host,

@@ -177,10 +177,12 @@ the vendor surfaces are: the conformance suite asserts a vendor's behaviour
 entirely through them, which is what lets an implementation in another
 language be checked against the same contract.
 
-With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request but
-`GET /__unit/health` must carry the token in the `vendorfake-control-token`
+With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request but `GET` or
+`HEAD /__unit/health` must carry the token in the `vendorfake-control-token`
 header, and is otherwise refused with the vendor's 401, `x-unit-error:
-unauthorized`, before routing. `GET /__unit/info` carries
+unauthorized`, before routing. The root of a process mounting several vendors
+refuses its own `/__unit/*` paths the same way, with a 401 whose JSON body
+carries only `message`. `GET /__unit/info` carries
 `control: {token_required}` and never the token. Unset, nothing changes.
 
 ### The command line

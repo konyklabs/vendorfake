@@ -207,16 +207,16 @@ def create_app(
     @app.api_route("/{full_path:path}", methods=list(HTTP_METHODS), include_in_schema=False)
     async def catch_all(request: Request) -> Response:
         """No typed parameters: a second one would let the framework parse a body."""
-        if surface != "all":
-            path = request_path(request)
-            if names_control_plane(path) != (surface == "control"):
-                if surface == "vendor":
-                    return await not_served_here(request)
-                return _vendor_surface_refusal(request, path, vendor_port)
+        # The raw path, for every decision: uvicorn's decoded one reads ``/%5F%5Funit/openapi.json`` as the document.
+        path = request_path(request)
+        if surface != "all" and names_control_plane(path) != (surface == "control"):
+            if surface == "vendor":
+                return await not_served_here(request)
+            return _vendor_surface_refusal(request, path, vendor_port)
         if (
             request.method in {"GET", "HEAD"}
-            and request.url.path == OPENAPI_PATH
-            and control_access_error(request.method, OPENAPI_PATH, request_headers(request), token) is None
+            and path == OPENAPI_PATH
+            and control_access_error(request.method, path, request_headers(request), token) is None
         ):
             return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
         # A refused document request falls through: the kernel answers it with the same 401 as any control path.

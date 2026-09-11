@@ -1756,7 +1756,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "referencing", specifier = ">=0.30" },
-    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.30" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.36" },
 ]
 provides-extras = ["serve"]
 
@@ -1771,7 +1771,7 @@ dev = [
     { name = "ruff", specifier = ">=0.6" },
     { name = "types-jsonschema", specifier = ">=4.18" },
     { name = "types-pyyaml", specifier = ">=6" },
-    { name = "uvicorn", specifier = ">=0.30" },
+    { name = "uvicorn", specifier = ">=0.36" },
 ]
 docs = [
     { name = "mkdocs", specifier = ">=1.6" },

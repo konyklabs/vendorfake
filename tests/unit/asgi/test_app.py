@@ -12,6 +12,7 @@ import inspect
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.unit.asgi.test_adapt import call
@@ -416,3 +417,38 @@ def test_the_served_document_is_refused_without_the_control_token() -> None:
             assert "openapi" in allowed.json()
     finally:
         built.stop()
+
+
+def raw_call(app: Any, method: str, raw_path: str, **kwargs: Any) -> httpx.Response:
+    """``call`` with the path sent byte for byte: against a base URL, httpx would read ``//x`` as a host."""
+    return call(app, method, httpx.URL("http://unit.test").copy_with(raw_path=raw_path.encode("ascii")), **kwargs)
+
+
+@pytest.mark.parametrize("raw_path", ["/%5F%5Funit/openapi.json", "/__unit%2Fopenapi.json"])
+def test_a_percent_encoded_document_path_is_not_the_document_on_the_vendor_surface(unit: Any, raw_path: str) -> None:
+    """The fast path compares the raw path the surface check reads; the decoded one would name the document."""
+    response = raw_call(create_app(unit, surface="vendor"), "GET", raw_path)
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+
+
+def test_the_literal_document_path_is_still_the_document(unit: Any) -> None:
+    response = call(create_app(unit), "GET", OPENAPI_PATH)
+    assert response.status_code == 200
+    assert response.json()["openapi"].startswith("3.")
+
+
+@pytest.mark.parametrize(
+    ("method", "raw_path"), [("GET", "//__unit/info"), ("GET", "/__unit//info"), ("POST", "//__unit/state/reset")]
+)
+def test_the_vendor_surface_refuses_what_the_router_reads_as_the_control_plane(
+    unit: Any, method: str, raw_path: str
+) -> None:
+    """The router drops empty segments, so each of these reaches a control route unless the surface check does too."""
+    unit.context.store.collection("orders").insert({"id": "ord_probe"})
+    before = unit.context.store.entity_digest()
+    response = raw_call(create_app(unit, surface="vendor"), method, raw_path, json={} if method == "POST" else None)
+    assert response.status_code == 404
+    assert response.headers["x-unit-error"] == "not_found"
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+    assert unit.context.store.entity_digest() == before

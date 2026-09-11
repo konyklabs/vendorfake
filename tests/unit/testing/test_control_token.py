@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import anyio
 import httpx
+import pytest
 
-from vendorfake.testing import UnitTransport, async_unit, serve_in_thread, unit
+from vendorfake.testing import UnitTransport, async_unit, serve_in_thread, served, unit
 
 TOKEN = "testing-control-token-under-test"
 HEADER = "vendorfake-control-token"
@@ -71,3 +72,15 @@ def test_serve_in_thread_sends_the_token_its_unit_resolved() -> None:
         assert driver.reset()
         assert driver.info()["control"] == {"token_required": True}
         assert httpx.get(f"{driver.base_url}/__unit/info", timeout=10.0).status_code == 401
+
+
+def test_served_ignores_an_exported_control_listener_and_refuses_one_in_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``served()`` drives one listener: an exported split would leave its driver on the vendor port."""
+    monkeypatch.setenv("VENDORFAKE_CONTROL_PORT", "0")
+    monkeypatch.setenv("VENDORFAKE_CONTROL_HOST", "127.0.0.1")
+    with served("clover") as child:
+        assert child.info()["vendor"]["name"] == "clover"
+        assert child.reset()
+    for name in ("VENDORFAKE_CONTROL_PORT", "VENDORFAKE_CONTROL_HOST"):
+        with pytest.raises(ValueError, match="vendorfake serve --control-port"), served("clover", env={name: "0"}):
+            pytest.fail(f"served() started with {name} in env=")

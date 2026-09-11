@@ -323,3 +323,32 @@ def test_a_vendor_listener_mount_leaves_the_index_to_the_control_listener(clover
         assert response.status_code == 404
         assert response.headers[MOUNTS_HEADER.decode()] == "clover,square"
     assert call(vendor_mount, "GET", "/clover/__unit/info").status_code == 200
+
+
+MOUNT_TOKEN = "mount-control-token-under-test"
+MOUNT_REFUSAL = {"message": "The control plane requires the vendorfake-control-token header."}
+
+
+def test_a_mounted_root_refuses_its_control_paths_without_the_token(clover_app: Any, square_app: Any) -> None:
+    """Checked before the index and before the mount 404, so an unknown root path is refused the same way."""
+    guarded = create_mounted_app({"clover": clover_app, "square": square_app}, control_token=MOUNT_TOKEN)
+    sent = {"vendorfake-control-token": MOUNT_TOKEN}
+    for path in ("/__unit/info", "/__unit/nope"):
+        refused = call(guarded, "GET", path)
+        assert refused.status_code == 401, path
+        assert refused.json() == MOUNT_REFUSAL
+        assert MOUNT_TOKEN not in refused.text
+        assert call(guarded, "GET", path, headers={"vendorfake-control-token": "not-it"}).status_code == 401
+    assert call(guarded, "POST", "/__unit/health").status_code == 401
+    assert call(guarded, "GET", "/__unit/info", headers=sent).json()["vendors"] == ["clover", "square"]
+    assert call(guarded, "GET", "/__unit/nope", headers=sent).status_code == 404
+    assert call(guarded, "GET", "/__unit/health").status_code == 200
+    assert call(guarded, "HEAD", "/__unit/health").status_code == 200
+    assert call(guarded, "GET", "/").status_code == 200
+
+
+def test_without_a_token_a_mounted_root_answers_as_before(mounted: Any) -> None:
+    assert call(mounted, "GET", "/__unit/info").status_code == 200
+    unknown = call(mounted, "GET", "/__unit/nope")
+    assert unknown.status_code == 404
+    assert unknown.headers[MOUNTS_HEADER.decode()] == "clover,square"

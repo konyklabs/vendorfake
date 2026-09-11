@@ -146,3 +146,16 @@ def test_the_control_port_names_the_vendor_port_for_a_vendor_path(server: Split)
     assert response.json() == {
         "message": f"POST {server.prefix}/oauth/v2/refresh is the vendor surface; it is served on port {server.vendor_port}"
     }
+
+
+def test_the_control_port_root_requires_the_token_except_for_health(server: Split) -> None:
+    """For two vendors the root is the mount's own index, which the token guards the same way (konyklabs/roadmap#134)."""
+    root = server.control_url
+    assert httpx.get(f"{root}/__unit/info", timeout=30.0).status_code == 401
+    assert httpx.get(f"{root}/__unit/nope", timeout=30.0).status_code == 401
+    assert httpx.get(f"{root}/__unit/info", headers={TOKEN_HEADER: TOKEN}, timeout=30.0).status_code == 200
+    assert httpx.get(f"{root}/__unit/health", timeout=30.0).status_code == 200
+    head = httpx.head(f"{root}/__unit/health", timeout=30.0)
+    assert head.status_code != 401
+    if server.prefix:
+        assert head.status_code == 200

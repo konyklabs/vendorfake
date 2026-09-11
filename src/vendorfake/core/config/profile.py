@@ -123,7 +123,7 @@ ENV_TABLE: tuple[EnvVar, ...] = (
     EnvVar(
         "VENDORFAKE_CONTROL_TOKEN",
         "control.token",
-        "Every /__unit/* request but GET /__unit/health must carry it in vendorfake-control-token. "
+        "Every /__unit/* request but GET or HEAD /__unit/health must carry it in vendorfake-control-token. "
         "Environment only: the profile document has no key for it.",
     ),
     EnvVar("VENDORFAKE_LOG_LEVEL", "log_level", "Minimum level the unit's logger emits."),
