@@ -380,7 +380,7 @@ def resolve_config(
             port=8080 if port is None else port,
             host=environ.get("VENDORFAKE_HOST"),
         ),
-        control=ControlSection(token=environ.get("VENDORFAKE_CONTROL_TOKEN") or None),
+        control=ControlSection(token=_control_token(environ)),
         requests=(
             document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})
         ),
@@ -509,3 +509,18 @@ def _read_overlay(locator: str) -> Mapping[str, Any]:
             field="seed_overlay",
         )
     return {str(key): value for key, value in decoded.items()}
+
+
+def _control_token(environ: Mapping[str, str]) -> str | None:
+    """``VENDORFAKE_CONTROL_TOKEN``, refusing a set-but-blank value: an unset secret expanding to ``""`` must not leave
+    the control plane open while the operator believes it guarded."""
+    raw = environ.get("VENDORFAKE_CONTROL_TOKEN")
+    if raw is None:
+        return None
+    if not raw.strip():
+        raise UnitError(
+            UnitErrorKind.INVALID_VALUE,
+            detail="VENDORFAKE_CONTROL_TOKEN is set but empty; unset it to leave the control plane open, or give it a value.",
+            field="VENDORFAKE_CONTROL_TOKEN",
+        )
+    return raw

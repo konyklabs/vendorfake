@@ -171,8 +171,31 @@ def test_control_access_error_is_the_one_refusal() -> None:
 def test_the_token_is_resolved_from_the_environment_and_a_profile_document_has_no_key_for_it() -> None:
     document = ProfileDocument()
     assert resolve_config(document, name="p", env={"VENDORFAKE_CONTROL_TOKEN": TOKEN}).control.token == TOKEN
-    assert resolve_config(document, name="p", env={"VENDORFAKE_CONTROL_TOKEN": ""}).control.token is None
     assert resolve_config(document, name="p").control.token is None
     with pytest.raises(UnitError) as raised:
         parse_profile_document({"control": {"token": TOKEN}}, source="inline")
     assert raised.value.field == "control"
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t"])
+def test_a_set_but_blank_control_token_refuses_the_unit_rather_than_leaving_the_control_plane_open(blank: str) -> None:
+    """An unset secret in a compose file expands to an empty string. Reading that as "no token" would publish
+    ``token_required: false`` and answer every caller; the unit refuses to start instead."""
+    from vendorfake.core.kernel.types import UnitError, UnitErrorKind
+    from vendorfake.registry import create_unit
+
+    with pytest.raises(UnitError) as caught:
+        create_unit(vendor="clover", profile="oauth-only", env={"VENDORFAKE_CONTROL_TOKEN": blank})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "VENDORFAKE_CONTROL_TOKEN"
+
+
+def test_an_unset_control_token_still_leaves_the_control_plane_open() -> None:
+    from vendorfake.core.transport.inprocess import in_process
+    from vendorfake.registry import create_unit
+
+    unit = create_unit(vendor="clover", profile="oauth-only", env={})
+    try:
+        assert in_process(unit).get("/__unit/info").json()["control"] == {"token_required": False}
+    finally:
+        unit.stop()
