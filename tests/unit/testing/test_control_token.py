@@ -3,11 +3,21 @@ nowhere else, and a client without it is refused (konyklabs/roadmap#134)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any
+
 import anyio
 import httpx
 import pytest
 
+from vendorfake.asgi import serve_in_thread as serve_app_in_thread
+from vendorfake.conformance import HttpConformanceClient
+from vendorfake.conformance.runner import REMOTE_TRANSPORT, remote_target, run_check, select_checks
+from vendorfake.conformance.types import Outcome
+from vendorfake.fidelity.runner import ControlPlaneWorld, HttpCorpusClient
 from vendorfake.testing import UnitTransport, async_unit, serve_in_thread, served, unit
+from vendorfake.testing.conformance import target
 
 TOKEN = "testing-control-token-under-test"
 HEADER = "vendorfake-control-token"
@@ -84,3 +94,82 @@ def test_served_ignores_an_exported_control_listener_and_refuses_one_in_env(monk
     for name in ("VENDORFAKE_CONTROL_PORT", "VENDORFAKE_CONTROL_HOST"):
         with pytest.raises(ValueError, match="vendorfake serve --control-port"), served("clover", env={name: "0"}):
             pytest.fail(f"served() started with {name} in env=")
+
+
+# -- the in-package HTTP clients -------------------------------------------------
+
+
+def test_the_subprocess_conformance_transport_sends_an_exported_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """C22 reads the served child's control plane, which inherits the exported token."""
+    monkeypatch.setenv("VENDORFAKE_CONTROL_TOKEN", TOKEN)
+    (c22,) = select_checks(["C22"])
+    result = run_check(c22, target("clover", profiles=("full",)), "full", "inprocess")
+    assert result.outcome is Outcome.PASS, result.detail
+
+
+def test_remote_target_probes_a_guarded_unit_with_the_exported_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VENDORFAKE_CONTROL_TOKEN", TOKEN)
+    with served("clover", "oauth-only") as child:
+        found = remote_target(child.base_url)
+        assert found.profiles == ("oauth-only",)
+        with found.open_client("oauth-only", REMOTE_TRANSPORT) as client:
+            assert client.call("GET", "/__unit/info").status == 200
+        monkeypatch.delenv("VENDORFAKE_CONTROL_TOKEN")
+        with pytest.raises(LookupError, match=r"answered 401.*export VENDORFAKE_CONTROL_TOKEN") as refused:
+            remote_target(child.base_url)
+        assert "must address a running unit" not in str(refused.value)
+
+
+def test_control_plane_world_resets_a_guarded_unit_with_the_exported_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VENDORFAKE_CONTROL_TOKEN", TOKEN)
+    with served("clover") as child:
+        world = ControlPlaneWorld(child.base_url)
+        try:
+            world.reset()
+            assert world.profile() == "full"
+            assert world.credentials()
+        finally:
+            world.close()
+
+
+@contextmanager
+def _recorder() -> Iterator[tuple[str, list[tuple[str, dict[str, str]]]]]:
+    """A server that records each request's path and headers and answers ``{}``."""
+    seen: list[tuple[str, dict[str, str]]] = []
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "lifespan":
+            while (await receive())["type"] != "lifespan.shutdown":
+                await send({"type": "lifespan.startup.complete"})
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        seen.append((scope["path"], {bytes(k).decode().lower(): bytes(v).decode() for k, v in scope["headers"]}))
+        await send({"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    with serve_app_in_thread(app) as base_url:  # type: ignore[arg-type]
+        yield base_url, seen
+
+
+def test_the_clients_send_the_token_on_control_paths_under_their_base_path_only() -> None:
+    """A mounted vendor's base URL carries a prefix, so the control plane is ``/clover/__unit/...`` on the wire."""
+    with _recorder() as (base_url, seen):
+        conformance = HttpConformanceClient(f"{base_url}/clover", control_token=TOKEN)
+        corpus = HttpCorpusClient(f"{base_url}/clover", control_token=TOKEN)
+        try:
+            conformance.call("GET", "/v3/merchants/abc")
+            conformance.call("GET", "/__unit/info")
+            conformance.call("GET", "/__unit/info", headers={HEADER: "set-by-the-caller"})
+            corpus.call(method="POST", path="/oauth/v2/refresh", body={})
+            corpus.call(method="POST", path="/__unit/state/reset", body={})
+        finally:
+            conformance.close()
+            corpus.close()
+    sent = [(path, headers.get(HEADER)) for path, headers in seen]
+    assert sent == [
+        ("/clover/v3/merchants/abc", None),
+        ("/clover/__unit/info", TOKEN),
+        ("/clover/__unit/info", "set-by-the-caller"),
+        ("/clover/oauth/v2/refresh", None),
+        ("/clover/__unit/state/reset", TOKEN),
+    ]

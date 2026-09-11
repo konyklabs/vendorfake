@@ -28,7 +28,7 @@ import httpx
 from vendorfake import registry
 from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
 from vendorfake.core.config.profile import DEFAULT_PROFILE_NAME, ENV_SEED, ENV_VENDOR_PREFIX, load_profile
-from vendorfake.core.control.access import CONTROL_TOKEN_ENV, CONTROL_TOKEN_HEADER, names_control_plane
+from vendorfake.core.control.access import CONTROL_TOKEN_ENV, control_token_hooks
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
@@ -674,7 +674,7 @@ def _unit(
             transport=transport,
             base_url=IN_PROCESS_BASE_URL,
             timeout=CLIENT_TIMEOUT_S,
-            event_hooks={"request": _control_token_hooks(control_token)[0]},
+            event_hooks={"request": control_token_hooks(control_token)[0]},
         ) as client:
             started = StartedUnit(
                 vendor=built.name,
@@ -718,28 +718,11 @@ async def _raise_on_near_miss_async(response: httpx.Response) -> None:
     _raise_on_near_miss(response)
 
 
-def _control_token_hooks(token: str | None) -> tuple[list[Any], list[Any]]:
-    """Request hooks, sync and async, sending ``token`` on control-plane paths and never to the vendor surface; a
-    header the caller set wins. Empty without a token."""
-    if token is None:
-        return [], []
-    value: str = token
-
-    def attach(request: httpx.Request) -> None:
-        if names_control_plane(request.url.path) and CONTROL_TOKEN_HEADER not in request.headers:
-            request.headers[CONTROL_TOKEN_HEADER] = value
-
-    async def attach_async(request: httpx.Request) -> None:
-        attach(request)
-
-    return [attach], [attach_async]
-
-
 def _http_client(base_url: str, unmatched: UnmatchedPolicy | None, control_token: str | None = None) -> httpx.Client:
     """The sync client of an HTTP driver, with the near-miss hook under ``"error"`` and the control token hook."""
     policy = checked_unmatched(unmatched) or DEFAULT_INPROCESS_POLICY
     hooks: dict[str, list[Any]] = {"response": [_raise_on_near_miss]} if policy == "error" else {}
-    hooks["request"] = _control_token_hooks(control_token)[0]
+    hooks["request"] = control_token_hooks(control_token)[0]
     return httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S, event_hooks=hooks)
 
 
@@ -748,7 +731,7 @@ def _async_hooks(client: httpx.Client, control_token: str | None = None) -> dict
     hooks: dict[str, list[Any]] = (
         {"response": [_raise_on_near_miss_async]} if client.event_hooks.get("response") else {}
     )
-    hooks["request"] = _control_token_hooks(control_token)[1]
+    hooks["request"] = control_token_hooks(control_token)[1]
     return hooks
 
 

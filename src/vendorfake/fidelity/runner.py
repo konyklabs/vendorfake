@@ -37,6 +37,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
+from vendorfake.core.control.access import ambient_control_token, control_token_hint, control_token_hooks
 from vendorfake.core.control.plane import MANIFEST_SCHEMA
 from vendorfake.core.kernel.router import Match, Router
 from vendorfake.core.kernel.types import Route, SignInput
@@ -153,8 +154,9 @@ class HttpCorpusClient:
 
     __slots__ = ("_client",)
 
-    def __init__(self, base_url: str, *, timeout_s: float = 30.0) -> None:
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s)
+    def __init__(self, base_url: str, *, timeout_s: float = 30.0, control_token: str | None = None) -> None:
+        hooks = control_token_hooks(control_token, base_path=httpx.URL(base_url).path)[0]
+        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, event_hooks={"request": hooks})
 
     def call(
         self,
@@ -279,11 +281,12 @@ class ControlPlaneWorld:
     """A running unit: ``/__unit/info``, ``/__unit/state/reset``, ``/__unit/auth``. The profile is DISCOVERED, never
     asserted, and read once -- a unit's profile does not change under it."""
 
-    __slots__ = ("_base_url", "_client", "_profile")
+    __slots__ = ("_base_url", "_client", "_profile", "_token")
 
     def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = HttpCorpusClient(base_url)
+        self._token = ambient_control_token(os.environ)
+        self._client = HttpCorpusClient(base_url, control_token=self._token)
         self._profile: str | None = None
 
     def profile(self) -> str:
@@ -317,7 +320,10 @@ class ControlPlaneWorld:
         if answered.status != 200:
             raise LookupError(
                 f"GET {self._base_url}{CONTROL_PREFIX}{name} answered {answered.status}, expected 200. "
-                f"--base-url must address a running unit, whose control plane answers on every profile."
+                + (
+                    control_token_hint(answered.status, self._token)
+                    or "--base-url must address a running unit, whose control plane answers on every profile."
+                )
             )
         return answered
 
@@ -492,7 +498,7 @@ def world_opener(base_url: str, world: World) -> Opener:
 
     @contextmanager
     def opener(_profile: str) -> Iterator[CorpusClient]:
-        client = HttpCorpusClient(base_url)
+        client = HttpCorpusClient(base_url, control_token=ambient_control_token(os.environ))
         try:
             world.reset()
             yield client

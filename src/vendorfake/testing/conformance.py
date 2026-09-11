@@ -184,7 +184,7 @@ def _http(vendor: str, profile: str) -> Iterator[ConformanceClient]:
 @contextmanager
 def _subprocess(vendor: str, profile: str) -> Iterator[ConformanceClient]:
     with served(vendor, profile) as child:
-        client = HttpConformanceClient(child.base_url)
+        client = HttpConformanceClient(child.base_url, control_token=child._control_token)
         try:
             yield client
         finally:

@@ -439,7 +439,13 @@ def test_the_literal_document_path_is_still_the_document(unit: Any) -> None:
 
 
 @pytest.mark.parametrize(
-    ("method", "raw_path"), [("GET", "//__unit/info"), ("GET", "/__unit//info"), ("POST", "//__unit/state/reset")]
+    ("method", "raw_path"),
+    [
+        ("GET", "//__unit/info"),
+        ("GET", "///__unit/info"),
+        ("GET", "/__unit//info"),
+        ("POST", "//__unit/state/reset"),
+    ],
 )
 def test_the_vendor_surface_refuses_what_the_router_reads_as_the_control_plane(
     unit: Any, method: str, raw_path: str
@@ -452,3 +458,23 @@ def test_the_vendor_surface_refuses_what_the_router_reads_as_the_control_plane(
     assert response.headers["x-unit-error"] == "not_found"
     assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
     assert unit.context.store.entity_digest() == before
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_404_on_the_vendor_surface(unit: Any) -> None:
+    """Starlette answers an unregistered verb itself; its handler must still split the surfaces, or a 405's
+    ``allowed`` list would enumerate control routes verb by verb."""
+    response = call(create_app(unit, surface="vendor"), "PROPFIND", "/__unit/state/reset")
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": "/__unit/state/reset"}}
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_surface_404_on_the_control_surface(unit: Any) -> None:
+    response = call(create_app(unit, surface="control", vendor_port=18080), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 404
+    assert response.json() == {"message": "PROPFIND /v2/orders/abc is the vendor surface; it is served on port 18080"}
+
+
+def test_a_verb_the_framework_refuses_is_still_the_kernel_s_405_on_both_surfaces(unit: Any) -> None:
+    response = call(create_app(unit), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 405
+    assert response.json()["error"]["info"]["allowed"] == ["GET", "POST"]

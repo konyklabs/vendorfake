@@ -4,8 +4,8 @@ share. JUDGMENT -- no vendor documents how a fake guards its own control plane."
 from __future__ import annotations
 
 import hmac
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any, Final
 
 from vendorfake.core.kernel.router import INTERNAL_PATH_PREFIX, split_path
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -14,7 +14,10 @@ __all__ = [
     "CONTROL_TOKEN_ENV",
     "CONTROL_TOKEN_HEADER",
     "HEALTH_PATH",
+    "ambient_control_token",
     "control_access_error",
+    "control_token_hint",
+    "control_token_hooks",
     "names_control_plane",
 ]
 
@@ -46,3 +49,43 @@ def control_access_error(method: str, path: str, headers: Mapping[str, str], tok
         detail="The control plane requires the vendorfake-control-token header.",
         field=CONTROL_TOKEN_HEADER,
     )
+
+
+def ambient_control_token(environ: Mapping[str, str]) -> str | None:
+    """``VENDORFAKE_CONTROL_TOKEN`` for a client addressing a running unit; blank reads as unset."""
+    return environ.get(CONTROL_TOKEN_ENV) or None
+
+
+def control_token_hooks(
+    token: str | None, *, base_path: str = ""
+) -> tuple[list[Callable[[Any], None]], list[Callable[[Any], Awaitable[None]]]]:
+    """``httpx`` request hooks, sync and async, sending ``token`` on control-plane paths below ``base_path`` and never to
+    the vendor surface; a header the caller set wins. Empty without a token. Duck-typed: the core imports no client."""
+    if token is None:
+        return [], []
+    value: str = token
+    prefix = base_path.rstrip("/")
+
+    def attach(request: Any) -> None:
+        path = str(request.url.path)
+        if prefix and (path == prefix or path.startswith(f"{prefix}/")):
+            path = path[len(prefix) :]
+        if names_control_plane(path) and CONTROL_TOKEN_HEADER not in request.headers:
+            request.headers[CONTROL_TOKEN_HEADER] = value
+
+    async def attach_async(request: Any) -> None:
+        attach(request)
+
+    return [attach], [attach_async]
+
+
+def control_token_hint(status: int, token: str | None) -> str:
+    """What a client's error says about a 401 from a control plane, or ``""`` for any other answer."""
+    if status != 401:
+        return ""
+    if token is None:
+        return (
+            f"The control plane requires a token: export {CONTROL_TOKEN_ENV} with the unit's token "
+            "(a variable, never a flag, which process listings show)."
+        )
+    return f"{CONTROL_TOKEN_ENV} is set, but the unit refused it."
