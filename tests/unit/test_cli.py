@@ -820,3 +820,121 @@ def test_a_describing_subcommand_refuses_a_vendor_list() -> None:
         run("info", "--vendor", "clover,square")
 
     assert str(raised.value) == "vendorfake: --vendor names several vendors; only `serve` mounts more than one"
+
+
+# ---------------------------------------------------------------------------
+# `--profile` per mount: a `vendor=profile` pair list, and VENDORFAKE_PROFILE_<VENDOR>
+# (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+
+def _serve_and_capture_profiles(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str]
+) -> dict[str, str]:
+    """Run `serve` for real (`run_server` intercepted, everything else genuine)
+    and return the resolved profile each mounted vendor actually built on,
+    keyed by vendor name."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+    import vendorfake.registry as registry_module
+
+    seen: dict[str, str] = {}
+    real_create_unit = registry_module.create_unit
+
+    def spy_create_unit(*, vendor: str, **kwargs: object) -> object:
+        built = real_create_unit(vendor=vendor, **kwargs)  # type: ignore[arg-type]
+        seen[vendor] = built.context.config.profile
+        return built
+
+    monkeypatch.setattr(registry_module, "create_unit", spy_create_unit)
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", *argv])
+    assert cli_module._serve(args, env, io.StringIO()) == 0
+    return seen
+
+
+def test_serve_mounts_each_vendor_on_its_own_profile_via_the_pair_form(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--profile full,square=oauth-only` gives clover the shared bare default
+    and square its own pair -- resolved per mount, not once for both."""
+    seen = _serve_and_capture_profiles(
+        monkeypatch, ["--vendor", "clover,square", "--profile", "full,square=oauth-only"], {}
+    )
+    assert seen == {"clover": "full", "square": "oauth-only"}
+
+
+def test_serve_mounts_each_vendor_on_its_own_profile_via_the_env_form_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same split, reached with $VENDORFAKE_PROFILE_SQUARE instead of a
+    --profile pair: the two ways to say it agree, and the variable beats the
+    bare --profile shared by every other mount."""
+    seen = _serve_and_capture_profiles(
+        monkeypatch,
+        ["--vendor", "clover,square", "--profile", "full"],
+        {"VENDORFAKE_PROFILE_SQUARE": "oauth-only"},
+    )
+    assert seen == {"clover": "full", "square": "oauth-only"}
+
+
+def test_serve_plain_profile_path_is_unchanged_with_the_pair_grammar_added(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bare `--profile full` with no `=` or `,` still means exactly what it
+    meant before konyklabs/roadmap#134: every mount on that one profile."""
+    seen = _serve_and_capture_profiles(monkeypatch, ["--vendor", "clover,square", "--profile", "full"], {})
+    assert seen == {"clover": "full", "square": "full"}
+
+
+@pytest.mark.parametrize(
+    ("profile_arg", "fragment"),
+    [
+        ("full,square=oauth-only,toast=full", "does not mount"),
+        ("full,no-faults", "two bare items"),
+        ("square=full,square=oauth-only", "twice"),
+        ("full,", "empty item"),
+    ],
+)
+def test_serve_refuses_a_malformed_profile_pair_list(profile_arg: str, fragment: str) -> None:
+    """Each of the four refusals konyklabs/roadmap#134 names: a pair for a
+    vendor this serve does not mount, two bare items, the same vendor named
+    twice, and an empty item."""
+    import vendorfake.cli as cli_module
+
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "clover,square", "--profile", profile_arg])
+    with pytest.raises(SystemExit) as raised:
+        cli_module._serve(args, {}, io.StringIO())
+
+    message = str(raised.value)
+    assert message.startswith("vendorfake: "), message
+    assert fragment in message
+
+
+def test_serve_warns_about_a_profile_variable_naming_no_installed_vendor(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A typo in the suffix pins nothing, silently, unless something says so
+    (konyklabs/roadmap#134 point 4) -- not a refusal, since one environment may
+    feed several processes each serving a different subset of vendors."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "square"])
+    assert cli_module._serve(args, {"VENDORFAKE_PROFILE_NOSUCHVENDOR": "full"}, io.StringIO()) == 0
+
+    captured = capsys.readouterr()
+    assert "VENDORFAKE_PROFILE_NOSUCHVENDOR" in captured.err
+    assert "square" in captured.err
+
+
+@pytest.mark.parametrize("subcommand", ["routes", "info"])
+def test_a_describing_subcommand_refuses_the_serve_only_pair_form(subcommand: str) -> None:
+    """`routes`/`info` describe one unit with one profile; the `vendor=profile`
+    list is `serve`'s grammar, and the refusal names it rather than trying to
+    guess which pair the caller meant."""
+    with pytest.raises(SystemExit) as raised:
+        run(subcommand, "--vendor", "square", "--profile", "square=oauth-only")
+
+    message = str(raised.value)
+    assert message.startswith("vendorfake: "), message
+    assert "serve" in message

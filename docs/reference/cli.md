@@ -53,8 +53,14 @@ options:
                         separated list (`clover,square`) and mounts each
                         vendor under /<vendor>/; every other subcommand
                         describes one vendor and refuses a list.
-  --profile PROFILE     Profile name or path. Defaults to $VENDORFAKE_PROFILE,
-                        then to the vendor's default profile.
+  --profile PROFILE     Profile name or path. With several --vendor mounts (or
+                        a single one named explicitly), also takes a comma
+                        list of vendor=profile pairs plus at most one bare
+                        item as the shared default, e.g. `full,square=oauth-
+                        only`. Precedence per mount, most specific first: a
+                        vendor=profile pair here, $VENDORFAKE_PROFILE_<VENDOR>
+                        (e.g. VENDORFAKE_PROFILE_SQUARE), the bare --profile,
+                        $VENDORFAKE_PROFILE, then the vendor's default.
   --host HOST           Interface to bind. Defaults to $VENDORFAKE_HOST, then
                         loopback.
   --port PORT           Port to bind; 0 picks a free one and prints it.

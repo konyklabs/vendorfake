@@ -67,6 +67,23 @@ def test_each_mount_answers_for_its_own_vendor(mounted: Any) -> None:
     assert call(mounted, "GET", "/square/__unit/info").json()["vendor"]["name"] == "square"
 
 
+def test_each_mount_reports_its_own_profile_when_pinned_independently() -> None:
+    """konyklabs/roadmap#134: a stack wanting Clover on ``full`` and Square on
+    ``oauth-only`` reaches it with one shared ``--profile``/env and a
+    ``VENDORFAKE_PROFILE_SQUARE`` pin, not two different ``profile=``
+    arguments -- the mount must carry each unit's own resolved profile through
+    untouched, the same as it does for the vendor name."""
+    clover = create_unit(vendor="clover", profile="full")
+    square = create_unit(vendor="square", env={"VENDORFAKE_PROFILE": "full", "VENDORFAKE_PROFILE_SQUARE": "oauth-only"})
+    try:
+        two_profiles = create_mounted_app({"clover": create_app(clover), "square": create_app(square)})
+        assert call(two_profiles, "GET", "/clover/__unit/info").json()["profile"] == "full"
+        assert call(two_profiles, "GET", "/square/__unit/info").json()["profile"] == "oauth-only"
+    finally:
+        clover.stop()
+        square.stop()
+
+
 def test_a_mount_matches_whole_segments_only(mounted: Any) -> None:
     """``/cloverx`` is not ``/clover`` with a suffix, it is a different vendor
     nobody mounted -- and answering it out of the Clover unit would be the

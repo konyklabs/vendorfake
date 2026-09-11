@@ -137,6 +137,18 @@ def test_an_ambient_profile_variable_is_honoured(binding: str, open_unit: Callab
 
 
 @pytest.mark.parametrize("binding", ALL)
+def test_an_ambient_per_vendor_profile_variable_is_honoured(
+    binding: str, open_unit: Callable[..., Iterator[Bound]]
+) -> None:
+    """``VENDORFAKE_PROFILE_SQUARE`` (konyklabs/roadmap#134) beats the bare
+    ``VENDORFAKE_PROFILE`` on every binding, this module's fixed ``VENDOR``
+    being ``"square"``: the vendor-specific pin is the more specific of the
+    two, on every binding alike."""
+    with open_unit(ambient={"VENDORFAKE_PROFILE": "full", "VENDORFAKE_PROFILE_SQUARE": "no-faults"}) as bound:
+        assert bound.client.get("/__unit/info").json()["profile"] == "no-faults"
+
+
+@pytest.mark.parametrize("binding", ALL)
 def test_an_ambient_clock_variable_is_honoured(binding: str, open_unit: Callable[..., Iterator[Bound]]) -> None:
     with open_unit(ambient={"VENDORFAKE_CLOCK": "virtual"}) as bound:
         assert bound.client.get("/__unit/info").json()["clock"]["mode"] == "virtual"

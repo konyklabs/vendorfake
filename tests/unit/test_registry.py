@@ -102,6 +102,31 @@ def test_a_profile_name_that_does_not_exist_lists_what_does(tmp_path: Path) -> N
     assert "test" in str(caught.value)
 
 
+def _vendor_with_a_second_profile(tmp_path: Path) -> FakeVendor:
+    """A vendor shipping both ``test`` (the default fixture profile) and
+    ``pinned``, so ``VENDORFAKE_PROFILE_<VENDOR>`` has somewhere distinct to
+    point."""
+    directory = _profile_dir(tmp_path, {"capabilities": ["orders", "chaos"]})
+    (directory / "pinned.json").write_text(json.dumps({"capabilities": ["orders"]}), encoding="utf-8")
+    return FakeVendor(profile_dir=directory, base_dir=tmp_path)
+
+
+def test_a_per_vendor_profile_variable_beats_the_profile_argument(tmp_path: Path) -> None:
+    """konyklabs/roadmap#134: ``create_unit`` passes the resolved vendor's name
+    down to ``load_profile`` as ``vendor=``, so ``VENDORFAKE_PROFILE_ACME``
+    outranks the ``profile=`` argument for a vendor named ``acme``."""
+    vendor = _vendor_with_a_second_profile(tmp_path)
+    unit = create_unit(vendor=vendor, profile="test", env={"VENDORFAKE_PROFILE_ACME": "pinned"})
+    assert unit.context.config.profile == "pinned"
+
+
+def test_a_per_vendor_profile_variable_for_another_vendor_is_ignored(tmp_path: Path) -> None:
+    """A variable naming a different vendor changes nothing for this one."""
+    vendor = _vendor_with_a_second_profile(tmp_path)
+    unit = create_unit(vendor=vendor, profile="test", env={"VENDORFAKE_PROFILE_OTHERVENDOR": "pinned"})
+    assert unit.context.config.profile == "test"
+
+
 def test_create_unit_starts_the_unit(tmp_path: Path) -> None:
     vendor = _vendor(tmp_path)
     create_unit(vendor=vendor, profile="test")

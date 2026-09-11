@@ -27,7 +27,7 @@ import httpx
 
 from vendorfake import registry
 from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
-from vendorfake.core.config.profile import DEFAULT_PROFILE_NAME, ENV_SEED, ENV_VENDOR_PREFIX, load_profile
+from vendorfake.core.config.profile import ENV_SEED, ENV_VENDOR_PREFIX, load_profile, resolve_profile_name
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
@@ -583,9 +583,9 @@ def unit(
     The overloads bind the seed type, a plain ``str`` vendor yielding
     ``StartedUnit[Seed]``; the implementation delegates to a private generator
     because ``@contextmanager`` and overloads do not compose in either checker.
-    ``profile=None`` resolves in the three steps ``vendorfake serve`` uses: the
-    argument, ``VENDORFAKE_PROFILE`` in this call's ``env=``, then ``full``, and
-    passing both ``profile`` and ``capabilities`` is a ``ValueError``.
+    ``profile=None`` resolves the way ``vendorfake serve`` does: ``VENDORFAKE_PROFILE_<VENDOR>`` in this
+    call's ``env=``, the argument, the bare ``VENDORFAKE_PROFILE``, then ``full``; ``profile`` and
+    ``capabilities`` together is a ``ValueError``.
     ``seed_overlay`` is a partial seed document merged over the profile's, typed
     per vendor literal, whose ``tokens`` and identity collections are refused.
     """
@@ -1128,10 +1128,9 @@ def _served(
     resolved_profile, capability_layer = registry.resolve_capabilities(definition, profile, capabilities)
     layer.update(capability_layer)
     child_view = {**os.environ, **layer}
-    # The same resolution order as unit() and the CLI: the argument, else the
-    # variable the child will see, else the default. Passed to the child as a flag
-    # so parent and child agree on the seed.
-    profile = resolved_profile or child_view.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
+    # The same order as unit()/the CLI, against the env the child will also see, so the seed check below
+    # and the --profile flag handed to the child agree with what the child resolves on its own.
+    profile = resolve_profile_name(resolved_profile, child_view, vendor=resolved_name)
     resolution_env = {
         key: value for key, value in child_view.items() if key.startswith(ENV_VENDOR_PREFIX) or key == ENV_SEED
     }

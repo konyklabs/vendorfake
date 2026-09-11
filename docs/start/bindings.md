@@ -167,8 +167,9 @@ with the child's. Four variables behave specially:
 - `VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL` — refused with
   a `ValueError` naming the parameter to use, rather than silently beaten by
   the flag `served()` passes.
-- `VENDORFAKE_PROFILE` — honoured; an explicit `profile=` beats it, and
-  `served(capabilities=)` resolves the way `unit()`'s does.
+- `VENDORFAKE_PROFILE` — honoured; an explicit `profile=` beats it,
+  `VENDORFAKE_PROFILE_<VENDOR>` (konyklabs/roadmap#134) beats `profile=` in
+  turn, and `served(capabilities=)` resolves the way `unit()`'s does.
 - `VENDORFAKE_SEED` — refused, because `.seed` is derived from the vendor's
   constants and could not describe a child hydrated from another document.
 - `VENDORFAKE_SEED_OVERLAY` — refused in favour of
@@ -241,7 +242,11 @@ service reaches it over the compose network's internal DNS; publishing the
 port is only for a developer who wants `curl localhost:8080` from the host.
 
 Or one service for all of them: `VENDORFAKE_VENDOR` takes a comma-separated
-list, and the process mounts one unit per vendor under `/<vendor>/`.
+list, and the process mounts one unit per vendor under `/<vendor>/`. Each
+mount can still run its own profile — `VENDORFAKE_PROFILE` is the shared
+default, and `VENDORFAKE_PROFILE_<VENDOR>` (`VENDORFAKE_PROFILE_SQUARE` for
+`square`) pins one vendor's ahead of it, so Square running `oauth-only`
+against a `full` Clover needs no second process (konyklabs/roadmap#134).
 
 ```yaml
   vendorfake:
@@ -249,6 +254,7 @@ list, and the process mounts one unit per vendor under `/<vendor>/`.
     environment:
       VENDORFAKE_VENDOR: clover,square
       VENDORFAKE_PROFILE: full
+      VENDORFAKE_PROFILE_SQUARE: oauth-only
     ports:
       - "127.0.0.1:8080:8080"
     healthcheck:
