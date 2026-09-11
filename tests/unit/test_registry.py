@@ -410,3 +410,20 @@ def test_a_unit_started_by_profile_reports_no_requested_capabilities() -> None:
         assert unit.context.config.requested_capabilities is None
     finally:
         unit.stop()
+
+
+def test_every_fault_scope_is_a_rule_scope_and_follows_the_webhook_prefix() -> None:
+    """``scope`` is what a consumer copies into a rule, so it is pinned to a
+    source independent of :func:`faults`: the rule grammar's closed ``ChaosScope``
+    vocabulary, and the catalogue's own naming, where exactly the ``webhook.``
+    faults are webhook-scoped."""
+    from typing import get_args
+
+    from vendorfake.core.chaos.rules import ChaosScope
+    from vendorfake.registry import faults
+
+    rows = faults()
+    assert {row.scope for row in rows} <= set(get_args(ChaosScope))
+    assert {row.name for row in rows if row.scope == "webhook"} == {
+        row.name for row in rows if row.name.startswith("webhook.")
+    }
