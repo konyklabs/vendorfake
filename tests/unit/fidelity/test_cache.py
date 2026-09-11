@@ -375,6 +375,59 @@ def test_a_case_note_that_repeats_the_vendor_document_is_a_leak() -> None:
     assert any(window.startswith("the tax rate is expressed as a decimal") for window in leak["corpus/b.json"])
 
 
+def test_enum_identifier_matchers_do_not_leak_against_a_json_schema_enum() -> None:
+    """konyklabs/roadmap#135: an underscore joins a token, so a corpus matcher
+    like ``${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}`` is a handful of
+    words, not an eight-word run of bare identifiers that also occurs in the
+    vendor's own enum listing."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = (
+        b'"roundingType": {"enum": ["HALF_UP", "HALF_EVEN", "ALWAYS_UP", "ALWAYS_DOWN"]}, '
+        b'"pricingStrategy": {"enum": ["BASE_PRICE", "MENU_SPECIFIC_PRICE", "TIME_SPECIFIC_PRICE", '
+        b'"SIZE_PRICE", "OPEN_PRICE"]}'
+    )
+    corpus = {
+        "corpus/config.taxrates.list.json": '"roundingType": "${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}"',
+        "corpus/menus.v3.menus.json": (
+            '"pricingStrategy": "${re:BASE_PRICE|MENU_SPECIFIC_PRICE|TIME_SPECIFIC_PRICE|SIZE_PRICE|OPEN_PRICE}"'
+        ),
+    }
+    assert prose_leaks(corpus, [document]) == {}
+
+
+def test_an_eight_word_sentence_copied_verbatim_still_leaks() -> None:
+    """The guard is not weakened: an ordinary sentence copied out of the
+    vendor's document is still an eight-word match."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"A tax rate applies to every order line unless the item is exempt.\n"
+    copied = {"corpus/d.json": '{"note": "A tax rate applies to every order line unless the item is exempt"}'}
+    leak = prose_leaks(copied, [document])
+    assert list(leak) == ["corpus/d.json"]
+
+
+def test_a_copied_sentence_with_one_identifier_still_leaks() -> None:
+    """One enum-shaped word inside an otherwise ordinary sentence must not
+    hide the whole window from the guard."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"The HALF_UP mode rounds a half away from zero, always.\n"
+    copied = {"corpus/e.json": '{"note": "the HALF_UP mode rounds a half away from zero always"}'}
+    leak = prose_leaks(copied, [document])
+    assert list(leak) == ["corpus/e.json"]
+
+
+def test_urls_with_identifier_like_segments_remain_ignored() -> None:
+    """A URL is stripped whole before tokenization, underscores in its path
+    notwithstanding."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"See https://doc.example.test/HALF_UP/HALF_EVEN/ALWAYS_UP/ALWAYS_DOWN for the rounding modes.\n"
+    corpus = {"corpus/f.json": '{"url": "https://doc.example.test/HALF_UP/HALF_EVEN/ALWAYS_UP/ALWAYS_DOWN"}'}
+    assert prose_leaks(corpus, [document]) == {}
+
+
 def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
     """Adversarial A8 (konyklabs/roadmap#56): the cache must never be the
     package directory, where `git add -A` would sweep the vendor's document in."""
