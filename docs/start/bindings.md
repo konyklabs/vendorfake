@@ -200,9 +200,10 @@ anything driven through [Testcontainers](https://testcontainers.com/) or
 docker compose. `POST /__unit/state/reset` returns a unit to its seed scenario
 without a container restart.
 
-Bind the port to loopback (`-p 127.0.0.1:...`): the control plane is
-unauthenticated by design, so a fake reachable from outside is an
-outbound-request primitive for anyone who can route to it.
+Bind the port to loopback (`-p 127.0.0.1:...`): by default the control plane
+is unauthenticated, so a fake reachable from outside is an outbound-request
+primitive for anyone who can route to it. When the fake must be reachable
+over a network, see [A control plane on its own port](#a-control-plane-on-its-own-port).
 
 ### Docker compose
 
@@ -218,7 +219,7 @@ services:
       - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/info', timeout=2).status == 200 else 1)"]
+             "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/health', timeout=2).status == 200 else 1)"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -235,7 +236,7 @@ services:
 One service per vendor your suite needs — `vendorfake-square`,
 `vendorfake-clover`, `vendorfake-toast`, `vendorfake-lightspeed` — each with
 its own `VENDORFAKE_VENDOR`. The image already carries a `HEALTHCHECK` on
-`GET /__unit/info`, so `depends_on: condition: service_healthy` unblocks the
+`GET /__unit/health`, so `depends_on: condition: service_healthy` unblocks the
 app only once the unit has hydrated its seed and is answering. The `app`
 service reaches it over the compose network's internal DNS; publishing the
 port is only for a developer who wants `curl localhost:8080` from the host.
@@ -253,7 +254,7 @@ list, and the process mounts one unit per vendor under `/<vendor>/`.
       - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "python", "-c",
-             "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/info', timeout=2).status == 200 else 1)"]
+             "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/health', timeout=2).status == 200 else 1)"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -272,7 +273,7 @@ Each mount is a whole unit with its own control plane, so everything the
 single-vendor form serves at `/__unit/...` is at `/clover/__unit/...` here —
 reset Clover without touching Square, and `GET /clover/__unit/manifest`
 reports a `base_url` that carries the prefix. The `HEALTHCHECK` is unchanged:
-the root `/__unit/info` answers for the whole process, listing every vendor it
+the root `/__unit/health` answers for the whole process, listing every vendor it
 mounted, and is 200 only once all of them have hydrated their seeds, so one
 `service_healthy` still gates the app on all of them. One `--profile` applies
 to every vendor in the list; different profiles per vendor need a service per
@@ -282,6 +283,88 @@ which is worth checking first when a base URL looks right and everything 404s.
 [`examples/pytest-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/pytest-consumer)
 ships a Testcontainers variant, for a test process that would rather own the
 container's lifecycle in code.
+
+### A control plane on its own port
+
+When the service under test is already deployed and the test runner is a
+separate process, two callers must reach the fake over a network: the service
+calls the vendor surface, and the runner drives `/__unit/*`. Two opt-ins make
+that safe. Both are off unless set, and neither changes the vendor surface.
+
+- **A listener of its own.** `serve --control-port N` (or
+  `VENDORFAKE_CONTROL_PORT`) serves `/__unit/*` on a second socket, bound to
+  `--control-host` (`VENDORFAKE_CONTROL_HOST`, defaulting to the vendor host).
+  The vendor port then answers every `/__unit/*` path with the vendor's own
+  404, and the control port answers a vendor path with a 404 naming the vendor
+  port. With several vendors mounted, the root index moves to the control port.
+- **A token.** With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request
+  but `GET /__unit/health` must carry it in the `vendorfake-control-token`
+  header, or it gets the vendor's 401. The check runs before routing, so an
+  unknown control path is refused the same way. No response echoes the token,
+  and `GET /__unit/info` reports only `control.token_required`. A profile
+  document has no key for it. `unit()`, `async_unit()`, `serve_in_thread()` and
+  `served()` send it on control-plane paths for you.
+
+Docker networks do not filter ports, so keeping the control port off the
+service's network means binding each listener to one network's address. The
+image's own `HEALTHCHECK` probes loopback, so a service bound this way names
+its own probe:
+
+```yaml
+services:
+  vendorfake-square:
+    build: https://github.com/konyklabs/vendorfake.git
+    environment:
+      VENDORFAKE_VENDOR: square
+      VENDORFAKE_HOST: 172.30.0.10          # vendor surface: the service's network
+      VENDORFAKE_CONTROL_HOST: 172.31.0.10  # control plane: the runner's network
+      VENDORFAKE_CONTROL_PORT: "8081"
+      VENDORFAKE_CONTROL_TOKEN: ${VENDORFAKE_CONTROL_TOKEN:?export it from your CI secret store}
+    networks:
+      service: {ipv4_address: 172.30.0.10}
+      runner: {ipv4_address: 172.31.0.10}
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request as u; exit(0 if u.urlopen('http://172.31.0.10:8081/__unit/health', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    environment:
+      SQUARE_BASE_URL: http://172.30.0.10:8080
+    networks: [service]
+    depends_on:
+      vendorfake-square:
+        condition: service_healthy
+
+  tests:
+    build: ./tests
+    environment:
+      VENDORFAKE_CONTROL_URL: http://172.31.0.10:8081
+      VENDORFAKE_CONTROL_TOKEN: ${VENDORFAKE_CONTROL_TOKEN:?export it from your CI secret store}
+    networks: [runner]
+    depends_on:
+      vendorfake-square:
+        condition: service_healthy
+
+networks:
+  service:
+    ipam: {config: [{subnet: 172.30.0.0/24}]}
+  runner:
+    ipam: {config: [{subnet: 172.31.0.0/24}]}
+```
+
+Bound to `0.0.0.0` instead, both ports are reachable from both networks, and
+the token is then the only thing between the service's network and the control
+plane. The image's own `HEALTHCHECK` follows `VENDORFAKE_CONTROL_PORT` when it is
+set, so set the port by variable rather than by flag in a container.
+
+**A networked unit is still one run's unit.** State, the journal, the request
+log and chaos rules are global to the process. Two test runs driving one fake
+at the same time reset and fault each other, so concurrent runs each need their
+own process (konyklabs/roadmap#134).
 
 ### CI
 

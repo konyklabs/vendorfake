@@ -82,8 +82,8 @@ def test_a_mount_matches_whole_segments_only(mounted: Any) -> None:
 
 @pytest.mark.parametrize("path", ["/", "/__unit/info", "/__unit/health"])
 def test_the_root_index_lists_every_mount(mounted: Any, path: str) -> None:
-    """``/__unit/info`` is what the image's ``HEALTHCHECK`` probes, so a
-    multi-vendor process must answer it 200 on the same path a single-vendor
+    """``/__unit/health`` is what the image's ``HEALTHCHECK`` probes, so a
+    multi-vendor process must answer it and ``/__unit/info`` 200 on the same path a single-vendor
     one does -- and it is 200 exactly when every unit was constructed, which
     has already happened by the time anything is listening."""
     response = call(mounted, "GET", path)
@@ -313,3 +313,13 @@ def test_create_mounted_app_keeps_the_order_it_was_given(clover_app: Any, square
     assert app.names == ("square", "clover")
     assert call(app, "GET", "/__unit/info").json()["vendors"] == ["square", "clover"]
     assert call(app, "GET", "/nope").headers[MOUNTS_HEADER.decode()] == "square,clover"
+
+
+def test_a_vendor_listener_mount_leaves_the_index_to_the_control_listener(clover_app: Any, square_app: Any) -> None:
+    """With ``index=False`` the root paths are the mount 404 like any other unmounted path (konyklabs/roadmap#134)."""
+    vendor_mount = create_mounted_app({"clover": clover_app, "square": square_app}, index=False)
+    for path in ("/", "/__unit/info", "/__unit/health"):
+        response = call(vendor_mount, "GET", path)
+        assert response.status_code == 404
+        assert response.headers[MOUNTS_HEADER.decode()] == "clover,square"
+    assert call(vendor_mount, "GET", "/clover/__unit/info").status_code == 200

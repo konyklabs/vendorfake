@@ -20,6 +20,7 @@ from typing import Any
 
 from vendorfake.core.capability.registry import apply_capability_delta
 from vendorfake.core.config.models import (
+    ControlSection,
     ProfileDocument,
     ResolvedChaos,
     ResolvedConfig,
@@ -119,6 +120,12 @@ ENV_TABLE: tuple[EnvVar, ...] = (
     ),
     EnvVar("VENDORFAKE_PORT", "transport.port", "Port for the HTTP binding."),
     EnvVar("VENDORFAKE_HOST", "transport.host", "Interface for the HTTP binding."),
+    EnvVar(
+        "VENDORFAKE_CONTROL_TOKEN",
+        "control.token",
+        "Every /__unit/* request but GET /__unit/health must carry it in vendorfake-control-token. "
+        "Environment only: the profile document has no key for it.",
+    ),
     EnvVar("VENDORFAKE_LOG_LEVEL", "log_level", "Minimum level the unit's logger emits."),
     EnvVar(
         ENV_VENDOR_PREFIX,
@@ -373,6 +380,7 @@ def resolve_config(
             port=8080 if port is None else port,
             host=environ.get("VENDORFAKE_HOST"),
         ),
+        control=ControlSection(token=environ.get("VENDORFAKE_CONTROL_TOKEN") or None),
         requests=(
             document.requests if capacity is None else document.requests.model_copy(update={"capacity": capacity})
         ),

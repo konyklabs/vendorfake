@@ -10,12 +10,21 @@ from vendorfake.asgi.adapt import TRANSPORT, to_response, to_unit_request
 from vendorfake.asgi.app import (
     HTTP_METHODS,
     OPENAPI_PATH,
+    Surface,
     TransportFaultAbort,
     create_app,
     registered_methods,
 )
 from vendorfake.asgi.mount import ASGIApp, MountedApp, create_mounted_app
-from vendorfake.asgi.serve import DEFAULT_HOST, DEFAULT_PORT, bind, bound_port, run_server, serve_in_thread
+from vendorfake.asgi.serve import (
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+    bind,
+    bound_port,
+    run_server,
+    run_split_server,
+    serve_in_thread,
+)
 
 __all__ = [
     "DEFAULT_HOST",
@@ -25,6 +34,7 @@ __all__ = [
     "TRANSPORT",
     "ASGIApp",
     "MountedApp",
+    "Surface",
     "TransportFaultAbort",
     "bind",
     "bound_port",
@@ -32,6 +42,7 @@ __all__ = [
     "create_mounted_app",
     "registered_methods",
     "run_server",
+    "run_split_server",
     "serve_in_thread",
     "to_response",
     "to_unit_request",

@@ -68,6 +68,20 @@ else
   fi
 fi
 
+# The HEALTHCHECK's command, copied: a change to one without the other fails the exec step below.
+HEALTHCHECK_PY="import os, sys, urllib.request; port = os.environ.get('VENDORFAKE_CONTROL_PORT') or os.environ.get('VENDORFAKE_PORT', '8080'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/__unit/health', timeout=2).status == 200 else 1)"
+
+wait_healthy() {
+  local status="starting"
+  for _ in $(seq 1 "$HEALTH_TIMEOUT_S"); do
+    status=$(docker inspect --format '{{.State.Health.Status}}' "$1" 2>/dev/null || echo "gone")
+    [ "$status" = "healthy" ] && break
+    [ "$status" = "gone" ] && break
+    sleep 1
+  done
+  printf '%s' "$status"
+}
+
 say "the image runs as a non-root user"
 # The exit status is checked before the value: a failed `docker run` leaves
 # an empty capture, and an empty string compared against "0" reads as ok.
@@ -93,13 +107,7 @@ for vendor in "${vendors[@]}"; do
     continue
   fi
 
-  status="starting"
-  for _ in $(seq 1 "$HEALTH_TIMEOUT_S"); do
-    status=$(docker inspect --format '{{.State.Health.Status}}' "$name" 2>/dev/null || echo "gone")
-    [ "$status" = "healthy" ] && break
-    [ "$status" = "gone" ] && break
-    sleep 1
-  done
+  status=$(wait_healthy "$name")
   if [ "$status" = "healthy" ]; then
     ok "HEALTHCHECK healthy"
   else
@@ -123,7 +131,7 @@ for vendor in "${vendors[@]}"; do
   fi
 
   # The exact command the HEALTHCHECK runs, exit code and all.
-  if docker exec "$name" python -c "import os, sys, urllib.request; port = os.environ.get('VENDORFAKE_PORT', '8080'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/__unit/info', timeout=2).status == 200 else 1)"; then
+  if docker exec "$name" python -c "$HEALTHCHECK_PY"; then
     ok "healthcheck command exits 0"
   else
     fail "healthcheck command exited non-zero"
@@ -137,6 +145,39 @@ for vendor in "${vendors[@]}"; do
     ok "every request was answered by the unit"
   fi
 done
+
+vendor="${vendors[0]:-}"
+if [ -n "$vendor" ]; then
+  say "serve $vendor with a control listener and a token, and wait for HEALTHCHECK"
+  name="vendorfake-verify-control-$$"
+  containers+=("$name")
+  if ! docker run -d --name "$name" -e "VENDORFAKE_VENDOR=$vendor" -e VENDORFAKE_CONTROL_PORT=8081 \
+      -e VENDORFAKE_CONTROL_TOKEN=verify-token -p "127.0.0.1::8080" -p "127.0.0.1::8081" "$IMAGE" >/dev/null; then
+    fail "docker run failed for $vendor with a control listener"
+  else
+    vendor_port=$(docker port "$name" 8080/tcp | head -1 | sed 's/.*://')
+    control_port=$(docker port "$name" 8081/tcp | head -1 | sed 's/.*://')
+    status=$(wait_healthy "$name")
+    if [ "$status" = "healthy" ]; then
+      ok "HEALTHCHECK healthy on the control port, with no token"
+    else
+      fail "HEALTHCHECK is '$status' after ${HEALTH_TIMEOUT_S}s with a control listener"
+      docker logs "$name" 2>&1 | tail -20
+    fi
+    expect_status() {
+      local want="$1" what="$2"
+      shift 2
+      local got
+      got=$(curl -s -o /dev/null -w '%{http_code}' "$@")
+      if [ "$got" = "$want" ]; then ok "$what: $got"; else fail "$what: $got, expected $want"; fi
+    }
+    expect_status 401 "control /__unit/info without the token" "http://127.0.0.1:$control_port/__unit/info"
+    expect_status 200 "control /__unit/info with the token" -H "vendorfake-control-token: verify-token" \
+      "http://127.0.0.1:$control_port/__unit/info"
+    expect_status 404 "vendor port /__unit/info" -H "vendorfake-control-token: verify-token" \
+      "http://127.0.0.1:$vendor_port/__unit/info"
+  fi
+fi
 
 say "summary"
 if [ "$failed" -ne 0 ]; then

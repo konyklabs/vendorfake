@@ -41,7 +41,9 @@ public API a module here imitates.
 
 ```text
 usage: vendorfake serve [-h] [--vendor VENDOR] [--profile PROFILE]
-                        [--host HOST] [--port PORT] [--log-level LOG_LEVEL]
+                        [--host HOST] [--port PORT]
+                        [--control-port CONTROL_PORT]
+                        [--control-host CONTROL_HOST] [--log-level LOG_LEVEL]
                         [--validate]
 
 options:
@@ -59,6 +61,14 @@ options:
                         loopback.
   --port PORT           Port to bind; 0 picks a free one and prints it.
                         Defaults to $VENDORFAKE_PORT, then 8080.
+  --control-port CONTROL_PORT
+                        Serve /__unit/* on this port of its own, answering it
+                        on --port with the vendor's 404; 0 picks a free one.
+                        Defaults to $VENDORFAKE_CONTROL_PORT; unset, one port
+                        serves both.
+  --control-host CONTROL_HOST
+                        Interface for --control-port. Defaults to
+                        $VENDORFAKE_CONTROL_HOST, then the vendor host.
   --log-level LOG_LEVEL
                         uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL,
                         then the profile's.
