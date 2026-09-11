@@ -18,9 +18,10 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: konyklabs/.github/.github/workflows/release-please.yml@23e6148146eceb8ba4a4a929e6574c099a98d3d9 # main
-    with:
-      release-type: python
+    # No `with: release-type`: manifest mode, so release-please reads
+    # release-please-config.json (extra-files for the docs pins,
+    # bump-minor-pre-major) and .release-please-manifest.json (konyklabs/roadmap#106).
+    uses: konyklabs/.github/.github/workflows/release-please.yml@a70221d667cb7ba702c6884b6544ec409c1ed369 # main
 
   # PyPI via OIDC trusted publishing -- no token secret anywhere.
   #
