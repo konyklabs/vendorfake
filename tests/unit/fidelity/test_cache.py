@@ -418,6 +418,25 @@ def test_a_copied_sentence_with_one_identifier_still_leaks() -> None:
     assert list(leak) == ["corpus/e.json"]
 
 
+@pytest.mark.parametrize(
+    "document",
+    [
+        rb"Use HALF\_UP to round a half away from zero",
+        rb'"description": "Use HALF\\_UP to round a half away from zero"',
+    ],
+    ids=["markdown", "markdown-inside-json"],
+)
+def test_an_escaped_identifier_still_matches_its_unescaped_copy(document: bytes) -> None:
+    """A vendor description written in Markdown escapes the underscore, and a
+    JSON document escapes that backslash again; a sentence copied from the
+    rendering carries a bare underscore. All three must tokenize alike, or the
+    escape hides the copy."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    copied = {"corpus/g.json": '{"note": "Use HALF_UP to round a half away from zero"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/g.json"]
+
+
 def test_urls_with_identifier_like_segments_remain_ignored() -> None:
     """A URL is stripped whole before tokenization, underscores in its path
     notwithstanding."""

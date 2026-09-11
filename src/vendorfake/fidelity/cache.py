@@ -234,8 +234,8 @@ _WINDOW = 8
 def _prose_words(text: str) -> list[str]:
     """Words, lower-cased and stripped of punctuation, with URLs removed first:
     a citation of the vendor's page is not a copy of the vendor's prose. An
-    underscore joins rather than separates, so ``HALF_UP`` stays one word."""
-    no_urls = re.sub(r"https?://\S+", " ", text).lower()
+    underscore joins rather than separates, so ``HALF_UP`` stays one word, escaped or not."""
+    no_urls = re.sub(r"\\+_", "_", re.sub(r"https?://\S+", " ", text)).lower()
     stripped = re.sub(r"[^a-z0-9_ ]", " ", no_urls)
     return [word.strip("_") for word in stripped.split() if word.strip("_")]
 
