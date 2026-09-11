@@ -300,6 +300,10 @@ def create_unit(
     profile that is a superset of it, and ``full`` plus
     ``VENDORFAKE_CAPABILITIES`` when none qualifies. ``GET /__unit/info`` reports
     the original request under ``requested_capabilities``.
+
+    Profile precedence, most specific first: ``profile``/``capabilities``, then ``VENDORFAKE_PROFILE_<VENDOR>``
+    (the resolved vendor's name is passed to :func:`load_profile` as ``vendor=``), then the bare
+    ``VENDORFAKE_PROFILE``, then the vendor's default.
     """
     environ: Mapping[str, str] = {} if env is None else env
     definition = _pick(vendor, environ)
@@ -314,6 +318,7 @@ def create_unit(
         base_dir=definition.base_dir,
         env=environ,
         defaults=definition.retry_defaults,
+        vendor=definition.name,
     )
     config = (
         loaded.config if requested is None else loaded.config.model_copy(update={"requested_capabilities": requested})

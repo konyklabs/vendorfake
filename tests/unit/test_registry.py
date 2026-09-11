@@ -102,6 +102,34 @@ def test_a_profile_name_that_does_not_exist_lists_what_does(tmp_path: Path) -> N
     assert "test" in str(caught.value)
 
 
+def _vendor_with_a_second_profile(tmp_path: Path) -> FakeVendor:
+    """A vendor shipping both ``test`` (the default fixture profile) and
+    ``pinned``, so ``VENDORFAKE_PROFILE_<VENDOR>`` has somewhere distinct to
+    point."""
+    directory = _profile_dir(tmp_path, {"capabilities": ["orders", "chaos"]})
+    (directory / "pinned.json").write_text(json.dumps({"capabilities": ["orders"]}), encoding="utf-8")
+    return FakeVendor(profile_dir=directory, base_dir=tmp_path)
+
+
+def test_the_profile_argument_beats_a_per_vendor_profile_variable(tmp_path: Path) -> None:
+    """konyklabs/roadmap#134: explicit configuration beats every ``VENDORFAKE_*`` variable, so an explicit
+    ``profile=`` wins outright over ``VENDORFAKE_PROFILE_ACME`` even though ``create_unit`` passes the
+    resolved vendor's name down to ``load_profile`` as ``vendor=``. Omitting ``profile=`` lets the pin apply."""
+    vendor = _vendor_with_a_second_profile(tmp_path)
+    pinned_env = {"VENDORFAKE_PROFILE_ACME": "pinned"}
+    explicit = create_unit(vendor=vendor, profile="test", env=pinned_env)
+    assert explicit.context.config.profile == "test"
+    omitted = create_unit(vendor=vendor, profile=None, env=pinned_env)
+    assert omitted.context.config.profile == "pinned"
+
+
+def test_a_per_vendor_profile_variable_for_another_vendor_is_ignored(tmp_path: Path) -> None:
+    """A variable naming a different vendor changes nothing for this one."""
+    vendor = _vendor_with_a_second_profile(tmp_path)
+    unit = create_unit(vendor=vendor, profile="test", env={"VENDORFAKE_PROFILE_OTHERVENDOR": "pinned"})
+    assert unit.context.config.profile == "test"
+
+
 def test_create_unit_starts_the_unit(tmp_path: Path) -> None:
     vendor = _vendor(tmp_path)
     create_unit(vendor=vendor, profile="test")
@@ -281,6 +309,23 @@ def test_capabilities_picks_the_narrowest_shipped_superset_profile() -> None:
         unit.stop()
 
 
+def test_a_per_vendor_pin_does_not_override_capabilities_resolution() -> None:
+    """konyklabs/roadmap#134: ``capabilities=`` resolves its own profile name and passes it to
+    ``load_profile`` as the explicit ``name``, which the corrected order in ``resolve_profile_name`` lets
+    win outright over ``VENDORFAKE_PROFILE_<VENDOR>`` -- the pin only ever stands in for an *omitted* name."""
+    narrowed = create_unit(vendor="square", capabilities=["auth"], env={"VENDORFAKE_PROFILE_SQUARE": "full"})
+    try:
+        assert narrowed.context.config.profile == "oauth-only"
+    finally:
+        narrowed.stop()
+
+    other = create_unit(vendor="square", capabilities=["orders"], env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"})
+    try:
+        assert other.context.config.profile == "orders-only"
+    finally:
+        other.stop()
+
+
 def test_capabilities_falls_back_to_full_and_an_absolute_list_when_nothing_shipped_matches(tmp_path: Path) -> None:
     """The other half of the DoD's "or": a vendor whose shipped profiles do
     not include one that is a superset of the request at all -- unreachable
@@ -307,6 +352,29 @@ def test_capabilities_falls_back_to_full_and_an_absolute_list_when_nothing_shipp
         assert unit.context.config.profile == "full"
         assert set(unit.context.config.capabilities) == {"orders", "chaos"}
         assert unit.context.config.requested_capabilities == ("orders", "chaos")
+    finally:
+        unit.stop()
+
+
+def test_a_per_vendor_pin_does_not_override_the_no_qualifying_profile_fallback(tmp_path: Path) -> None:
+    """The same no-superset branch as above, with ``VENDORFAKE_PROFILE_ACME`` (this ``FakeVendor``'s default
+    name) pinned in the environment: the fallback resolves its own explicit ``"full"``, which the corrected
+    order lets win outright, so the pinned document never applies."""
+    directory = tmp_path / "profiles"
+    directory.mkdir()
+    (directory / "full.json").write_text(json.dumps({"capabilities": ["orders"]}), encoding="utf-8")
+    (directory / "narrow.json").write_text(json.dumps({"capabilities": ["chaos"]}), encoding="utf-8")
+    (directory / "pinned.json").write_text(json.dumps({"capabilities": ["orders"]}), encoding="utf-8")
+    vendor = FakeVendor(
+        profile_dir=directory,
+        base_dir=tmp_path,
+        capabilities=(capability("orders"), capability("chaos", kind="behavior")),
+        roles={"auth": "orders", "orders": "orders", "webhooks": "webhooks", "chaos": "chaos"},
+    )
+    unit = create_unit(vendor=vendor, capabilities=["orders", "chaos"], env={"VENDORFAKE_PROFILE_ACME": "pinned"})
+    try:
+        assert unit.context.config.profile == "full"
+        assert set(unit.context.config.capabilities) == {"orders", "chaos"}
     finally:
         unit.stop()
 

@@ -34,19 +34,25 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
     "ENV_PREFIX",
+    "ENV_PROFILE_VENDOR_PREFIX",
     "ENV_SEED",
     "ENV_TABLE",
     "ENV_VENDOR_PREFIX",
     "EnvVar",
     "LoadedProfile",
     "env_names",
+    "is_profile_path",
     "load_profile",
     "merge_documents",
+    "profile_env_var",
     "resolve_config",
+    "resolve_profile_name",
 ]
 
 ENV_PREFIX = "VENDORFAKE_"
 ENV_VENDOR_PREFIX = "VENDORFAKE_VENDOR_"
+ENV_PROFILE_VENDOR_PREFIX = "VENDORFAKE_PROFILE_"
+"""The remainder names a vendor whose profile it pins -- see :func:`resolve_profile_name`."""
 ENV_SEED = "VENDORFAKE_SEED"
 """The variable that replaces the profile's own seed document. A constant
 since ``vendorfake.testing.served()`` must agree on the name too."""
@@ -69,6 +75,12 @@ class EnvVar:
 
 ENV_TABLE: tuple[EnvVar, ...] = (
     EnvVar("VENDORFAKE_PROFILE", "profile", "Profile name or path to load when none is passed."),
+    EnvVar(
+        ENV_PROFILE_VENDOR_PREFIX,
+        "profile",
+        "Prefix: the remainder names a vendor; that vendor's profile, beating VENDORFAKE_PROFILE.",
+        is_prefix=True,
+    ),
     EnvVar(
         "VENDORFAKE_CAPABILITIES",
         "capabilities",
@@ -406,14 +418,37 @@ def _read_json(path: Path, *, what: str, field: str) -> object:
         ) from exc
 
 
+def profile_env_var(vendor: str) -> str:
+    """``VENDORFAKE_PROFILE_<VENDOR>`` for ``vendor``, upper-cased with every non-alphanumeric char as ``_``."""
+    suffix = "".join(char.upper() if char.isalnum() else "_" for char in vendor)
+    return f"{ENV_PROFILE_VENDOR_PREFIX}{suffix}"
+
+
+def resolve_profile_name(name: str | None, environ: Mapping[str, str], *, vendor: str | None = None) -> str:
+    """``name`` first -- explicit configuration beats every ``VENDORFAKE_*`` variable -- then
+    ``VENDORFAKE_PROFILE_<VENDOR>`` (when ``vendor`` is given), the bare ``VENDORFAKE_PROFILE``, then
+    :data:`DEFAULT_PROFILE_NAME`."""
+    if name:
+        return name
+    if vendor is not None:
+        pinned = environ.get(profile_env_var(vendor))
+        if pinned:
+            return pinned
+    return environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
+
+
+def is_profile_path(name: str) -> bool:
+    """Whether ``name`` is a path rather than a bare profile name: absolute, or ending in ``.json`` -- the
+    one heuristic every caller that must tell the two apart (:func:`profile_path`, ``cli.py``'s
+    ``vendor=profile`` pair detection) shares rather than re-deriving."""
+    return Path(name).is_absolute() or name.endswith(".json")
+
+
 def profile_path(profile_dir: Path, name: str) -> Path:
-    """Where ``name`` resolves to: an absolute path or one ending in ``.json``
-    is taken as a path; anything else names a file in ``profile_dir`` --
-    the difference between ``--profile full`` and ``--profile ./my.json``.
-    """
-    candidate = Path(name)
-    if candidate.is_absolute() or name.endswith(".json"):
-        return candidate
+    """Where ``name`` resolves to: a path (see :func:`is_profile_path`) as itself, anything else a file in
+    ``profile_dir`` -- the difference between ``--profile full`` and ``--profile ./my.json``."""
+    if is_profile_path(name):
+        return Path(name)
     return profile_dir / f"{name}.json"
 
 
@@ -424,13 +459,13 @@ def load_profile(
     base_dir: Path | None = None,
     env: Mapping[str, str] | None = None,
     defaults: ProfileDocument | None = None,
+    vendor: str | None = None,
 ) -> LoadedProfile:
-    """Read a profile, layer defaults under it and the environment over it.
-    ``defaults`` is where a vendor's own document (its retry schedule above
-    all) goes, so the profile document beats it and the environment beats both.
-    """
+    """Read a profile, layer defaults under it and the environment over it: the profile document beats
+    ``defaults`` (a vendor's own document) and the environment beats both. ``vendor`` lets
+    ``VENDORFAKE_PROFILE_<VENDOR>`` stand in for ``name`` when it is omitted -- see :func:`resolve_profile_name`."""
     environ: Mapping[str, str] = {} if env is None else env
-    resolved_name = name or environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
+    resolved_name = resolve_profile_name(name, environ, vendor=vendor)
     source_path = profile_path(profile_dir, resolved_name)
 
     if not source_path.exists():

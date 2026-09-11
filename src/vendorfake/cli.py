@@ -12,12 +12,15 @@ reaches :mod:`vendorfake.asgi` -- the single named exception in
 
 Precedence, in every subcommand: an explicit flag beats a ``VENDORFAKE_*``
 variable, which beats the profile document, which beats the built-in default.
+``serve --profile``'s shared bare item, with several vendors mounted, is the
+one exception -- see ``serve --help``.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, TextIO
@@ -35,10 +38,9 @@ PROG = "vendorfake"
 # -- shared argument wiring --
 
 
-def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
-    """The two flags every subcommand needs to name a unit. Both default to
-    ``None``, so "not given" stays distinguishable from "given the default" all
-    the way down to the profile loader."""
+def _add_unit_flags(parser: argparse.ArgumentParser, *, profile_help: str | None = None) -> None:
+    """The two flags every subcommand needs to name a unit; both default to ``None`` so "not given" reaches
+    the profile loader distinguishably. ``profile_help`` lets ``serve`` override the generic ``--profile`` text."""
     parser.add_argument(
         "--vendor",
         default=None,
@@ -52,7 +54,9 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--profile",
         default=None,
-        help="Profile name or path. Defaults to $VENDORFAKE_PROFILE, then to the vendor's default profile.",
+        help=profile_help
+        or "Profile name or path. Defaults to $VENDORFAKE_PROFILE_<VENDOR>, then $VENDORFAKE_PROFILE, "
+        "then the vendor's default profile.",
     )
 
 
@@ -96,7 +100,18 @@ def _build_parser() -> argparse.ArgumentParser:
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
     serve = subcommands.add_parser("serve", help="Serve a unit over HTTP.")
-    _add_unit_flags(serve)
+    _add_unit_flags(
+        serve,
+        profile_help=(
+            "Profile name or path: with one vendor mounted, this vendor's profile outright, beating "
+            "$VENDORFAKE_PROFILE_<VENDOR> (e.g. VENDORFAKE_PROFILE_SQUARE), which beats $VENDORFAKE_PROFILE. "
+            "With several --vendor mounts, also takes a comma list of vendor=profile pairs plus at most one "
+            "bare item as the shared default, e.g. `full,square=oauth-only`: a pair naming a mount wins for "
+            "it, otherwise that mount's own $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. A pair's value "
+            "may itself be a path (`square=/tmp/x.json`); a lone profile, name or path, is never split just "
+            "because it happens to contain `=` or `,`."
+        ),
+    )
     serve.add_argument("--host", default=None, help="Interface to bind. Defaults to $VENDORFAKE_HOST, then loopback.")
     serve.add_argument(
         "--port",
@@ -169,7 +184,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--profile",
         default=None,
         help="Profile to build the table against. The table itself does not vary by profile; see the "
-        "docstring of vendorfake.registry.routes. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+        "docstring of vendorfake.registry.routes. Defaults to $VENDORFAKE_PROFILE_<VENDOR>, then "
+        "$VENDORFAKE_PROFILE, then 'full'.",
     )
     routes.add_argument(
         "--internal",
@@ -197,7 +213,8 @@ def _build_parser() -> argparse.ArgumentParser:
     explain_route.add_argument(
         "--profile",
         default=None,
-        help="Profile to build the table against. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+        help="Profile to build the table against. Defaults to $VENDORFAKE_PROFILE_<VENDOR>, then "
+        "$VENDORFAKE_PROFILE, then 'full'.",
     )
 
     explain_fault = explain_kinds.add_parser("fault", help="One fault, by name.", parents=[_json_flag_parent()])
@@ -225,7 +242,8 @@ def _build_parser() -> argparse.ArgumentParser:
     explain_error.add_argument(
         "--profile",
         default=None,
-        help="Profile to build the unit against. Defaults to $VENDORFAKE_PROFILE, then 'full'.",
+        help="Profile to build the unit against. Defaults to $VENDORFAKE_PROFILE_<VENDOR>, then "
+        "$VENDORFAKE_PROFILE, then 'full'.",
     )
 
     explain_header = explain_kinds.add_parser(
@@ -268,6 +286,86 @@ def _refuse_a_vendor_list(name: str) -> None:
         raise SystemExit(f"{PROG}: --vendor names several vendors; only `serve` mounts more than one")
 
 
+_PAIR_ITEM_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*=.+$")
+"""A ``vendor=value`` item: a vendor-slug-shaped left side, then any non-empty right side -- the value may
+itself be a path, so this is not ``is_profile_path`` applied to the item."""
+_BARE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+"""A bare profile *name* as an item of the pair grammar: no ``/`` or ``.``, so a path never matches this --
+a path is decided by shape here too, not by calling :func:`~vendorfake.core.config.profile.is_profile_path`
+on the whole value, which would wrongly accept ``square=/tmp/x.json`` for ending in ``.json``."""
+
+
+def _looks_like_a_profile_pair_list(raw: str) -> bool:
+    """Whether ``raw`` is ``serve``'s ``vendor=profile`` grammar rather than one profile (a name or a path):
+    every comma-separated item must be a pair or a bare name (an empty item -- a stray comma -- is let
+    through here so :func:`_serve_profile_pairs` can refuse it by name), and there must be more than one
+    item or at least one pair, a lone bare item being just a name."""
+    items = [item.strip() for item in raw.split(",")]
+    is_pair = [bool(_PAIR_ITEM_PATTERN.match(item)) for item in items]
+    if not all(pair or not item or _BARE_NAME_PATTERN.match(item) for pair, item in zip(is_pair, items, strict=True)):
+        return False
+    return len(items) > 1 or any(is_pair)
+
+
+def _refuse_a_profile_pair_list(raw: str | None) -> None:
+    """Refuse ``serve``'s ``vendor=profile`` list anywhere else: one unit, one profile, no pair to guess."""
+    if raw is not None and _looks_like_a_profile_pair_list(raw):
+        raise SystemExit(
+            f"{PROG}: --profile {raw!r} looks like the vendor=profile list `serve` accepts; "
+            "this command takes one profile name or path"
+        )
+
+
+def _serve_profile_pairs(raw: str, names: Sequence[str]) -> tuple[str | None, dict[str, str]]:
+    """Split ``serve --profile`` into ``(bare shared default, {vendor: profile})``; a plain ``--profile full``
+    round-trips as ``("full", {})``, so the pre-#134 single-string form is unchanged."""
+    items = [item.strip() for item in raw.split(",")]
+    if any(not item for item in items):
+        raise SystemExit(f"{PROG}: --profile {raw!r} has an empty item")
+    bare: str | None = None
+    pairs: dict[str, str] = {}
+    for item in items:
+        vendor_name, sep, value = item.partition("=")
+        if not sep:
+            if bare is not None:
+                raise SystemExit(
+                    f"{PROG}: --profile {raw!r} has two bare items ({bare!r} and {item!r}); "
+                    "only one shared default is allowed"
+                )
+            bare = item
+            continue
+        vendor_name = vendor_name.strip()
+        value = value.strip()
+        if not vendor_name or not value:
+            raise SystemExit(f"{PROG}: --profile {raw!r} has a malformed pair {item!r}")
+        if vendor_name not in names:
+            raise SystemExit(
+                f"{PROG}: --profile {raw!r} names {vendor_name!r}, which this serve does not mount; "
+                f"mounted: {', '.join(names)}"
+            )
+        if vendor_name in pairs:
+            raise SystemExit(f"{PROG}: --profile {raw!r} names {vendor_name!r} twice")
+        pairs[vendor_name] = value
+    return bare, pairs
+
+
+def _warn_unknown_profile_suffixes(env: Mapping[str, str]) -> None:
+    """One warning per ``VENDORFAKE_PROFILE_<SUFFIX>`` naming no installed vendor -- not a refusal, since one
+    environment may feed several processes each serving a different subset."""
+    from vendorfake.core.config.profile import ENV_PROFILE_VENDOR_PREFIX, profile_env_var
+    from vendorfake.registry import available_vendors
+
+    candidates = [key for key in env if key.startswith(ENV_PROFILE_VENDOR_PREFIX)]
+    if not candidates:
+        return
+    installed = available_vendors()
+    known = {profile_env_var(name) for name in installed}
+    listing = ", ".join(installed) if installed else "(none installed)"
+    for key in candidates:
+        if key not in known:
+            print(f"{PROG}: {key} names no installed vendor. Installed: {listing}.", file=sys.stderr)
+
+
 def _resolve_vendor_name(args: argparse.Namespace, env: Mapping[str, str]) -> str:
     """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed vendor:
     ``create_unit``'s own precedence, for a subcommand that builds no unit. A
@@ -307,10 +405,14 @@ def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
     ``ValueError`` from ``resolve_vendor`` and any ``UnitError`` raised while the
     unit is built both become a message and a non-zero exit, so a typo in a
     container's environment reads the same whichever flag carried it, rather than
-    a traceback or a server that starts and 404s everything.
+    a traceback or a server that starts and 404s everything. ``--profile``'s
+    ``vendor=profile`` list is refused here too; ``_serve`` always resolves it
+    to one plain profile first, so this only ever fires for ``info``/``manifest``/``openapi``.
     """
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.registry import VENDOR_ENV_VAR, create_unit
+
+    _refuse_a_profile_pair_list(args.profile)
 
     # These name their vendor through `create_unit`'s resolution, not `_resolve_vendor_name`, so the refusal
     # is repeated rather than left to the registry.
@@ -379,10 +481,11 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
     """Build one unit per name and serve them all under ``/<vendor>/``.
 
     ``$VENDORFAKE_VENDOR`` is dropped from the environment each unit is built with -- it holds the list, not a
-    name; every other ``VENDORFAKE_*`` variable and the single ``--profile`` applies to every mount. A failure
-    part-way through stops what was built: half a mounted process would answer for some vendors and 404 for
-    the rest."""
+    name. Per mount, most specific first: a ``vendor=profile`` pair naming it, that vendor's own
+    ``VENDORFAKE_PROFILE_<VENDOR>``, then the bare ``--profile`` as the shared default. A failure part-way
+    through stops what was built: half a mounted process would answer for some vendors and 404 for the rest."""
     from vendorfake.asgi import create_app, create_mounted_app, run_server
+    from vendorfake.core.config.profile import profile_env_var
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.registry import VENDOR_ENV_VAR, create_unit
 
@@ -390,13 +493,24 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
         # One ledger, one summary line, one vendor's declaration: the flag has no meaning spread over several.
         raise SystemExit(f"{PROG}: --validate serves one vendor")
 
+    if args.profile is not None and _looks_like_a_profile_pair_list(args.profile):
+        bare, pairs = _serve_profile_pairs(args.profile, names)
+    else:
+        bare, pairs = args.profile, {}
+
     per_vendor_env = {key: value for key, value in env.items() if key != VENDOR_ENV_VAR}
     units: list[Unit] = []
     apps: dict[str, ASGIApp] = {}
     try:
         for name in names:
+            if name in pairs:
+                vendor_profile = pairs[name]
+            elif profile_env_var(name) in per_vendor_env:
+                vendor_profile = None  # this mount's own pin beats the shared bare item
+            else:
+                vendor_profile = bare
             try:
-                built = create_unit(vendor=name, profile=args.profile, env=per_vendor_env)
+                built = create_unit(vendor=name, profile=vendor_profile, env=per_vendor_env)
             except (ValueError, UnitError) as exc:
                 raise SystemExit(f"{PROG}: {exc}") from None
             units.append(built)
@@ -426,13 +540,21 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     """Build a unit, put the ASGI adapter in front of it, and listen. The import is
     inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
     ``vendorfake --help`` must not pay for it. A comma-separated ``--vendor``
-    hands off to :func:`_serve_mounted`; one vendor is served by the code below,
-    unchanged."""
+    hands off to :func:`_serve_mounted`; one vendor is served below, ``--profile``
+    naming that one unit's profile outright, beating any ``VENDORFAKE_PROFILE_<VENDOR>``."""
     from vendorfake.asgi import create_app, run_server
+
+    _warn_unknown_profile_suffixes(env)
 
     names = _serve_vendor_names(args, env)
     if names:
         return _serve_mounted(args, env, out, names)
+
+    if args.profile is not None and _looks_like_a_profile_pair_list(args.profile):
+        vendor_name = _resolve_vendor_name(args, env)
+        bare, pairs = _serve_profile_pairs(args.profile, (vendor_name,))
+        args.vendor = vendor_name
+        args.profile = pairs.get(vendor_name, bare)
 
     unit = _make_unit(args, env)
 
@@ -617,13 +739,16 @@ def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> 
 def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
     """``vendorfake.registry.routes`` over the command line; internal routes are
     omitted unless ``--internal`` is given. ``UnitError`` is caught alongside
-    ``ValueError`` for the reason :func:`_make_unit` gives."""
+    ``ValueError`` for the reason :func:`_make_unit` gives; ``--profile``'s pair
+    form is refused, this command describing one vendor's table with one profile."""
+    from vendorfake.core.config.profile import resolve_profile_name
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import routes as list_routes
 
+    _refuse_a_profile_pair_list(args.profile)
     name = _resolve_vendor_name(args, env)
-    profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+    profile = resolve_profile_name(args.profile, env, vendor=name)
     try:
         found = list_routes(name, profile)
     except (ValueError, UnitError) as exc:
@@ -708,6 +833,7 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
     the vendor and profile flags, and chooses text or ``--json``. ``UnitError`` is
     caught alongside ``ValueError`` for the reason :func:`_make_unit` gives."""
     from vendorfake.agent import explain as explainer
+    from vendorfake.core.config.profile import resolve_profile_name
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
 
@@ -717,8 +843,9 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
 
     try:
         if kind == "route":
+            _refuse_a_profile_pair_list(args.profile)
             vendor = _resolve_vendor_name(args, env)
-            profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+            profile = resolve_profile_name(args.profile, env, vendor=vendor)
             data = explainer.explain_route(vendor, profile, args.target)
             text = explainer.render_route(data)
         elif kind == "fault":
@@ -729,8 +856,9 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
             data = explainer.explain_profile(vendor, args.target)
             text = explainer.render_profile(data)
         elif kind == "error":
+            _refuse_a_profile_pair_list(args.profile)
             vendor = _resolve_vendor_name(args, env)
-            profile = args.profile or _env_str(env, "VENDORFAKE_PROFILE") or "full"
+            profile = resolve_profile_name(args.profile, env, vendor=vendor)
             data = explainer.explain_error(vendor, profile, args.target)
             text = explainer.render_error(data)
         elif kind == "header":

@@ -28,12 +28,16 @@ from vendorfake.core.config.models import (
     parse_profile_document,
 )
 from vendorfake.core.config.profile import (
+    DEFAULT_PROFILE_NAME,
+    ENV_PROFILE_VENDOR_PREFIX,
     ENV_TABLE,
     ENV_VENDOR_PREFIX,
     env_names,
     load_profile,
     merge_documents,
+    profile_env_var,
     resolve_config,
+    resolve_profile_name,
 )
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
@@ -202,11 +206,60 @@ def test_vendor_prefixed_variables_become_snake_case_keys() -> None:
 
 def test_every_env_table_row_is_complete() -> None:
     """The generated env reference is built from ENV_TABLE: every row carries a
-    VENDORFAKE_ name, what it applies to and a summary, and exactly one is a prefix."""
-    assert len(ENV_TABLE) == 18
+    VENDORFAKE_ name, what it applies to and a summary, and exactly two are a
+    prefix (VENDORFAKE_VENDOR_ and VENDORFAKE_PROFILE_, konyklabs/roadmap#134)."""
+    assert len(ENV_TABLE) == 19
     assert all(name.startswith("VENDORFAKE_") for name in env_names())
-    assert sum(1 for var in ENV_TABLE if var.is_prefix) == 1
+    assert sum(1 for var in ENV_TABLE if var.is_prefix) == 2
     assert all(var.applies_to and var.summary for var in ENV_TABLE)
+
+
+# ---------------------------------------------------------------------------
+# VENDORFAKE_PROFILE_<VENDOR> (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("vendor", "expected"),
+    [
+        ("clover", "VENDORFAKE_PROFILE_CLOVER"),
+        ("square", "VENDORFAKE_PROFILE_SQUARE"),
+        ("lightspeed-x", "VENDORFAKE_PROFILE_LIGHTSPEED_X"),
+    ],
+)
+def test_profile_env_var_upper_cases_and_replaces_non_alphanumerics(vendor: str, expected: str) -> None:
+    """``clover`` -> ``CLOVER``; a future ``lightspeed-x`` -> ``LIGHTSPEED_X`` --
+    every non-alphanumeric character becomes ``_``, not just the hyphen."""
+    assert profile_env_var(vendor) == expected
+    assert expected.startswith(ENV_PROFILE_VENDOR_PREFIX)
+
+
+def test_resolve_profile_name_ignores_a_pin_for_a_different_vendor() -> None:
+    """A variable that names another vendor changes nothing for this one."""
+    resolved = resolve_profile_name(None, {"VENDORFAKE_PROFILE_CLOVER": "oauth-only"}, vendor="square")
+    assert resolved == DEFAULT_PROFILE_NAME
+
+
+def test_resolve_profile_name_the_argument_beats_the_pin_which_beats_the_bare_variable() -> None:
+    """Explicit configuration beats every ``VENDORFAKE_*`` variable: the argument wins outright when given;
+    only when it is omitted does the vendor-specific pin outrank the bare ``VENDORFAKE_PROFILE``."""
+    environ = {"VENDORFAKE_PROFILE": "full", "VENDORFAKE_PROFILE_SQUARE": "oauth-only"}
+    assert resolve_profile_name("no-faults", environ, vendor="square") == "no-faults"
+    assert resolve_profile_name(None, environ, vendor="square") == "oauth-only"
+    # No vendor given at all: the pin cannot apply, so the ordinary precedence holds.
+    assert resolve_profile_name(None, environ, vendor=None) == "full"
+    assert resolve_profile_name("no-faults", environ, vendor=None) == "no-faults"
+
+
+def test_load_profile_honours_the_per_vendor_variable(tmp_path: Path) -> None:
+    write_profile(tmp_path, "full", {"name": "full"})
+    write_profile(tmp_path, "oauth-only", {"name": "oauth-only", "capabilities": ["oauth"]})
+    loaded = load_profile(
+        profile_dir=tmp_path,
+        env={"VENDORFAKE_PROFILE": "full", "VENDORFAKE_PROFILE_SQUARE": "oauth-only"},
+        vendor="square",
+    )
+    assert loaded.config.profile == "oauth-only"
 
 
 def test_the_transport_block_is_environment_only() -> None:
