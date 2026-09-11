@@ -378,6 +378,28 @@ def test_served_takes_capabilities_the_way_unit_does() -> None:
         assert "order-lifecycle" in enabled and "oauth" not in enabled
 
 
+def test_served_capabilities_are_not_overridden_by_a_per_vendor_pin() -> None:
+    """konyklabs/roadmap#134: the parent's pre-check (used for the seed) and the child it spawns must agree
+    that ``capabilities=`` -- not the pin -- decides the profile here."""
+    with served("square", capabilities=["orders"], env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as child:
+        assert child.profile == "orders-only"
+
+
+def test_served_starts_with_a_profile_path_containing_an_equals_sign(tmp_path: Path) -> None:
+    """``served()`` hands the path to the child as the `--profile` flag; the child must load it as one
+    profile rather than re-parsing it as `serve`'s `vendor=profile` grammar."""
+    from vendorfake.registry import resolve_vendor
+
+    profile_dir = tmp_path / "run=1"
+    profile_dir.mkdir()
+    shipped = (resolve_vendor("square").profile_dir / "full.json").read_text(encoding="utf-8")
+    path = profile_dir / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    with served("square", str(path)) as child:
+        assert child.profile == "full"
+
+
 def test_served_honours_an_ambient_profile_and_an_explicit_one_beats_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VENDORFAKE_PROFILE", "no-faults")
     with served("square") as child:

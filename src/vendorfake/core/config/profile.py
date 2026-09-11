@@ -41,6 +41,7 @@ __all__ = [
     "EnvVar",
     "LoadedProfile",
     "env_names",
+    "is_profile_path",
     "load_profile",
     "merge_documents",
     "profile_env_var",
@@ -436,14 +437,18 @@ def resolve_profile_name(name: str | None, environ: Mapping[str, str], *, vendor
     return environ.get("VENDORFAKE_PROFILE") or DEFAULT_PROFILE_NAME
 
 
+def is_profile_path(name: str) -> bool:
+    """Whether ``name`` is a path rather than a bare profile name: absolute, or ending in ``.json`` -- the
+    one heuristic every caller that must tell the two apart (:func:`profile_path`, ``cli.py``'s
+    ``vendor=profile`` pair detection) shares rather than re-deriving."""
+    return Path(name).is_absolute() or name.endswith(".json")
+
+
 def profile_path(profile_dir: Path, name: str) -> Path:
-    """Where ``name`` resolves to: an absolute path or one ending in ``.json``
-    is taken as a path; anything else names a file in ``profile_dir`` --
-    the difference between ``--profile full`` and ``--profile ./my.json``.
-    """
-    candidate = Path(name)
-    if candidate.is_absolute() or name.endswith(".json"):
-        return candidate
+    """Where ``name`` resolves to: a path (see :func:`is_profile_path`) as itself, anything else a file in
+    ``profile_dir`` -- the difference between ``--profile full`` and ``--profile ./my.json``."""
+    if is_profile_path(name):
+        return Path(name)
     return profile_dir / f"{name}.json"
 
 

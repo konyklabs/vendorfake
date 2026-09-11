@@ -62,7 +62,10 @@ options:
                         at most one bare item as the shared default, e.g.
                         `full,square=oauth-only`: a pair naming a mount wins
                         for it, otherwise that mount's own
-                        $VENDORFAKE_PROFILE_<VENDOR> beats the bare item.
+                        $VENDORFAKE_PROFILE_<VENDOR> beats the bare item. An
+                        absolute path or one ending in .json is always one
+                        profile, whatever `=` or `,` it contains, so a path
+                        cannot sit inside a pair list.
   --host HOST           Interface to bind. Defaults to $VENDORFAKE_HOST, then
                         loopback.
   --port PORT           Port to bind; 0 picks a free one and prints it.
@@ -91,8 +94,9 @@ options:
                      (`clover,square`) and mounts each vendor under
                      /<vendor>/; every other subcommand describes one vendor
                      and refuses a list.
-  --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
-                     then to the vendor's default profile.
+  --profile PROFILE  Profile name or path. Defaults to
+                     $VENDORFAKE_PROFILE_<VENDOR>, then $VENDORFAKE_PROFILE,
+                     then the vendor's default profile.
 ```
 
 ## `vendorfake openapi`
@@ -112,8 +116,9 @@ options:
                      (`clover,square`) and mounts each vendor under
                      /<vendor>/; every other subcommand describes one vendor
                      and refuses a list.
-  --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
-                     then to the vendor's default profile.
+  --profile PROFILE  Profile name or path. Defaults to
+                     $VENDORFAKE_PROFILE_<VENDOR>, then $VENDORFAKE_PROFILE,
+                     then the vendor's default profile.
   --no-internal      Omit the /__unit/* control plane, describing only the
                      vendor surface.
 ```
@@ -135,8 +140,9 @@ options:
                        (`clover,square`) and mounts each vendor under
                        /<vendor>/; every other subcommand describes one vendor
                        and refuses a list.
-  --profile PROFILE    Profile name or path. Defaults to $VENDORFAKE_PROFILE,
-                       then to the vendor's default profile.
+  --profile PROFILE    Profile name or path. Defaults to
+                       $VENDORFAKE_PROFILE_<VENDOR>, then $VENDORFAKE_PROFILE,
+                       then the vendor's default profile.
   --base-url BASE_URL  The address the unit will be reached at, recorded in
                        the document. Omitted, base_url is null.
 ```
@@ -182,7 +188,8 @@ options:
   --profile PROFILE  Profile to build the table against. The table itself does
                      not vary by profile; see the docstring of
                      vendorfake.registry.routes. Defaults to
-                     $VENDORFAKE_PROFILE, then 'full'.
+                     $VENDORFAKE_PROFILE_<VENDOR>, then $VENDORFAKE_PROFILE,
+                     then 'full'.
   --internal         Include the /__unit/* control plane. Omitted by default:
                      this is the vendor surface.
 ```

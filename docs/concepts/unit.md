@@ -109,8 +109,10 @@ override a vendor default and an operator can override both through
 [the environment-variable reference](../reference/env.md). Within the
 environment layer: the exported process environment first, then the keyword
 arguments that spell a variable (`seed=`, `clock_start=`, `seed_overlay=`),
-then the `env=` mapping a test passes. `profile=` and `capabilities=` are
-resolved ahead of that layer and beat `VENDORFAKE_PROFILE`. `create_unit()`
+then the `env=` mapping a test passes. Which profile document loads is its
+own order within that layer: `profile=`/`capabilities=`, then
+`VENDORFAKE_PROFILE_<VENDOR>` (konyklabs/roadmap#134), then the bare
+`VENDORFAKE_PROFILE`. `create_unit()`
 takes `env` defaulting to `{}`; `unit()`, `served()` and the CLI hand it the
 ambient variables through `registry.ambient_env()`.
 

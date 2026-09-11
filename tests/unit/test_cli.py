@@ -893,6 +893,127 @@ def test_serve_with_one_vendor_the_flag_beats_the_per_vendor_variable(monkeypatc
     assert seen == {"square": "full"}
 
 
+def test_serve_with_several_vendors_a_pair_beats_that_mounts_own_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """konyklabs/roadmap#134 tier 1: a `vendor=profile` pair naming a mount wins even when that mount also
+    has its own `VENDORFAKE_PROFILE_<VENDOR>` set -- the pair is the most specific choice there is."""
+    seen = _serve_and_capture_profiles(
+        monkeypatch,
+        ["--vendor", "clover,square", "--profile", "full,square=no-faults"],
+        {"VENDORFAKE_PROFILE_SQUARE": "oauth-only"},
+    )
+    assert seen == {"clover": "full", "square": "no-faults"}
+
+
+def test_serve_with_one_vendor_a_pair_naming_it_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The single-vendor form of the pair syntax: `--profile square=oauth-only` with `--vendor square` is
+    exactly `--profile oauth-only`, not a shared default with nothing to share it with."""
+    seen = _serve_and_capture_profiles(monkeypatch, ["--vendor", "square", "--profile", "square=oauth-only"], {})
+    assert seen == {"square": "oauth-only"}
+
+
+def test_serve_mounts_report_each_vendors_own_profile_through_the_socket_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not just `create_unit`'s own resolution: the mounted application `_serve_mounted` hands to
+    `run_server` must actually carry each vendor's own profile through to its control plane, queried the
+    way a caller would over the mount's ASGI transport. Replaces the hand-built-units version of this
+    check, which never reached `_serve_mounted`'s per-mount wiring at all (docs/testing.md)."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+    from tests.unit.asgi.test_adapt import call
+
+    profiles: dict[str, object] = {}
+
+    def fake_run_server(app: object, **kwargs: object) -> None:
+        profiles["clover"] = call(app, "GET", "/clover/__unit/info").json()["profile"]
+        profiles["square"] = call(app, "GET", "/square/__unit/info").json()["profile"]
+
+    monkeypatch.setattr(asgi_module, "run_server", fake_run_server)
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "clover,square", "--profile", "full,square=oauth-only"])
+    assert cli_module._serve(args, {}, io.StringIO()) == 0
+
+    assert profiles == {"clover": "full", "square": "oauth-only"}
+
+
+# ---------------------------------------------------------------------------
+# A profile path containing `=` or `,` is one profile, never the pair grammar
+# (konyklabs/roadmap#134 follow-up).
+# ---------------------------------------------------------------------------
+
+
+def test_info_loads_a_profile_path_containing_an_equals_sign(tmp_path: Path) -> None:
+    """A path is a path by :func:`~vendorfake.core.config.profile.is_profile_path`'s own rule, whatever
+    characters it contains; it must never be mistaken for `serve`'s `vendor=profile` grammar."""
+    from vendorfake.registry import resolve_vendor
+
+    profile_dir = tmp_path / "build=42"
+    profile_dir.mkdir()
+    shipped = (resolve_vendor("square").profile_dir / "full.json").read_text(encoding="utf-8")
+    path = profile_dir / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    code, out = run("info", "--vendor", "square", "--profile", str(path))
+    assert code == 0
+    assert json.loads(out)["profile"] == "full"
+
+
+def test_serve_with_one_vendor_builds_a_profile_path_containing_a_comma(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from vendorfake.registry import resolve_vendor
+
+    profile_dir = tmp_path / "a,b"
+    profile_dir.mkdir()
+    shipped = (resolve_vendor("square").profile_dir / "full.json").read_text(encoding="utf-8")
+    path = profile_dir / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    seen = _serve_and_capture_profiles(monkeypatch, ["--vendor", "square", "--profile", str(path)], {})
+    assert seen == {"square": "full"}
+
+
+def test_serve_with_several_vendors_applies_a_profile_path_to_every_mount(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A path given to a several-vendor `serve` is the shared default for every mount, unsplit -- checked
+    against what each mount's `create_unit` call actually received, since two vendors rarely share one
+    profile document's capability list (each is stubbed to a bare fake unit here for exactly that reason)."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+    import vendorfake.registry as registry_module
+    from tests.fakes import make_unit
+    from vendorfake.core.control.plane import control_plane_routes
+    from vendorfake.registry import resolve_vendor
+
+    profile_dir = tmp_path / "run=1"
+    profile_dir.mkdir()
+    shipped = (resolve_vendor("clover").profile_dir / "full.json").read_text(encoding="utf-8")
+    path = profile_dir / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    seen: dict[str, object] = {}
+    units: list[object] = []
+
+    def spy_create_unit(*, vendor: str, profile: object = None, **kwargs: object) -> object:
+        seen[vendor] = profile
+        built = make_unit(control_routes=control_plane_routes, log_level="warn")
+        units.append(built)
+        return built
+
+    monkeypatch.setattr(registry_module, "create_unit", spy_create_unit)
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+
+    try:
+        parser = cli_module._build_parser()
+        args = parser.parse_args(["serve", "--vendor", "clover,square", "--profile", str(path)])
+        assert cli_module._serve(args, {}, io.StringIO()) == 0
+        assert seen == {"clover": str(path), "square": str(path)}
+    finally:
+        for built in units:
+            built.stop()  # type: ignore[attr-defined]
+
+
 @pytest.mark.parametrize(
     ("profile_arg", "fragment"),
     [
@@ -937,6 +1058,25 @@ def test_serve_warns_about_a_profile_variable_naming_no_installed_vendor(
     assert "square" in captured.err
 
 
+def test_serve_does_not_warn_about_a_correctly_spelled_profile_variable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The companion to the warning test above: a real, correctly spelled
+    `VENDORFAKE_PROFILE_SQUARE` must never trip the same message -- a warning
+    test that only ever supplies a typo cannot tell a real alarm from a false
+    one."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "square"])
+    assert cli_module._serve(args, {"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}, io.StringIO()) == 0
+
+    captured = capsys.readouterr()
+    assert "names no installed vendor" not in captured.err
+
+
 @pytest.mark.parametrize("subcommand", ["routes", "info"])
 def test_a_describing_subcommand_refuses_the_serve_only_pair_form(subcommand: str) -> None:
     """`routes`/`info` describe one unit with one profile; the `vendor=profile`
@@ -948,3 +1088,41 @@ def test_a_describing_subcommand_refuses_the_serve_only_pair_form(subcommand: st
     message = str(raised.value)
     assert message.startswith("vendorfake: "), message
     assert "serve" in message
+
+
+def test_describing_commands_honour_the_per_vendor_pin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """konyklabs/roadmap#134 follow-up: `routes`, `explain route` and `info` disagreed about
+    `VENDORFAKE_PROFILE_<VENDOR>` -- `info` (via `_make_unit`/`create_unit`) honoured it, `routes` and
+    `explain` resolved their own `args.profile or $VENDORFAKE_PROFILE or 'full'` and ignored it. All three
+    now resolve through the same `resolve_profile_name`, so an exported variable means one thing everywhere
+    (AGENTS.md)."""
+    import vendorfake.registry as registry_module
+
+    real_create_unit = registry_module.create_unit
+    seen: list[object] = []
+
+    def spy_create_unit(*, vendor: str, profile: object = None, **kwargs: object) -> object:
+        seen.append(profile)
+        return real_create_unit(vendor=vendor, profile=profile, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(registry_module, "create_unit", spy_create_unit)
+    monkeypatch.setenv("VENDORFAKE_PROFILE_SQUARE", "oauth-only")
+
+    seen.clear()
+    run("routes", "--vendor", "square")
+    assert seen[-1] == "oauth-only"
+    seen.clear()
+    run("routes", "--vendor", "square", "--profile", "full")
+    assert seen[-1] == "full"
+
+    seen.clear()
+    run("explain", "route", "--vendor", "square", "ListLocations")
+    assert seen[-1] == "oauth-only"
+    seen.clear()
+    run("explain", "route", "--vendor", "square", "--profile", "full", "ListLocations")
+    assert seen[-1] == "full"
+
+    _, out = run("info", "--vendor", "square")
+    assert json.loads(out)["profile"] == "oauth-only"
+    _, out = run("info", "--vendor", "square", "--profile", "full")
+    assert json.loads(out)["profile"] == "full"
