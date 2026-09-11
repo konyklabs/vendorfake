@@ -238,6 +238,52 @@ def test_route_for_an_unknown_operation_id_lists_the_ones_that_exist() -> None:
         assert "ObtainToken" in str(caught.value)
 
 
+def test_faults_names_match_the_builtin_catalogue_and_the_param_table() -> None:
+    from vendorfake.core.chaos.faults import FAULT_PARAM_KEYS
+    from vendorfake.core.chaos.rules import BUILTIN_FAULTS
+    from vendorfake.registry import faults
+
+    names = {row.name for row in faults()}
+    assert names == {spec.name for spec in BUILTIN_FAULTS}
+    assert names == set(FAULT_PARAM_KEYS)
+
+
+def test_every_faults_row_params_matches_the_param_table() -> None:
+    from vendorfake.core.chaos.faults import FAULT_PARAM_KEYS
+    from vendorfake.registry import faults
+
+    for row in faults():
+        assert row.params == FAULT_PARAM_KEYS[row.name]
+
+
+def test_faults_phase_and_params_for_three_named_faults() -> None:
+    from vendorfake.registry import faults
+
+    by_name = {row.name: row for row in faults()}
+    assert by_name["refresh_rejected"].phase == "request"
+    assert by_name["authorize_denied"].phase == "handler"
+    assert "commit" in by_name["connection_reset"].params
+
+
+def test_faults_is_sorted_by_name() -> None:
+    from vendorfake.registry import faults
+
+    names = [row.name for row in faults()]
+    assert names == sorted(names)
+
+
+def test_faults_starts_no_unit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike ``routes()``, which needs a running unit to build its table,
+    ``faults()`` reads static catalogues and must not touch ``create_unit``."""
+    import vendorfake.registry as registry_module
+
+    def _boom(**kwargs: object) -> None:
+        raise AssertionError("faults() must not start a unit")
+
+    monkeypatch.setattr(registry_module, "create_unit", _boom)
+    assert len(registry_module.faults()) > 0
+
+
 def test_capabilities_and_profile_together_is_a_value_error() -> None:
     with pytest.raises(ValueError) as caught:
         create_unit(vendor="square", profile="full", capabilities=["oauth"])

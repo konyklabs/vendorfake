@@ -21,7 +21,7 @@ edit is the review trigger.
 
 ### `vendorfake` — the package root
 
-Five names, re-exported from `vendorfake.registry` because discovering what
+Six names, re-exported from `vendorfake.registry` because discovering what
 exists and building one are a single task:
 
 | Name | What it is |
@@ -29,6 +29,7 @@ exists and building one are a single task:
 | `available_vendors()` | Every vendor name that can actually be loaded |
 | `available_profiles(vendor)` | Every profile a vendor ships, with its summary, capabilities and seed |
 | `routes(vendor, profile)` | The route table a profile serves |
+| `faults()` | The built-in fault catalogue, readable without starting a unit |
 | `create_unit(...)` | The one constructor: a name and a profile in, a running `Unit` out |
 | `resolve_vendor(name)` | A name to a `VendorDefinition`, refusing a typo by listing the real ones |
 | `ambient_env()` | The exported `VENDORFAKE_*` variables; the one place a binding reads the process environment |
@@ -122,7 +123,7 @@ given `--profile` as a flag and the CLI prefers a flag to the variable.
 
 ### `vendorfake.registry` — discovery and construction
 
-The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
+The six names above, plus `FaultInfo`, `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
 `ENTRY_POINT_GROUP`, `VENDOR_ENV_VAR`, and the two protocols a third-party
 vendor implements — `VendorDefinition` and `SeedingVendor`, re-exported here
 from `vendorfake.core.kernel.types` for the reason given under *Publishing a
