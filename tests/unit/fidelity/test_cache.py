@@ -375,6 +375,69 @@ def test_a_case_note_that_repeats_the_vendor_document_is_a_leak() -> None:
     assert any(window.startswith("the tax rate is expressed as a decimal") for window in leak["corpus/b.json"])
 
 
+def test_enum_identifier_matchers_do_not_leak_against_a_json_schema_enum() -> None:
+    """konyklabs/roadmap#135: an underscore joins a token, so a corpus matcher
+    like ``${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}`` is a handful of
+    words, not an eight-word run of bare identifiers that also occurs in the
+    vendor's own enum listing."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = (
+        b'"roundingType": {"enum": ["HALF_UP", "HALF_EVEN", "ALWAYS_UP", "ALWAYS_DOWN"]}, '
+        b'"pricingStrategy": {"enum": ["BASE_PRICE", "MENU_SPECIFIC_PRICE", "TIME_SPECIFIC_PRICE", '
+        b'"SIZE_PRICE", "OPEN_PRICE"]}'
+    )
+    corpus = {
+        "corpus/config.taxrates.list.json": '"roundingType": "${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}"',
+        "corpus/menus.v3.menus.json": (
+            '"pricingStrategy": "${re:BASE_PRICE|MENU_SPECIFIC_PRICE|TIME_SPECIFIC_PRICE|SIZE_PRICE|OPEN_PRICE}"'
+        ),
+    }
+    assert prose_leaks(corpus, [document]) == {}
+
+
+def test_a_copied_sentence_with_one_identifier_still_leaks() -> None:
+    """One identifier inside a copied sentence must still count as a word: the
+    sentence is exactly eight tokens, so a tokenizer that dropped identifiers
+    instead of keeping them whole would leave seven and miss the copy."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"The HALF_UP mode rounds half away from zero.\n"
+    copied = {"corpus/e.json": '{"note": "the HALF_UP mode rounds half away from zero"}'}
+    leak = prose_leaks(copied, [document])
+    assert list(leak) == ["corpus/e.json"]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        rb"Use HALF\_UP to round half away from zero",
+        rb'"description": "Use HALF\\_UP to round half away from zero"',
+    ],
+    ids=["markdown", "markdown-inside-json"],
+)
+def test_an_escaped_identifier_still_matches_its_unescaped_copy(document: bytes) -> None:
+    """A vendor description written in Markdown escapes the underscore, and a
+    JSON document escapes that backslash again; a sentence copied from the
+    rendering carries a bare underscore. All three must tokenize alike, or the
+    escape hides the copy."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    copied = {"corpus/g.json": '{"note": "Use HALF_UP to round half away from zero"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/g.json"]
+
+
+def test_markdown_emphasis_underscores_do_not_hide_a_copied_sentence() -> None:
+    """An underscore now joins a word, so the edges must be trimmed: a vendor
+    sentence set in Markdown emphasis (``_a ... always_``) and its plain copy
+    have to tokenize alike, as they did when an underscore was a separator."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"_a tax rate applies to every order line always_\n"
+    copied = {"corpus/h.json": '{"note": "a tax rate applies to every order line always"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/h.json"]
+
+
 def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
     """Adversarial A8 (konyklabs/roadmap#56): the cache must never be the
     package directory, where `git add -A` would sweep the vendor's document in."""
