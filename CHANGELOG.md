@@ -352,6 +352,31 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.6.0](https://github.com/konyklabs/vendorfake/compare/v0.5.0...v0.6.0) (2026-09-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* land phases 2–5 of the #116 round in one commit, the tree of #53 re-cut onto main (konyklabs/roadmap#116) ([#58](https://github.com/konyklabs/vendorfake/issues/58))
+* strip JavaScript, agent-setup, demo transports, dead abstractions and prose (konyklabs/roadmap#116) ([#49](https://github.com/konyklabs/vendorfake/issues/49))
+
+### Features
+
+* **control:** an optional control-plane token and a separate control-plane listener for a networked unit (konyklabs/roadmap[#134](https://github.com/konyklabs/vendorfake/issues/134)) ([#63](https://github.com/konyklabs/vendorfake/issues/63)) ([73ef077](https://github.com/konyklabs/vendorfake/commit/73ef07762c451da92001c15f7851c0b046f9d4e6))
+* land phases 2–5 of the [#116](https://github.com/konyklabs/vendorfake/issues/116) round in one commit, the tree of [#53](https://github.com/konyklabs/vendorfake/issues/53) re-cut onto main (konyklabs/roadmap[#116](https://github.com/konyklabs/vendorfake/issues/116)) ([#58](https://github.com/konyklabs/vendorfake/issues/58)) ([a56eb66](https://github.com/konyklabs/vendorfake/commit/a56eb66098f83a79a641f10d87eae1e42df2a9d1))
+* land the token-store consumer round — refresh_rejected, authorize_denied, params.commit, seed lifetimes, multi-vendor serve (konyklabs/roadmap[#131](https://github.com/konyklabs/vendorfake/issues/131)) ([#59](https://github.com/konyklabs/vendorfake/issues/59)) ([4e786bb](https://github.com/konyklabs/vendorfake/commit/4e786bb71c352e8e1bd78226647f9dc8582de448))
+* **registry:** faults(), the fault catalogue readable without starting a unit (konyklabs/roadmap[#134](https://github.com/konyklabs/vendorfake/issues/134)) ([#62](https://github.com/konyklabs/vendorfake/issues/62)) ([238abf5](https://github.com/konyklabs/vendorfake/commit/238abf58b328b85ea3eeba3902d5568a5c4ebfae))
+
+
+### Bug Fixes
+
+* **fidelity:** the prose-leak guard keeps an identifier whole, so an enum value list is not read as a copied sentence (konyklabs/roadmap[#135](https://github.com/konyklabs/vendorfake/issues/135)) ([#61](https://github.com/konyklabs/vendorfake/issues/61)) ([5fdcc29](https://github.com/konyklabs/vendorfake/commit/5fdcc29e6beed3ea43b045a5ee02afddb110ccc4))
+
+
+### Code Refactoring
+
+* strip JavaScript, agent-setup, demo transports, dead abstractions and prose (konyklabs/roadmap[#116](https://github.com/konyklabs/vendorfake/issues/116)) ([#49](https://github.com/konyklabs/vendorfake/issues/49)) ([2f97630](https://github.com/konyklabs/vendorfake/commit/2f9763086f104637c1913fcd41ac7aeb9cd1a266))
+
 ## [0.5.0](https://github.com/konyklabs/vendorfake/compare/v0.4.0...v0.5.0) (2026-09-04)
 
 
