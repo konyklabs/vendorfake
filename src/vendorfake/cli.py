@@ -664,22 +664,24 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
     """The built-in fault catalogue: name, provenance, phase, parameters and a
-    one-line description, read from the same mappings ``GET /__unit/chaos``
-    publishes each rule against, so the two cannot disagree."""
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PHASE, FAULT_PROVENANCE
+    one-line description, read from ``vendorfake.registry.faults()``, the same
+    catalogue ``GET /__unit/chaos`` publishes each rule against, so the two
+    cannot disagree."""
     from vendorfake.core.util.json import dump_json
+    from vendorfake.registry import faults as list_faults
 
-    names = sorted(FAULT_PARAM_KEYS)
+    found = list_faults()
     if _wants_json(args):
         payload = [
             {
-                "name": name,
-                "provenance": FAULT_PROVENANCE[name],
-                "phase": FAULT_PHASE[name],
-                "params": list(FAULT_PARAM_KEYS[name]),
-                "description": FAULT_DESCRIPTIONS[name],
+                "name": row.name,
+                "scope": row.scope,
+                "provenance": row.provenance,
+                "phase": row.phase,
+                "params": list(row.params),
+                "description": row.summary,
             }
-            for name in names
+            for row in found
         ]
         print(dump_json(payload).decode("utf-8"), file=out)
         return 0
@@ -687,13 +689,13 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
         _table(
             [
                 {
-                    "name": name,
-                    "provenance": FAULT_PROVENANCE[name],
-                    "phase": FAULT_PHASE[name],
-                    "params": ", ".join(FAULT_PARAM_KEYS[name]),
-                    "description": FAULT_DESCRIPTIONS[name],
+                    "name": row.name,
+                    "provenance": row.provenance,
+                    "phase": row.phase,
+                    "params": ", ".join(row.params),
+                    "description": row.summary,
                 }
-                for name in names
+                for row in found
             ],
             ("name", "provenance", "phase", "params", "description"),
         ),

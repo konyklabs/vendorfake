@@ -8,6 +8,7 @@ from vendorfake.registry import (
     available_profiles,
     available_vendors,
     create_unit,
+    faults,
     resolve_vendor,
     routes,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "available_profiles",
     "available_vendors",
     "create_unit",
+    "faults",
     "resolve_vendor",
     "routes",
 ]

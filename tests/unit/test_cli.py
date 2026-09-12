@@ -422,6 +422,29 @@ def test_faults_table_form_has_a_provenance_column() -> None:
     assert any("vendor" in row for row in rows)
 
 
+def test_faults_json_is_the_registry_rows_projected_to_the_commands_keys() -> None:
+    """``cli.py`` projects ``registry.FaultInfo`` to the command's own JSON
+    keys; this pins that projection so the two cannot drift apart."""
+    import dataclasses
+
+    from vendorfake.registry import faults
+
+    code, out = run("faults", "--json")
+    assert code == 0
+    expected = [
+        {
+            "name": row["name"],
+            "scope": row["scope"],
+            "provenance": row["provenance"],
+            "phase": row["phase"],
+            "params": list(row["params"]),
+            "description": row["summary"],
+        }
+        for row in (dataclasses.asdict(f) for f in faults())
+    ]
+    assert json.loads(out) == expected
+
+
 def test_fault_descriptions_names_exactly_the_fault_param_keys_names() -> None:
     """The drift the CLI would otherwise reproduce silently: a fault with
     parameters and no prose, or prose for a fault the engine does not have."""

@@ -238,6 +238,34 @@ def test_route_for_an_unknown_operation_id_lists_the_ones_that_exist() -> None:
         assert "ObtainToken" in str(caught.value)
 
 
+def test_faults_phase_and_params_for_three_named_faults() -> None:
+    from vendorfake.registry import faults
+
+    by_name = {row.name: row for row in faults()}
+    assert by_name["refresh_rejected"].phase == "request"
+    assert by_name["authorize_denied"].phase == "handler"
+    assert "commit" in by_name["connection_reset"].params
+
+
+def test_faults_is_sorted_by_name() -> None:
+    from vendorfake.registry import faults
+
+    names = [row.name for row in faults()]
+    assert names == sorted(names)
+
+
+def test_faults_starts_no_unit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike ``routes()``, which needs a running unit to build its table,
+    ``faults()`` reads static catalogues and must not touch ``create_unit``."""
+    import vendorfake.registry as registry_module
+
+    def _boom(**kwargs: object) -> None:
+        raise AssertionError("faults() must not start a unit")
+
+    monkeypatch.setattr(registry_module, "create_unit", _boom)
+    assert len(registry_module.faults()) > 0
+
+
 def test_capabilities_and_profile_together_is_a_value_error() -> None:
     with pytest.raises(ValueError) as caught:
         create_unit(vendor="square", profile="full", capabilities=["oauth"])
@@ -364,3 +392,20 @@ def test_a_unit_started_by_profile_reports_no_requested_capabilities() -> None:
         assert unit.context.config.requested_capabilities is None
     finally:
         unit.stop()
+
+
+def test_every_fault_scope_is_a_rule_scope_and_follows_the_webhook_prefix() -> None:
+    """``scope`` is what a consumer copies into a rule, so it is pinned to a
+    source independent of :func:`faults`: the rule grammar's closed ``ChaosScope``
+    vocabulary, and the catalogue's own naming, where exactly the ``webhook.``
+    faults are webhook-scoped."""
+    from typing import get_args
+
+    from vendorfake.core.chaos.rules import ChaosScope
+    from vendorfake.registry import faults
+
+    rows = faults()
+    assert {row.scope for row in rows} <= set(get_args(ChaosScope))
+    assert {row.name for row in rows if row.scope == "webhook"} == {
+        row.name for row in rows if row.name.startswith("webhook.")
+    }
