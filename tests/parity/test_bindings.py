@@ -14,12 +14,14 @@ import subprocess
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 import pytest
 
 from vendorfake.testing import (
     SERVE_COMMAND,
+    UnitTransport,
     _ChildOutput,
     _stop,
     _wait_for_announcement,
@@ -39,6 +41,8 @@ class Bound:
 
     binding: str
     client: httpx.Client
+    #: The in-process unit, for a client that bypasses the driver; ``None`` over a socket.
+    unit: Any = None
 
 
 Opener = Callable[[Mapping[str, str], float | None], Iterator[Bound]]
@@ -49,7 +53,7 @@ def _in_process(explicit: Mapping[str, str], read_timeout_s: float | None, unmat
     with unit(VENDOR, env=explicit, unmatched=unmatched) as started:  # type: ignore[arg-type]
         if read_timeout_s is not None:
             started.client.timeout = httpx.Timeout(read_timeout_s)
-        yield Bound("unit", started.client)
+        yield Bound("unit", started.client, started.unit)
 
 
 @contextmanager
@@ -294,3 +298,39 @@ def test_a_body_over_the_limit_is_the_vendors_bad_request(
         )
         assert response.status_code == 400
         assert response.headers["x-unit-error"] == "bad_request"
+
+
+# -- control-plane token (konyklabs/roadmap#134) --------------------------------
+
+CONTROL_TOKEN = "parity-control-token-under-test"
+CONTROL_TOKEN_HEADER = "vendorfake-control-token"
+
+
+@contextmanager
+def _headerless(bound: Bound) -> Iterator[httpx.Client]:
+    """A client that sends no token: the unit's transport in process, the same address over a socket."""
+    if bound.unit is not None:
+        client = httpx.Client(
+            transport=UnitTransport(bound.unit, unmatched="vendor-404"), base_url=bound.client.base_url
+        )
+    else:
+        client = httpx.Client(base_url=bound.client.base_url, timeout=10.0)
+    with client:
+        yield client
+
+
+@pytest.mark.parametrize("binding", ALL)
+def test_an_exported_control_token_is_sent_by_every_driver_and_required_on_every_binding(
+    binding: str, open_unit: Callable[..., Iterator[Bound]]
+) -> None:
+    """The bare CLI has no driver, so its caller sends the header itself; every Python driver sends it for them."""
+    sent = {CONTROL_TOKEN_HEADER: CONTROL_TOKEN} if binding == "cli" else {}
+    with open_unit(ambient={"VENDORFAKE_CONTROL_TOKEN": CONTROL_TOKEN}) as bound:
+        assert bound.client.post("/__unit/state/reset", json={}, headers=sent).status_code == 200
+        assert bound.client.get("/__unit/info", headers=sent).json()["control"] == {"token_required": True}
+        with _headerless(bound) as raw:
+            refused = raw.get("/__unit/info")
+            assert refused.status_code == 401
+            assert refused.headers["x-unit-error"] == "unauthorized"
+            assert CONTROL_TOKEN not in refused.text
+            assert raw.get("/__unit/health").status_code == 200

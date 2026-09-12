@@ -28,6 +28,7 @@ import httpx
 from vendorfake import registry
 from vendorfake.core.config.models import ResolvedConfig, UnmatchedPolicy
 from vendorfake.core.config.profile import DEFAULT_PROFILE_NAME, ENV_SEED, ENV_VENDOR_PREFIX, load_profile
+from vendorfake.core.control.access import CONTROL_TOKEN_ENV, control_token_hooks
 from vendorfake.core.control.plane import DEFAULT_REQUEST_LIMIT
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER
 from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, VendorDefinition
@@ -158,6 +159,8 @@ class Driver(Generic[SeedT]):
     client: httpx.Client
     seed: SeedT
     _async_client: httpx.AsyncClient | None = field(default=None, kw_only=True, repr=False)
+    #: ``VENDORFAKE_CONTROL_TOKEN`` as the unit resolved it, sent on control-plane paths only.
+    _control_token: str | None = field(default=None, kw_only=True, repr=False)
 
     @property
     def async_client(self) -> httpx.AsyncClient:
@@ -165,7 +168,9 @@ class Driver(Generic[SeedT]):
         lazily so it binds the loop that first uses it; closed with the driver."""
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(
-                base_url=self.base_url, timeout=CLIENT_TIMEOUT_S, event_hooks=_async_hooks(self.client)
+                base_url=self.base_url,
+                timeout=CLIENT_TIMEOUT_S,
+                event_hooks=_async_hooks(self.client, self._control_token),
             )
         return self._async_client
 
@@ -404,7 +409,10 @@ class StartedUnit(Driver[SeedT]):
         if self._async_client is None:
             transport = self._transport if self._transport is not None else UnitTransport(self.unit)
             self._async_client = httpx.AsyncClient(
-                transport=transport, base_url=self.base_url, timeout=CLIENT_TIMEOUT_S
+                transport=transport,
+                base_url=self.base_url,
+                timeout=CLIENT_TIMEOUT_S,
+                event_hooks=_async_hooks(self.client, self._control_token),
             )
         return self._async_client
 
@@ -648,6 +656,7 @@ def _unit(
         logger=JsonLogger("warn") if logger is None else logger,
     )
     transport = UnitTransport(built, unmatched=unmatched)
+    control_token = built.context.config.control.token
     started: StartedUnit[Any] | None = None
     try:
         # Before the client, so a refusal leaves the unit stopped, and named with
@@ -661,7 +670,12 @@ def _unit(
             built.context.config.profile,
             seed_for(built.name, built.context.config.vendor_config, definition=built.context.vendor),
         )
-        with httpx.Client(transport=transport, base_url=IN_PROCESS_BASE_URL, timeout=CLIENT_TIMEOUT_S) as client:
+        with httpx.Client(
+            transport=transport,
+            base_url=IN_PROCESS_BASE_URL,
+            timeout=CLIENT_TIMEOUT_S,
+            event_hooks={"request": control_token_hooks(control_token)[0]},
+        ) as client:
             started = StartedUnit(
                 vendor=built.name,
                 profile=built.context.config.profile,
@@ -670,6 +684,7 @@ def _unit(
                 seed=resolved_seed,
                 unit=built,
                 _transport=transport,
+                _control_token=control_token,
             )
             yield started
     finally:
@@ -703,16 +718,21 @@ async def _raise_on_near_miss_async(response: httpx.Response) -> None:
     _raise_on_near_miss(response)
 
 
-def _http_client(base_url: str, unmatched: UnmatchedPolicy | None) -> httpx.Client:
-    """The sync client of an HTTP driver, with the near-miss hook under ``"error"``."""
+def _http_client(base_url: str, unmatched: UnmatchedPolicy | None, control_token: str | None = None) -> httpx.Client:
+    """The sync client of an HTTP driver, with the near-miss hook under ``"error"`` and the control token hook."""
     policy = checked_unmatched(unmatched) or DEFAULT_INPROCESS_POLICY
     hooks: dict[str, list[Any]] = {"response": [_raise_on_near_miss]} if policy == "error" else {}
+    hooks["request"] = control_token_hooks(control_token)[0]
     return httpx.Client(base_url=base_url, timeout=CLIENT_TIMEOUT_S, event_hooks=hooks)
 
 
-def _async_hooks(client: httpx.Client) -> dict[str, list[Any]]:
-    """The async twin of ``client``'s response hooks."""
-    return {"response": [_raise_on_near_miss_async]} if client.event_hooks.get("response") else {}
+def _async_hooks(client: httpx.Client, control_token: str | None = None) -> dict[str, list[Any]]:
+    """The async twin of ``client``'s response hooks, plus the control token hook."""
+    hooks: dict[str, list[Any]] = (
+        {"response": [_raise_on_near_miss_async]} if client.event_hooks.get("response") else {}
+    )
+    hooks["request"] = control_token_hooks(control_token)[1]
+    return hooks
 
 
 _CLOSING: set[asyncio.Task[None]] = set()
@@ -893,12 +913,18 @@ def serve_in_thread(started: StartedUnit[SeedT], *, host: str = "127.0.0.1", por
     from vendorfake.asgi import serve_in_thread as serve_app
 
     policy = started._transport.unmatched if started._transport is not None else None
+    control_token = started.unit.context.config.control.token
     with (
         serve_app(create_app(started.unit), host=host, port=port) as base_url,
-        _http_client(base_url, policy) as client,
+        _http_client(base_url, policy, control_token) as client,
     ):
         driver = Driver(
-            vendor=started.vendor, profile=started.profile, base_url=base_url, client=client, seed=started.seed
+            vendor=started.vendor,
+            profile=started.profile,
+            base_url=base_url,
+            client=client,
+            seed=started.seed,
+            _control_token=control_token,
         )
         try:
             yield driver
@@ -1019,6 +1045,7 @@ def served(
     precedence and the names the mapping may not carry. ``seed_overlay`` reaches
     the child as ``VENDORFAKE_SEED_OVERLAY``. A session-scoped ``served()``
     against a vendor with rotating state needs :meth:`Driver.reset` between tests.
+    The child serves one listener, so an exported ``VENDORFAKE_CONTROL_PORT``/``_HOST`` never reaches it.
 
     ``validate=True`` passes ``--validate`` to the child: every answer is checked
     against the vendor's published schema and a violation comes back as a 500
@@ -1107,6 +1134,12 @@ def _served(
         )
     # The same refusal for the variables an explicit flag below would silently
     # beat: an entry that changes nothing is worse than one that is refused.
+    split = sorted(_SPLIT_LISTENER_ENV & set(layer))
+    if split:
+        raise ValueError(
+            f"served(env=...) cannot carry {', '.join(split)}: served() drives one listener, the control plane "
+            "included. A control plane on a port of its own belongs to `vendorfake serve --control-port`."
+        )
     beaten = sorted(_FLAG_BEATEN_ENV & set(layer))
     if beaten:
         raise ValueError(
@@ -1173,12 +1206,15 @@ def _served(
     # The second documented exception to `cli.py`'s `os.environ` invariant:
     # `Popen`'s `env=` replaces rather than layers, so adding one variable to the
     # environment it would otherwise inherit has no path that avoids this read.
-    child_env = None if not layer else {**os.environ, **layer}
+    inherited = {key: value for key, value in os.environ.items() if key not in _SPLIT_LISTENER_ENV}
+    child_env = None if not layer and len(inherited) == len(os.environ) else {**inherited, **layer}
     process = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=child_env)
     output = _ChildOutput(process)
     try:
         base_url = _wait_for_announcement(process, output, timeout_s)
-        with _http_client(base_url, unmatched) as client:
+        # From the environment the child was handed, so parent and child agree on the token.
+        control_token = child_view.get(CONTROL_TOKEN_ENV) or None
+        with _http_client(base_url, unmatched, control_token) as client:
             health = client.get("/__unit/health").json()
             child = ServedUnit(
                 vendor=str(health["vendor"]),
@@ -1191,6 +1227,7 @@ def _served(
                 seed=resolved_seed,
                 process=process,
                 _output=output,
+                _control_token=control_token,
             )
             try:
                 yield child
@@ -1206,6 +1243,9 @@ _FLAG_BEATEN_ENV: frozenset[str] = frozenset({"VENDORFAKE_HOST", "VENDORFAKE_POR
 the child getting each as a flag that beats the variable."""
 
 _FLAG_BEATEN_HINT = "host=, port= and log_level="
+
+_SPLIT_LISTENER_ENV: frozenset[str] = frozenset({"VENDORFAKE_CONTROL_PORT", "VENDORFAKE_CONTROL_HOST"})
+"""Never handed to a :func:`served` child, whose driver talks to one listener."""
 
 SERVE_COMMAND: tuple[str, ...] = (sys.executable, "-m", "vendorfake", "serve")
 """What :func:`served` runs, before the flags. A module attribute so a test of

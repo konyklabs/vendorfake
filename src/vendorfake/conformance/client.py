@@ -17,6 +17,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from vendorfake.core.control.access import control_token_hooks
+
 __all__ = [
     "MISSING",
     "ConformanceClient",
@@ -173,8 +175,9 @@ class HttpConformanceClient:
 
     __slots__ = ("_client",)
 
-    def __init__(self, base_url: str, *, timeout_s: float = 30.0) -> None:
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s)
+    def __init__(self, base_url: str, *, timeout_s: float = 30.0, control_token: str | None = None) -> None:
+        hooks = control_token_hooks(control_token, base_path=httpx.URL(base_url).path)[0]
+        self._client = httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout_s, event_hooks={"request": hooks})
 
     def call(
         self,

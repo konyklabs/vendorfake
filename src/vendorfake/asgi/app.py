@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 try:
     from fastapi import FastAPI
@@ -19,7 +19,8 @@ try:
 except ImportError as exc:
     raise ImportError("vendorfake serve needs the 'serve' extra: pip install 'vendorfake[serve]'") from exc
 
-from vendorfake.asgi.adapt import to_response, to_unit_request
+from vendorfake.asgi.adapt import request_headers, request_path, to_response, to_unit_request
+from vendorfake.core.control.access import control_access_error, names_control_plane
 from vendorfake.core.control.openapi import document_for_unit
 from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE, normalize
 from vendorfake.core.kernel.types import (
@@ -36,6 +37,7 @@ from vendorfake.core.util.json import dump_json
 __all__ = [
     "HTTP_METHODS",
     "OPENAPI_PATH",
+    "Surface",
     "TransportFaultAbort",
     "create_app",
     "registered_methods",
@@ -55,6 +57,9 @@ HTTP_METHODS: tuple[str, ...] = (
 
 OPENAPI_PATH = "/__unit/openapi.json"
 """Where the generated surface description is served, per binding."""
+
+Surface = Literal["all", "vendor", "control"]
+"""What one listener answers: both surfaces, or one of them when the control plane has a port of its own."""
 
 
 class TransportFaultAbort(Exception):
@@ -104,11 +109,22 @@ def _directive_response(status: int, headers: dict[str, str], directive: Transpo
     return StreamingResponse(_aborted_body(), status_code=status, headers=headers)
 
 
+def _vendor_surface_refusal(request: Request, path: str, vendor_port: int | None) -> Response:
+    """The control listener's 404 for a vendor path, naming where the vendor surface is."""
+    shown = f"{request.scope.get('root_path', '')}{path}"
+    message = f"{request.method} {shown} is the vendor surface; it is served on port {vendor_port}"
+    return Response(
+        content=dump_json({"message": message}), status_code=404, headers={"content-type": JSON_CONTENT_TYPE}
+    )
+
+
 def create_app(
     unit: Unit,
     *,
     logger: Logger | None = None,
     observer: ResponseObserver | None = None,
+    surface: Surface = "all",
+    vendor_port: int | None = None,
 ) -> FastAPI:
     """Build the ASGI application in front of ``unit``; a factory, never a global.
 
@@ -116,8 +132,11 @@ def create_app(
     change nothing -- except by raising, which is the point: an ``AssertionError`` (a ``FidelityViolation`` is one)
     becomes a 500 in the vendor's own error shape, on the wire where the caller sees it. Anything else propagates.
     """
+    if surface == "control" and vendor_port is None:
+        raise ValueError("create_app(surface='control') needs vendor_port, which its 404 for a vendor path names")
     log = unit.context.log if logger is None else logger
     vendor = unit.context.vendor
+    token = unit.context.config.control.token
 
     app = FastAPI(
         title=f"{vendor.display_name} (vendorfake)",
@@ -133,8 +152,8 @@ def create_app(
     document = document_for_unit(unit)
     document_bytes = dump_json(document)
 
-    async def dispatch(request: Request) -> Response:
-        """The one path from a socket to the unit and back."""
+    async def forward(request: Request) -> Response:
+        """The one path from a socket to the unit and back, reached only through ``dispatch``."""
         try:
             unit_request = await to_unit_request(request)
         except UnitError as err:
@@ -161,6 +180,31 @@ def create_app(
             await asyncio.sleep(response.delay_ms / 1000.0)
         return to_response(response)
 
+    async def not_served_here(request: Request) -> Response:
+        """A control path on the vendor listener: the vendor's own 404, as for any path it does not serve."""
+        try:
+            unit_request = await to_unit_request(request)
+        except UnitError as err:
+            return _transport_error_response(unit, err)
+        return to_response(unit.answer_unmatched(unit_request))
+
+    async def dispatch(request: Request) -> Response:
+        """Every entry point's way in, the framework's refusals included: the surface split, then the document."""
+        # The raw path, for every decision: uvicorn's decoded one reads ``/%5F%5Funit/openapi.json`` as the document.
+        path = request_path(request)
+        if surface != "all" and names_control_plane(path) != (surface == "control"):
+            if surface == "vendor":
+                return await not_served_here(request)
+            return _vendor_surface_refusal(request, path, vendor_port)
+        if (
+            request.method in {"GET", "HEAD"}
+            and path == OPENAPI_PATH
+            and control_access_error(request.method, path, request_headers(request), token) is None
+        ):
+            return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
+        # A refused document request falls through: the kernel answers it with the same 401 as any control path.
+        return await forward(request)
+
     async def framework_answered(request: Request, exc: Exception) -> Response:
         """The framework tried to answer; log it and dispatch to the unit anyway."""
         log.error(
@@ -180,8 +224,6 @@ def create_app(
     @app.api_route("/{full_path:path}", methods=list(HTTP_METHODS), include_in_schema=False)
     async def catch_all(request: Request) -> Response:
         """No typed parameters: a second one would let the framework parse a body."""
-        if request.method in {"GET", "HEAD"} and request.url.path == OPENAPI_PATH:
-            return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
         return await dispatch(request)
 
     return app

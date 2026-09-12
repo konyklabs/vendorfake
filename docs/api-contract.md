@@ -178,6 +178,14 @@ the vendor surfaces are: the conformance suite asserts a vendor's behaviour
 entirely through them, which is what lets an implementation in another
 language be checked against the same contract.
 
+With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request but `GET` or
+`HEAD /__unit/health` must carry the token in the `vendorfake-control-token`
+header, and is otherwise refused with the vendor's 401, `x-unit-error:
+unauthorized`, before routing. The root of a process mounting several vendors
+refuses its own `/__unit/*` paths the same way, with a 401 whose JSON body
+carries only `message`. `GET /__unit/info` carries
+`control: {token_required}` and never the token. Unset, nothing changes.
+
 ### The command line
 
 Every subcommand, every flag, and the JSON document `--json` prints. `--json`
@@ -185,12 +193,17 @@ is accepted on either side of the subcommand name and means the same thing.
 `serve --vendor` (and `$VENDORFAKE_VENDOR`) accepts a comma-separated list —
 `clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
 every other subcommand describes one vendor and refuses a list.
+`serve --control-port` (and `$VENDORFAKE_CONTROL_PORT`) serves `/__unit/*` on
+a second listener, bound to `--control-host` (`$VENDORFAKE_CONTROL_HOST`,
+defaulting to the vendor host); the announce line then ends
+` control on http://<host>:<port>`, and without it the line is unchanged.
 
 ### The profile document
 
 Every key a profile JSON document accepts, and every `VENDORFAKE_*`
 environment variable that overrides one. `GET /__unit/info` publishes the
-resolved result.
+resolved result. `VENDORFAKE_CONTROL_TOKEN` is environment-only: the document
+has no key for it, and a `control` key is refused like any unknown one.
 
 ### The `Vendorfake-*` response headers
 

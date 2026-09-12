@@ -12,7 +12,9 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -843,3 +845,176 @@ def test_a_describing_subcommand_refuses_a_vendor_list() -> None:
         run("info", "--vendor", "clover,square")
 
     assert str(raised.value) == "vendorfake: --vendor names several vendors; only `serve` mounts more than one"
+
+
+# ---------------------------------------------------------------------------
+# `serve --control-port`: the control plane on a listener of its own (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+
+def serve_split_intercepted(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    env: dict[str, str],
+    probe: Callable[[Any, Any], None] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """``serve`` with ``run_split_server`` intercepted: ``build`` gets vendor port 8080, ``probe`` the two apps while
+    their units still run, and the runner's keyword arguments and the announcement come back."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    seen: list[dict[str, Any]] = []
+
+    def fake_run_split_server(build: Callable[[int], tuple[Any, Any]], **kwargs: Any) -> None:
+        vendor_app, control_app = build(8080)
+        if probe is not None:
+            probe(vendor_app, control_app)
+        seen.append(kwargs)
+        kwargs["on_bound"](kwargs["host"], 8080, kwargs["control_host"], 8081)
+
+    def single_listener(app: object, **kwargs: object) -> None:
+        raise AssertionError("a control port was given, but the single-listener runner was used")
+
+    monkeypatch.setattr(asgi_module, "run_split_server", fake_run_split_server)
+    monkeypatch.setattr(asgi_module, "run_server", single_listener)
+    buffer = io.StringIO()
+    args = cli_module._build_parser().parse_args(["serve", "--profile", "oauth-only", *argv])
+    assert cli_module._serve(args, env, buffer) == 0
+    assert len(seen) == 1
+    return seen[0], buffer.getvalue()
+
+
+def test_serve_control_port_builds_a_vendor_app_and_a_control_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.asgi.test_adapt import call
+
+    answers: dict[str, Any] = {}
+
+    def probe(vendor_app: Any, control_app: Any) -> None:
+        answers["vendor info"] = call(vendor_app, "GET", "/__unit/info")
+        answers["vendor openapi"] = call(vendor_app, "GET", "/__unit/openapi.json")
+        answers["control info"] = call(control_app, "GET", "/__unit/info")
+        answers["control vendor path"] = call(control_app, "POST", "/oauth/v2/refresh", json={})
+
+    kwargs, announced = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--port", "0", "--control-port", "0"], {}, probe
+    )
+
+    assert (kwargs["host"], kwargs["port"], kwargs["control_host"], kwargs["control_port"]) == (
+        "127.0.0.1",
+        0,
+        "127.0.0.1",
+        0,
+    )
+    assert answers["vendor info"].status_code == 404
+    assert answers["vendor info"].headers["x-unit-error"] == "not_found"
+    assert answers["vendor openapi"].status_code == 404
+    assert answers["control info"].status_code == 200
+    assert answers["control vendor path"].status_code == 404
+    assert answers["control vendor path"].json() == {
+        "message": "POST /oauth/v2/refresh is the vendor surface; it is served on port 8080"
+    }
+    assert (
+        announced == "vendorfake: listening on http://127.0.0.1:8080 (vendor=clover) control on http://127.0.0.1:8081\n"
+    )
+
+
+def test_serve_control_listener_comes_from_the_environment_and_the_flag_beats_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = {"VENDORFAKE_CONTROL_PORT": "9101", "VENDORFAKE_CONTROL_HOST": "0.0.0.0"}
+
+    kwargs, _ = serve_split_intercepted(monkeypatch, ["--vendor", "clover"], env)
+    assert (kwargs["control_host"], kwargs["control_port"]) == ("0.0.0.0", 9101)
+
+    kwargs, _ = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--control-port", "9102", "--control-host", "127.0.0.2"], env
+    )
+    assert (kwargs["control_host"], kwargs["control_port"]) == ("127.0.0.2", 9102)
+
+    kwargs, _ = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--host", "127.0.0.3", "--control-port", "9103"], {}
+    )
+    assert (kwargs["host"], kwargs["control_host"], kwargs["control_port"]) == ("127.0.0.3", "127.0.0.3", 9103)
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "fragment"),
+    [
+        (
+            ["--vendor", "clover", "--port", "9000", "--control-port", "9000"],
+            {},
+            "--control-port 9000 is the vendor port",
+        ),
+        (["--vendor", "clover"], {"VENDORFAKE_PORT": "9000", "VENDORFAKE_CONTROL_PORT": "9000"}, "is the vendor port"),
+        (["--vendor", "clover,square", "--port", "9000", "--control-port", "9000"], {}, "is the vendor port"),
+        (["--vendor", "clover", "--control-host", "127.0.0.1"], {}, "--control-host needs --control-port"),
+        (["--vendor", "clover"], {"VENDORFAKE_CONTROL_PORT": "eighty"}, "VENDORFAKE_CONTROL_PORT='eighty'"),
+    ],
+)
+def test_serve_refuses_a_control_listener_it_cannot_bind(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str], fragment: str
+) -> None:
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a refused control listener reached a server runner")
+
+    monkeypatch.setattr(asgi_module, "run_server", never)
+    monkeypatch.setattr(asgi_module, "run_split_server", never)
+    parser = cli_module._build_parser()
+    with pytest.raises(SystemExit) as raised:
+        cli_module._serve(parser.parse_args(["serve", "--profile", "oauth-only", *argv]), env, io.StringIO())
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+    assert fragment in str(raised.value)
+
+
+def test_serve_without_a_control_port_announces_the_single_listener_lines_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, announced = serve_intercepted(monkeypatch, ["--vendor", "clover"], {})
+    assert announced == "vendorfake: listening on http://127.0.0.1:8080 (vendor=clover)\n"
+
+    _, announced = serve_intercepted(monkeypatch, ["--vendor", "clover,square"], {})
+    assert (
+        announced == "vendorfake: listening on http://127.0.0.1:8080 (vendors=clover,square; mounts=/clover,/square)\n"
+    )
+
+
+def test_serve_control_port_with_several_vendors_splits_every_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.asgi.test_adapt import call
+
+    answers: dict[str, Any] = {}
+
+    def probe(vendor_app: Any, control_app: Any) -> None:
+        answers["vendor mount control path"] = call(vendor_app, "GET", "/clover/__unit/info")
+        answers["vendor root health"] = call(vendor_app, "GET", "/__unit/health")
+        answers["control mount info"] = call(control_app, "GET", "/square/__unit/info")
+        answers["control root health"] = call(control_app, "GET", "/__unit/health")
+        answers["control vendor path"] = call(control_app, "GET", "/clover/v3/merchants/abc")
+
+    _, announced = serve_split_intercepted(monkeypatch, ["--vendor", "clover,square", "--control-port", "0"], {}, probe)
+
+    assert answers["vendor mount control path"].status_code == 404
+    assert answers["vendor mount control path"].headers["x-unit-error"] == "not_found"
+    assert answers["vendor root health"].status_code == 404
+    assert answers["control mount info"].json()["vendor"]["name"] == "square"
+    assert answers["control root health"].json()["vendors"] == ["clover", "square"]
+    assert answers["control vendor path"].json() == {
+        "message": "GET /clover/v3/merchants/abc is the vendor surface; it is served on port 8080"
+    }
+    assert announced == (
+        "vendorfake: listening on http://127.0.0.1:8080 (vendors=clover,square; mounts=/clover,/square) "
+        "control on http://127.0.0.1:8081\n"
+    )
+
+
+def test_info_sends_the_control_token_its_unit_resolved() -> None:
+    """``vendorfake info`` reads ``/__unit/info`` in process, so an exported token must not turn it into a 401."""
+    import vendorfake.cli as cli_module
+
+    buffer = io.StringIO()
+    args = cli_module._build_parser().parse_args(["info", "--vendor", "clover", "--profile", "oauth-only"])
+    assert cli_module._info(args, {"VENDORFAKE_CONTROL_TOKEN": "cli-control-token"}, buffer) == 0
+    assert json.loads(buffer.getvalue())["control"] == {"token_required": True}

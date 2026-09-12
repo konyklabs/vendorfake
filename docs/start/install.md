@@ -62,17 +62,20 @@ under its own prefix (`http://localhost:8080/clover`, `.../square`, control
 planes at `/clover/__unit/...`), with the root `/__unit/info` listing them;
 see [Bindings → Docker compose](bindings.md#docker-compose).
 
-Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
-plane is deliberately unauthenticated — it hands out the seeded credentials
-and will POST webhooks at any URL it is told — so a fake published to the
-network is an outbound-request primitive for anyone who can route to your
-host. When another container or machine must reach it deliberately, put both
-on a Docker network (or use Testcontainers, as the [docker compose
+Publish the port on loopback (`-p 127.0.0.1:...`), as above: by default the
+control plane is unauthenticated — it hands out the seeded credentials and
+will POST webhooks at any URL it is told — so a fake published to the network
+is an outbound-request primitive for anyone who can route to your host. When
+another container or machine must reach it deliberately, put both on a Docker
+network (or use Testcontainers, as the [docker compose
 section](bindings.md#docker-compose) does) rather than widening the host
-bind.
+bind. Two opt-ins exist for a fake that must be networked: a control plane on
+its own port (`VENDORFAKE_CONTROL_PORT`), and a token every control-plane call
+but `GET` or `HEAD /__unit/health` must carry (`VENDORFAKE_CONTROL_TOKEN`). See [Bindings →
+A control plane on its own port](bindings.md#a-control-plane-on-its-own-port).
 
 The image runs as a non-root user, listens on 8080, and carries a
-`HEALTHCHECK` on `/__unit/info` so `docker ps` (and any orchestrator) reports
+`HEALTHCHECK` on `/__unit/health` so `docker ps` (and any orchestrator) reports
 `healthy` only once the unit has hydrated its seed and is answering. With no
 vendor set it refuses and lists what it found — it never guesses.
 `tools/verify_image_build.sh` is the build's own proof: it builds, serves each

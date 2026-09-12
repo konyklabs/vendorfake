@@ -51,11 +51,13 @@ USER vendorfake
 WORKDIR /home/vendorfake
 EXPOSE 8080
 
-# /__unit/info is served by every vendor on every profile and is built from
-# the unit's own tables, so a 200 here means the unit constructed, hydrated
-# its seed and is answering -- not merely that a socket is open.
+# /__unit/health is served by every vendor on every profile, only once the
+# unit has constructed and hydrated its seed, so a 200 means the unit is
+# answering -- not merely that a socket is open. It is the one route
+# VENDORFAKE_CONTROL_TOKEN never guards, and with VENDORFAKE_CONTROL_PORT set
+# the control plane has a listener of its own, so the probe follows it there.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=5s --retries=5 \
-  CMD ["python", "-c", "import os, sys, urllib.request; port = os.environ.get('VENDORFAKE_PORT', '8080'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/__unit/info', timeout=2).status == 200 else 1)"]
+  CMD ["python", "-c", "import os, sys, urllib.request; port = os.environ.get('VENDORFAKE_CONTROL_PORT') or os.environ.get('VENDORFAKE_PORT', '8080'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/__unit/health', timeout=2).status == 200 else 1)"]
 
 ENTRYPOINT ["vendorfake"]
 CMD ["serve"]
