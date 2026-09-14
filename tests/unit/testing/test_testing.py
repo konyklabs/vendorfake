@@ -296,6 +296,17 @@ def test_unit_resolves_profile_through_the_argument_then_env_then_the_default() 
         assert square.profile == "no-faults"
 
 
+def test_unit_s_explicit_profile_beats_the_per_vendor_variable_too() -> None:
+    """konyklabs/roadmap#134: ``VENDORFAKE_PROFILE_SQUARE`` sits between the
+    argument and the bare ``VENDORFAKE_PROFILE`` in the order above, not ahead
+    of the argument -- explicit configuration still beats every
+    ``VENDORFAKE_*`` variable."""
+    with unit("square", env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as square:
+        assert square.profile == "oauth-only"  # no argument: the pin applies
+    with unit("square", "no-faults", env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as square:
+        assert square.profile == "no-faults"  # the argument wins outright
+
+
 def test_a_memory_sink_captures_instead_of_delivering() -> None:
     sink = MemorySink()
     with unit("square", sink=sink) as square:
@@ -367,12 +378,46 @@ def test_served_takes_capabilities_the_way_unit_does() -> None:
         assert "order-lifecycle" in enabled and "oauth" not in enabled
 
 
+def test_served_capabilities_are_not_overridden_by_a_per_vendor_pin() -> None:
+    """konyklabs/roadmap#134: the parent's pre-check (used for the seed) and the child it spawns must agree
+    that ``capabilities=`` -- not the pin -- decides the profile here."""
+    with served("square", capabilities=["orders"], env={"VENDORFAKE_PROFILE_SQUARE": "oauth-only"}) as child:
+        assert child.profile == "orders-only"
+
+
+def test_served_starts_with_a_profile_path_containing_an_equals_sign(tmp_path: Path) -> None:
+    """``served()`` hands the path to the child as the `--profile` flag; the child must load it as one
+    profile rather than re-parsing it as `serve`'s `vendor=profile` grammar."""
+    from vendorfake.registry import resolve_vendor
+
+    profile_dir = tmp_path / "run=1"
+    profile_dir.mkdir()
+    shipped = (resolve_vendor("square").profile_dir / "full.json").read_text(encoding="utf-8")
+    path = profile_dir / "p.json"
+    path.write_text(shipped, encoding="utf-8")
+
+    with served("square", str(path)) as child:
+        assert child.profile == "full"
+
+
 def test_served_honours_an_ambient_profile_and_an_explicit_one_beats_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VENDORFAKE_PROFILE", "no-faults")
     with served("square") as child:
         assert child.profile == "no-faults"
     with served("square", "oauth-only") as child:
         assert child.profile == "oauth-only"
+
+
+def test_served_honours_an_ambient_per_vendor_pin_and_an_explicit_one_beats_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """konyklabs/roadmap#134: the parent's own pre-check and the child it spawns must agree, so this is
+    asserted the same way as the bare ``VENDORFAKE_PROFILE`` case above."""
+    monkeypatch.setenv("VENDORFAKE_PROFILE_SQUARE", "oauth-only")
+    with served("square") as child:
+        assert child.profile == "oauth-only"
+    with served("square", "no-faults") as child:
+        assert child.profile == "no-faults"
 
 
 def test_served_offers_an_async_client_onto_the_child() -> None:

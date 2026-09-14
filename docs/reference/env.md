@@ -7,6 +7,7 @@ Every environment variable `load_profile` reads.
 | Variable | Applies to | Summary |
 | --- | --- | --- |
 | `VENDORFAKE_PROFILE` | profile | Profile name or path to load when none is passed. |
+| `VENDORFAKE_PROFILE_<suffix>` | profile | Prefix: the remainder names a vendor; that vendor's profile, beating VENDORFAKE_PROFILE. |
 | `VENDORFAKE_CAPABILITIES` | capabilities | Absolute list, or a +add,-remove delta against the profile's list. |
 | `VENDORFAKE_SEED` | seed_path | Seed document path, overriding the profile's. |
 | `VENDORFAKE_SEED_OVERLAY` | seed_overlay | Partial seed document merged over the seed: a JSON file path, or the JSON itself inline. |

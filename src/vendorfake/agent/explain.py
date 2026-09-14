@@ -30,14 +30,13 @@ __all__ = [
 
 def _check_profile(vendor: str, profile: str) -> None:
     """Refuse an unknown named ``profile`` before a unit is built from it, in the
-    message shape :func:`explain_profile` uses. A path-form ``profile`` -- the
-    same heuristic ``profile_path`` uses -- passes unchecked and fails one call
-    later in ``load_profile``, whose ``UnitError`` the caller also catches."""
-    from pathlib import Path
-
+    message shape :func:`explain_profile` uses. A path-form ``profile`` passes
+    unchecked and fails one call later in ``load_profile``, whose ``UnitError``
+    the caller also catches."""
+    from vendorfake.core.config.profile import is_profile_path
     from vendorfake.registry import available_profiles
 
-    if Path(profile).is_absolute() or profile.endswith(".json"):
+    if is_profile_path(profile):
         return
     offered = sorted(row.name for row in available_profiles(vendor))
     if profile not in offered:
