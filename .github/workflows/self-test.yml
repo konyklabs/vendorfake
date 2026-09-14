@@ -32,6 +32,12 @@ jobs:
       - name: Quick self-test
         run: bash tools/self-test.sh --quick
 
+      # The four vendor unit suites and the cross-binding parity suite: about
+      # thirty seconds together, and the only pytest a pull request runs. The
+      # full suite stays on push to main (konyklabs/roadmap#116, phase 9).
+      - name: Vendor and parity suites
+        run: uv run pytest tests/unit/square tests/unit/clover tests/unit/toast tests/unit/lightspeed tests/parity -q -p no:randomly
+
   test:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
