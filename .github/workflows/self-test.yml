@@ -41,7 +41,15 @@ jobs:
   test:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Headroom, not a budget (konyklabs/roadmap#144). At 15 the cap sat inside
+    # the suite's own variance: of 16 matrix legs on main from 2026-09-12
+    # onwards, 13 were killed at 15m10s-15m18s while the 3 that finished took
+    # 13m42s, 14m31s and 14m32s -- so most pushes got no verdict, and the two
+    # that did got half a matrix. A cap the timeout kills reports as
+    # `cancelled`, not `failure`, which is why it read as something external.
+    # `pytest` alone is ~9m of a completed leg, so splitting the other rows out
+    # cannot by itself buy much room; that is #144's remaining half.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
