@@ -33,16 +33,27 @@ _REST_DATE = re.compile(
 _BUSINESS_DATE = re.compile(r"^\d{8}$")
 
 
+def _spelled(epoch_ms: float, zone: str) -> str:
+    """The calendar part both wires share, with ``zone`` appended. Not
+    ``strftime``: Python delegates ``%Y`` to the platform C library, and glibc
+    does not zero-pad a year below 1000 (konyklabs/roadmap#141).
+    """
+    moment = _EPOCH + timedelta(milliseconds=math.floor(epoch_ms))
+    return (
+        f"{moment.year:04d}-{moment.month:02d}-{moment.day:02d}"
+        f"T{moment.hour:02d}:{moment.minute:02d}:{moment.second:02d}"
+        f".{moment.microsecond // 1000:03d}{zone}"
+    )
+
+
 def rest_date(epoch_ms: float) -> str:
     """``2025-01-15T14:30:00.000+0000`` -- the REST spelling, always UTC."""
-    moment = _EPOCH + timedelta(milliseconds=math.floor(epoch_ms))
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}+0000"
+    return _spelled(epoch_ms, "+0000")
 
 
 def webhook_date(epoch_ms: float) -> str:
     """``2024-03-28T15:11:01.050Z`` -- the webhook spelling."""
-    moment = _EPOCH + timedelta(milliseconds=math.floor(epoch_ms))
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
+    return _spelled(epoch_ms, "Z")
 
 
 def parse_rest_date(text: str, *, field: str) -> int:
