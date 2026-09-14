@@ -178,7 +178,9 @@ def _faults_page() -> None:
         ),
         title="Faults",
         intro=(
-            "Every built-in fault. `provenance: vendor` reproduces a failure mode "
+            "Every built-in fault, readable without a unit via "
+            "`vendorfake.registry.faults()` or `vendorfake faults --json`. "
+            "`provenance: vendor` reproduces a failure mode "
             "the vendor documents; `provenance: transport` is a transport-level "
             "failure mode no vendor documents. `phase: request` fires instead of "
             "the handler, so nothing is committed; `phase: handler` is handed to "

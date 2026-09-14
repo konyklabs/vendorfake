@@ -233,8 +233,11 @@ _WINDOW = 8
 
 def _prose_words(text: str) -> list[str]:
     """Words, lower-cased and stripped of punctuation, with URLs removed first:
-    a citation of the vendor's page is not a copy of the vendor's prose."""
-    return re.sub(r"[^a-z0-9 ]", " ", re.sub(r"https?://\S+", " ", text).lower()).split()
+    a citation of the vendor's page is not a copy of the vendor's prose. An
+    underscore joins rather than separates, so ``HALF_UP`` stays one word, escaped or not."""
+    no_urls = re.sub(r"\\+_", "_", re.sub(r"https?://\S+", " ", text)).lower()
+    stripped = re.sub(r"[^a-z0-9_ ]", " ", no_urls)
+    return [word.strip("_") for word in stripped.split() if word.strip("_")]
 
 
 def prose_leaks(texts: Mapping[str, str], documents: Sequence[bytes]) -> dict[str, list[str]]:

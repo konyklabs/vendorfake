@@ -12,6 +12,7 @@ import inspect
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.unit.asgi.test_adapt import call
@@ -354,3 +355,126 @@ def test_a_silent_observer_changes_no_byte_of_the_answer(unit: Any, app: Any) ->
     assert {k: v for k, v in observed.headers.items() if k != "x-unit-request-id"} == {
         k: v for k, v in plain.headers.items() if k != "x-unit-request-id"
     }
+
+
+# ---------------------------------------------------------------------------
+# One listener per surface, and the control token on the document the adapter serves (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+CONTROL_TOKEN = "asgi-control-token-under-test"
+
+
+def test_the_vendor_surface_answers_every_control_path_with_the_vendor_s_404(unit: Any) -> None:
+    """The same answer as any path the vendor does not serve, the served document included."""
+    vendor_app = create_app(unit, surface="vendor")
+    unmatched = call(vendor_app, "GET", "/no/such/path")
+    for path in ("/__unit/info", OPENAPI_PATH, "/__unit/nope"):
+        response = call(vendor_app, "GET", path)
+        assert response.status_code == unmatched.status_code == 404
+        assert response.headers["x-unit-error"] == "not_found"
+        assert "vendorfake-near-miss" in response.headers
+        assert response.json() == {"error": {"code": "no_route", "path": path}}
+    assert call(vendor_app, "GET", "/v2/stable").status_code == 200
+
+
+def test_the_control_surface_answers_a_vendor_path_with_a_404_naming_the_vendor_port(unit: Any) -> None:
+    control_app = create_app(unit, surface="control", vendor_port=18080)
+    refused = call(control_app, "POST", "/v2/orders/abc", json={"a": 1})
+    assert refused.status_code == 404
+    assert refused.headers["content-type"] == "application/json"
+    assert refused.json() == {"message": "POST /v2/orders/abc is the vendor surface; it is served on port 18080"}
+    assert call(control_app, "GET", "/__unit/health").status_code == 200
+    assert call(control_app, "GET", OPENAPI_PATH).json()["openapi"].startswith("3.")
+
+
+def test_a_control_surface_without_the_vendor_port_is_refused_at_construction(unit: Any) -> None:
+    with pytest.raises(ValueError, match="vendor_port"):
+        create_app(unit, surface="control")
+
+
+def test_the_served_document_is_refused_without_the_control_token() -> None:
+    """The adapter serves ``/__unit/openapi.json`` itself, so it applies the kernel's check before it does."""
+    from tests.fakes import make_unit, route
+    from vendorfake.core.control.plane import control_plane_routes
+    from vendorfake.core.kernel.reply import json_
+
+    built: Any = make_unit(
+        [route("GET", "/v2/stable", lambda args: json_({"stable": True}))],
+        control_routes=control_plane_routes,
+        control_token=CONTROL_TOKEN,
+    )
+    try:
+        for app in (create_app(built), create_app(built, surface="control", vendor_port=18080)):
+            refused = call(app, "GET", OPENAPI_PATH)
+            assert refused.status_code == 401
+            assert refused.headers["x-unit-error"] == "unauthorized"
+            assert CONTROL_TOKEN not in refused.text
+            assert all(CONTROL_TOKEN not in value for value in refused.headers.values())
+            wrong = call(app, "GET", OPENAPI_PATH, headers={"vendorfake-control-token": "not-it"})
+            assert wrong.status_code == 401
+            allowed = call(app, "GET", OPENAPI_PATH, headers={"vendorfake-control-token": CONTROL_TOKEN})
+            assert allowed.status_code == 200
+            assert "openapi" in allowed.json()
+    finally:
+        built.stop()
+
+
+def raw_call(app: Any, method: str, raw_path: str, **kwargs: Any) -> httpx.Response:
+    """``call`` with the path sent byte for byte: against a base URL, httpx would read ``//x`` as a host."""
+    return call(app, method, httpx.URL("http://unit.test").copy_with(raw_path=raw_path.encode("ascii")), **kwargs)
+
+
+@pytest.mark.parametrize("raw_path", ["/%5F%5Funit/openapi.json", "/__unit%2Fopenapi.json"])
+def test_a_percent_encoded_document_path_is_not_the_document_on_the_vendor_surface(unit: Any, raw_path: str) -> None:
+    """The fast path compares the raw path the surface check reads; the decoded one would name the document."""
+    response = raw_call(create_app(unit, surface="vendor"), "GET", raw_path)
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+
+
+def test_the_literal_document_path_is_still_the_document(unit: Any) -> None:
+    response = call(create_app(unit), "GET", OPENAPI_PATH)
+    assert response.status_code == 200
+    assert response.json()["openapi"].startswith("3.")
+
+
+@pytest.mark.parametrize(
+    ("method", "raw_path"),
+    [
+        ("GET", "//__unit/info"),
+        ("GET", "///__unit/info"),
+        ("GET", "/__unit//info"),
+        ("POST", "//__unit/state/reset"),
+    ],
+)
+def test_the_vendor_surface_refuses_what_the_router_reads_as_the_control_plane(
+    unit: Any, method: str, raw_path: str
+) -> None:
+    """The router drops empty segments, so each of these reaches a control route unless the surface check does too."""
+    unit.context.store.collection("orders").insert({"id": "ord_probe"})
+    before = unit.context.store.entity_digest()
+    response = raw_call(create_app(unit, surface="vendor"), method, raw_path, json={} if method == "POST" else None)
+    assert response.status_code == 404
+    assert response.headers["x-unit-error"] == "not_found"
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+    assert unit.context.store.entity_digest() == before
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_404_on_the_vendor_surface(unit: Any) -> None:
+    """Starlette answers an unregistered verb itself; its handler must still split the surfaces, or a 405's
+    ``allowed`` list would enumerate control routes verb by verb."""
+    response = call(create_app(unit, surface="vendor"), "PROPFIND", "/__unit/state/reset")
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": "/__unit/state/reset"}}
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_surface_404_on_the_control_surface(unit: Any) -> None:
+    response = call(create_app(unit, surface="control", vendor_port=18080), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 404
+    assert response.json() == {"message": "PROPFIND /v2/orders/abc is the vendor surface; it is served on port 18080"}
+
+
+def test_a_verb_the_framework_refuses_is_still_the_kernel_s_405_on_both_surfaces(unit: Any) -> None:
+    response = call(create_app(unit), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 405
+    assert response.json()["error"]["info"]["allowed"] == ["GET", "POST"]

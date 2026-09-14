@@ -12,8 +12,8 @@ Three things only this can show:
 
 * one child process answers for both vendors, each under its own prefix, with
   its own control plane;
-* the root ``/__unit/info`` -- the path the image's ``HEALTHCHECK`` probes --
-  is 200 and lists them, so an orchestrator's liveness check means the same
+* the root ``/__unit/info`` -- answered by the same index as ``/__unit/health``, the
+  path the image's ``HEALTHCHECK`` probes -- is 200 and lists them, so an orchestrator's liveness check means the same
   thing for a mounted process as for a single-vendor one;
 * a real vendor flow (Clover's single-use refresh rotation) works through a
   prefix, body and all.
@@ -134,8 +134,8 @@ def test_the_announce_line_names_both_mounts(server: Mounted) -> None:
 
 
 def test_the_root_info_is_the_healthcheck_for_every_mount(client: httpx.Client) -> None:
-    """``/__unit/info`` is what the image's ``HEALTHCHECK`` probes. A mounted
-    process answers it 200 with the mount table, so the same probe means the
+    """``/__unit/info`` is the index ``/__unit/health``, the image's ``HEALTHCHECK``
+    probe, also answers. A mounted process answers it 200 with the mount table, so the same probe means the
     same thing whether one vendor is served or four."""
     response = client.get("/__unit/info")
     assert response.status_code == 200

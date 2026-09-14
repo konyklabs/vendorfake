@@ -3,9 +3,9 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
 # or, in a uv project:
-uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.5.0"  # x-release-please-version
+uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
 
 vendorfake vendors            # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square
@@ -16,7 +16,7 @@ serve` and the served/container bindings need; the in-process bindings
 (`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
 is enough for a test suite that only uses those. The extra exists from 0.6.0;
 at an earlier tag the ASGI stack installs unconditionally and pip warns that
-the extra does not exist, which is harmless. Drop the `@v0.5.0` <!-- x-release-please-version --> to track
+the extra does not exist, which is harmless. Drop the `@v0.6.0` <!-- x-release-please-version --> to track
 `main`. From a checkout of this repository: `uv sync && uv run vendorfake
 serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
 too, so nothing extra to ask for there).
@@ -62,17 +62,20 @@ under its own prefix (`http://localhost:8080/clover`, `.../square`, control
 planes at `/clover/__unit/...`), with the root `/__unit/info` listing them;
 see [Bindings → Docker compose](bindings.md#docker-compose).
 
-Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
-plane is deliberately unauthenticated — it hands out the seeded credentials
-and will POST webhooks at any URL it is told — so a fake published to the
-network is an outbound-request primitive for anyone who can route to your
-host. When another container or machine must reach it deliberately, put both
-on a Docker network (or use Testcontainers, as the [docker compose
+Publish the port on loopback (`-p 127.0.0.1:...`), as above: by default the
+control plane is unauthenticated — it hands out the seeded credentials and
+will POST webhooks at any URL it is told — so a fake published to the network
+is an outbound-request primitive for anyone who can route to your host. When
+another container or machine must reach it deliberately, put both on a Docker
+network (or use Testcontainers, as the [docker compose
 section](bindings.md#docker-compose) does) rather than widening the host
-bind.
+bind. Two opt-ins exist for a fake that must be networked: a control plane on
+its own port (`VENDORFAKE_CONTROL_PORT`), and a token every control-plane call
+but `GET` or `HEAD /__unit/health` must carry (`VENDORFAKE_CONTROL_TOKEN`). See [Bindings →
+A control plane on its own port](bindings.md#a-control-plane-on-its-own-port).
 
 The image runs as a non-root user, listens on 8080, and carries a
-`HEALTHCHECK` on `/__unit/info` so `docker ps` (and any orchestrator) reports
+`HEALTHCHECK` on `/__unit/health` so `docker ps` (and any orchestrator) reports
 `healthy` only once the unit has hydrated its seed and is answering. With no
 vendor set it refuses and lists what it found — it never guesses.
 `tools/verify_image_build.sh` is the build's own proof: it builds, serves each

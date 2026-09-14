@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
 from typing import Any
 
+from vendorfake.core.control.access import control_access_error
 from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE
 from vendorfake.core.util.json import dump_json
 
@@ -34,7 +35,7 @@ FORWARDED_PREFIX_HEADER = b"x-forwarded-prefix"
 MOUNTS_HEADER = b"vendorfake-mounts"
 """On the root 404: the mount names, comma-joined -- a header too, because a client throws a 404 body away."""
 
-#: Served alongside ``/``: the image's ``HEALTHCHECK`` probes ``/__unit/info``, and a mounted process must be
+#: Served alongside ``/``: the image's ``HEALTHCHECK`` probes ``/__unit/health``, and a mounted process must be
 #: healthy on the same path a single-vendor one is.
 _INDEX_PATHS = frozenset({"/", "/__unit/info", "/__unit/health"})
 
@@ -42,8 +43,10 @@ _INDEX_PATHS = frozenset({"/", "/__unit/info", "/__unit/health"})
 class MountedApp:
     """One application per mount name, on the first path segment. Public only so a test can name it."""
 
-    def __init__(self, apps: Mapping[str, ASGIApp]) -> None:
+    def __init__(self, apps: Mapping[str, ASGIApp], *, index: bool = True, control_token: str | None = None) -> None:
         self._apps: dict[str, ASGIApp] = dict(apps)
+        self._serves_index = index
+        self._control_token = control_token
         self._names: tuple[str, ...] = tuple(self._apps)
         self._mounts: dict[str, str] = {name: f"/{name}" for name in self._names}
         self._index = dump_json({"status": "ok", "vendors": list(self._names), "mounts": self._mounts})
@@ -75,7 +78,12 @@ class MountedApp:
         """The index, or a 404 naming every mount, for a request that asked for a vendor nobody mounted."""
         method = str(scope.get("method", "GET")).upper()
         path = str(scope.get("path", "/"))
-        if method in {"GET", "HEAD"} and path in _INDEX_PATHS:
+        if self._control_token is not None:
+            refused = control_access_error(method, path, _header_map(scope), self._control_token)
+            if refused is not None:
+                await _send_json(send, 401, dump_json({"message": refused.detail}), method=method)
+                return
+        if self._serves_index and method in {"GET", "HEAD"} and path in _INDEX_PATHS:
             await _send_json(send, 200, self._index, method=method)
             return
         body = dump_json(
@@ -113,9 +121,20 @@ class MountedApp:
         return delegated
 
 
-def create_mounted_app(apps: Mapping[str, ASGIApp]) -> ASGIApp:
-    """Mount each application under ``/<name>/``, in order. A function, like ``create_app``."""
-    return MountedApp(apps)
+def create_mounted_app(apps: Mapping[str, ASGIApp], *, index: bool = True, control_token: str | None = None) -> ASGIApp:
+    """Mount each application under ``/<name>/``, in order; ``index=False`` for a vendor listener, and
+    ``control_token`` guards the root ``/__unit/*`` paths the mount answers itself."""
+    return MountedApp(apps, index=index, control_token=control_token)
+
+
+def _header_map(scope: Scope) -> dict[str, str]:
+    """The request headers by lower-cased name, repeats joined as ``adapt`` joins them."""
+    headers: dict[str, str] = {}
+    for name, value in scope.get("headers", ()):
+        key = bytes(name).decode("latin-1").lower()
+        text = bytes(value).decode("latin-1")
+        headers[key] = text if key not in headers else f"{headers[key]}, {text}"
+    return headers
 
 
 def _first_segment(path: str) -> str:

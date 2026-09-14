@@ -9,6 +9,7 @@ An unexpected exception is red, never a skip -- but red comes in two kinds: an e
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -29,6 +30,7 @@ from vendorfake.conformance.types import (
     ConformanceTarget,
     Outcome,
 )
+from vendorfake.core.control.access import ambient_control_token, control_token_hint
 
 __all__ = [
     "REMOTE_CAVEAT",
@@ -83,7 +85,8 @@ def remote_target(base_url: str) -> ConformanceTarget:
 
     Between checks, capabilities are put back to the set the unit started with and the seed scenario is re-applied. A freshly constructed unit is out of reach by definition -- see :data:`REMOTE_CAVEAT`, which every such run prints.
     """
-    probe = HttpConformanceClient(base_url)
+    token = ambient_control_token(os.environ)
+    probe = HttpConformanceClient(base_url, control_token=token)
     try:
         try:
             answered = probe.call("GET", f"{CONTROL_PREFIX}info")
@@ -93,7 +96,10 @@ def remote_target(base_url: str) -> ConformanceTarget:
         if answered.status != 200:
             raise LookupError(
                 f"GET {base_url.rstrip('/')}{CONTROL_PREFIX}info answered {answered.status}, expected 200. "
-                f"--base-url must address a running unit, whose control plane answers on every profile."
+                + (
+                    control_token_hint(answered.status, token)
+                    or "--base-url must address a running unit, whose control plane answers on every profile."
+                )
             )
         info = answered.json()
         profile = str(info["profile"])
@@ -107,7 +113,7 @@ def remote_target(base_url: str) -> ConformanceTarget:
     def open_client(_profile: str, transport: str) -> Iterator[ConformanceClient]:
         if transport != REMOTE_TRANSPORT:
             raise ValueError(f"a remote target speaks only {REMOTE_TRANSPORT!r}, not {transport!r}")
-        client = HttpConformanceClient(base_url)
+        client = HttpConformanceClient(base_url, control_token=token)
         try:
             _restore(client, baseline)
             yield client

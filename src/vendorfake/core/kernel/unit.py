@@ -66,6 +66,7 @@ from vendorfake.core.chaos.faults import (
 from vendorfake.core.chaos.rules import matched_routes
 from vendorfake.core.chaos.selector import FaultSelector
 from vendorfake.core.config.models import ResolvedConfig
+from vendorfake.core.control.access import control_access_error
 from vendorfake.core.kernel.magic import MagicExtraction, extract_magic
 from vendorfake.core.kernel.nearmiss import NEAR_MISS_HEADER, near_miss_header, near_misses
 from vendorfake.core.kernel.reply import normalize
@@ -642,6 +643,10 @@ class Unit:
         route: Route | None = None
         trace = _Trace()
         try:
+            # Before routing, so an unknown control path and a real one draw the same refusal.
+            refused = control_access_error(req.method, req.path, req.headers, self._config.control.token)
+            if refused is not None:
+                raise refused
             outcome = self._router.match(req.method, req.path)
             if isinstance(outcome, MethodNotAllowed):
                 raise UnitError(
@@ -650,17 +655,7 @@ class Unit:
                     info={"allowed": list(outcome.allowed)},
                 )
             if not isinstance(outcome, Match):
-                trace.near_misses = self._near_misses(req)
-                shaped = self._vendor.errors.not_found(req, self._ctx)
-                answer = self._shape(shaped, UnitErrorKind.NOT_FOUND)
-                # The header rides on the vendor's shaped response; the body
-                # is untouched, so a real 404 stays a real 404.
-                answer = UnitResponse(
-                    status=answer.status,
-                    headers={**answer.headers, NEAR_MISS_HEADER: near_miss_header(trace.near_misses)},
-                    body=answer.body,
-                )
-                return self._finish(req, answer, None, started, trace)
+                return self._unmatched(req, started, trace)
 
             route = outcome.route
             args = HandlerArgs(req=req, params=outcome.params, ctx=self._ctx, route=route)
@@ -707,6 +702,21 @@ class Unit:
             internal = UnitError(UnitErrorKind.INTERNAL, detail=_describe(exc))
             shaped = self._vendor.errors.shape(internal, self._ctx)
             return self._finish(req, self._shape(shaped, internal.kind), route, started, trace)
+
+    def answer_unmatched(self, req: UnitRequest) -> UnitResponse:
+        """What :meth:`handle` answers a request no route matched, for a binding refusing ``req`` on one listener."""
+        return self._unmatched(req, time.monotonic(), _Trace())
+
+    def _unmatched(self, req: UnitRequest, started: float, trace: _Trace) -> UnitResponse:
+        """The vendor's 404 with the near-miss header riding on it; the body is untouched, so a real 404 stays one."""
+        trace.near_misses = self._near_misses(req)
+        answer = self._shape(self._vendor.errors.not_found(req, self._ctx), UnitErrorKind.NOT_FOUND)
+        answer = UnitResponse(
+            status=answer.status,
+            headers={**answer.headers, NEAR_MISS_HEADER: near_miss_header(trace.near_misses)},
+            body=answer.body,
+        )
+        return self._finish(req, answer, None, started, trace)
 
     def _near_misses(self, req: UnitRequest) -> tuple[NearMiss, ...]:
         """The closest routes among the ones this unit is *currently* serving. Internal routes and routes behind a

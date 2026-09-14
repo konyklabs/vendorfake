@@ -219,10 +219,12 @@ def make_config(
     subscribers: Sequence[Mapping[str, object]] = (),
     disable_delivery: bool = False,
     request_log_capacity: int | None = None,
+    control_token: str | None = None,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
         ClockSection,
+        ControlSection,
         ErrorsSection,
         RequestsSection,
         ResolvedChaos,
@@ -247,6 +249,7 @@ def make_config(
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
         errors=ErrorsSection(sidecar=error_sidecar),  # type: ignore[arg-type]
         transport=TransportSection(),
+        control=ControlSection(token=control_token),
         requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
         log_level=log_level,
     )

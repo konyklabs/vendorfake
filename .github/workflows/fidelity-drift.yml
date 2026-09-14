@@ -1,0 +1,87 @@
+name: fidelity-drift
+
+# F2 (konyklabs/roadmap#116): whether a vendor's *upstream* documentation has
+# moved since the committed or cached pin is a scheduled question, never a
+# pull request's -- tools/self-test.sh and every PR check `pin --check
+# --offline`, which never touches the network. This is the one place that
+# fetches upstream for real, weekly, and files (or updates) an issue rather
+# than turning any PR red. Clover has no fidelity leg (docs/concepts/fidelity.md
+# -- "Clover"), so it is not one of the targets below.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync
+        run: uv sync --frozen
+
+      # No `--offline`: this is the one place upstream is fetched. Every
+      # target's exit code is captured rather than let stop the loop, so one
+      # vendor's failure never hides another's -- the same shape as
+      # tools/self-test.sh's own `step`.
+      - name: Check each vendor's pin against upstream
+        id: check
+        run: |
+          set +e
+          : > /tmp/fidelity-drift-body.md
+          drifted=()
+          for entry in \
+            "square=vendorfake.testing.fidelity:square_target" \
+            "toast=vendorfake.testing.fidelity:toast_target" \
+            "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
+          do
+            vendor="${entry%%=*}"
+            target="${entry#*=}"
+            output="$(uv run python -m vendorfake.fidelity pin --check --target "$target" 2>&1)"
+            code=$?
+            echo "== $vendor (exit $code) =="
+            echo "$output"
+            printf '## %s (exit %s)\n\n```\n%s\n```\n\n' "$vendor" "$code" "$output" >> /tmp/fidelity-drift-body.md
+            if [ "$code" -ne 0 ]; then
+              drifted+=("$vendor")
+            fi
+          done
+          echo "drifted=${drifted[*]}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      # Never fail silently: a drift with nobody told about it is worse than
+      # a red run. File a fresh issue, or add to the open one already
+      # tracking this, so a second and third week of the same drift is one
+      # thread, not three.
+      - name: File or update the drift issue
+        if: steps.check.outputs.drifted != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRIFTED: ${{ steps.check.outputs.drifted }}
+        run: |
+          title="fidelity drift: ${DRIFTED// /, }"
+          existing="$(gh issue list --state open --search '"fidelity drift" in:title' --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file /tmp/fidelity-drift-body.md
+          else
+            gh issue create --title "$title" --body-file /tmp/fidelity-drift-body.md
+          fi
+
+      # A second, visible signal beside the issue: the scheduled run itself
+      # shows red in the Actions history for as long as the drift stands.
+      - name: Fail the run while drift stands
+        if: steps.check.outputs.drifted != ''
+        run: |
+          echo "::error::fidelity drift detected for: ${{ steps.check.outputs.drifted }}"
+          exit 1

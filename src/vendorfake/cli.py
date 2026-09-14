@@ -120,6 +120,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Port to bind; 0 picks a free one and prints it. Defaults to $VENDORFAKE_PORT, then 8080.",
     )
     serve.add_argument(
+        "--control-port",
+        type=int,
+        default=None,
+        help=(
+            "Serve /__unit/* on this port of its own, answering it on --port with the vendor's 404; 0 picks a free "
+            "one. Defaults to $VENDORFAKE_CONTROL_PORT; unset, one port serves both."
+        ),
+    )
+    serve.add_argument(
+        "--control-host",
+        default=None,
+        help="Interface for --control-port. Defaults to $VENDORFAKE_CONTROL_HOST, then the vendor host.",
+    )
+    serve.add_argument(
         "--log-level",
         default=None,
         help="uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL, then the profile's.",
@@ -477,6 +491,27 @@ def _serve_binding(args: argparse.Namespace, env: Mapping[str, str], unit: Unit)
     return host, port, log_level
 
 
+def _control_listener(args: argparse.Namespace, env: Mapping[str, str], host: str, port: int) -> tuple[str, int] | None:
+    """Host and port for a control listener of its own, flag beating environment, or ``None`` to share the vendor's."""
+    flag_port = getattr(args, "control_port", None)
+    flag_host = getattr(args, "control_host", None)
+    control_port = flag_port if flag_port is not None else _env_int(env, "VENDORFAKE_CONTROL_PORT")
+    if control_port is None:
+        if flag_host is not None:
+            raise SystemExit(f"{PROG}: --control-host needs --control-port (or $VENDORFAKE_CONTROL_PORT)")
+        return None
+    if control_port == port and port != 0:
+        raise SystemExit(
+            f"{PROG}: --control-port {control_port} is the vendor port too; the control plane needs its own"
+        )
+    return flag_host or _env_str(env, "VENDORFAKE_CONTROL_HOST") or host, control_port
+
+
+def _control_suffix(control_at: Sequence[str | int]) -> str:
+    """The announce line's tail naming the control listener; empty without one, so the line is unchanged."""
+    return f" control on http://{control_at[0]}:{control_at[1]}" if control_at else ""
+
+
 def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, names: tuple[str, ...]) -> int:
     """Build one unit per name and serve them all under ``/<vendor>/``.
 
@@ -484,7 +519,7 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
     name. Per mount, most specific first: a ``vendor=profile`` pair naming it, that vendor's own
     ``VENDORFAKE_PROFILE_<VENDOR>``, then the bare ``--profile`` as the shared default. A failure part-way
     through stops what was built: half a mounted process would answer for some vendors and 404 for the rest."""
-    from vendorfake.asgi import create_app, create_mounted_app, run_server
+    from vendorfake.asgi import create_app, create_mounted_app, run_server, run_split_server
     from vendorfake.core.config.profile import profile_env_var
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.registry import VENDOR_ENV_VAR, create_unit
@@ -517,17 +552,49 @@ def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO
             apps[name] = create_app(built)
 
         host, port, log_level = _serve_binding(args, env, units[0])
+        control = _control_listener(args, env, host, port)
+        control_token = units[0].context.config.control.token
         mounts = ",".join(f"/{name}" for name in names)
 
-        def announce(bound_host: str, bound_port: int) -> None:
+        def announce(bound_host: str, bound_port: int, *control_at: str | int) -> None:
             # The single-vendor line plus where each vendor is.
             print(
-                f"{PROG}: listening on http://{bound_host}:{bound_port} (vendors={','.join(names)}; mounts={mounts})",
+                f"{PROG}: listening on http://{bound_host}:{bound_port} (vendors={','.join(names)}; mounts={mounts})"
+                f"{_control_suffix(control_at)}",
                 file=out,
                 flush=True,
             )
 
-        run_server(create_mounted_app(apps), host=host, port=port, log_level=log_level, on_bound=announce)
+        if control is None:
+            run_server(
+                create_mounted_app(apps, control_token=control_token),
+                host=host,
+                port=port,
+                log_level=log_level,
+                on_bound=announce,
+            )
+        else:
+            run_split_server(
+                lambda vendor_port: (
+                    create_mounted_app(
+                        {name: create_app(built, surface="vendor") for name, built in zip(names, units, strict=True)},
+                        index=False,
+                    ),
+                    create_mounted_app(
+                        {
+                            name: create_app(built, surface="control", vendor_port=vendor_port)
+                            for name, built in zip(names, units, strict=True)
+                        },
+                        control_token=control_token,
+                    ),
+                ),
+                host=host,
+                port=port,
+                control_host=control[0],
+                control_port=control[1],
+                log_level=log_level,
+                on_bound=announce,
+            )
     except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
         pass
     finally:
@@ -542,7 +609,7 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     ``vendorfake --help`` must not pay for it. A comma-separated ``--vendor``
     hands off to :func:`_serve_mounted`; one vendor is served below, ``--profile``
     naming that one unit's profile outright, beating any ``VENDORFAKE_PROFILE_<VENDOR>``."""
-    from vendorfake.asgi import create_app, run_server
+    from vendorfake.asgi import create_app, run_server, run_split_server
 
     _warn_unknown_profile_suffixes(env)
 
@@ -561,12 +628,16 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     host, port, log_level = _serve_binding(args, env, unit)
 
     validator = _response_validator(unit) if getattr(args, "validate", False) else None
-    app = create_app(unit, observer=None if validator is None else validator.observe)
+    observer = None if validator is None else validator.observe
 
-    def announce(bound_host: str, bound_port: int) -> None:
+    def announce(bound_host: str, bound_port: int, *control_at: str | int) -> None:
         # One line, flushed, before a single request can arrive, so `--port 0`
         # reaches the parent while it is still reading.
-        print(f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name})", file=out, flush=True)
+        print(
+            f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name}){_control_suffix(control_at)}",
+            file=out,
+            flush=True,
+        )
 
     reported = False
 
@@ -583,7 +654,24 @@ def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int
     if validator is not None:
         _report_before_terminating(report)
     try:
-        run_server(app, host=host, port=port, log_level=log_level, on_bound=announce)
+        control = _control_listener(args, env, host, port)
+        if control is None:
+            run_server(
+                create_app(unit, observer=observer), host=host, port=port, log_level=log_level, on_bound=announce
+            )
+        else:
+            run_split_server(
+                lambda vendor_port: (
+                    create_app(unit, observer=observer, surface="vendor"),
+                    create_app(unit, surface="control", vendor_port=vendor_port),
+                ),
+                host=host,
+                port=port,
+                control_host=control[0],
+                control_port=control[1],
+                log_level=log_level,
+                on_bound=announce,
+            )
     except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
         pass
     finally:
@@ -634,11 +722,13 @@ def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
     """Print ``GET /__unit/info`` without a server: the same bytes the control
     plane serves, produced through the in-process binding so the two cannot
     drift."""
+    from vendorfake.core.control.access import CONTROL_TOKEN_HEADER
     from vendorfake.core.transport.inprocess import in_process
 
     unit = _make_unit(args, env)
+    token = unit.context.config.control.token
     try:
-        response = in_process(unit).get("/__unit/info")
+        response = in_process(unit).get("/__unit/info", headers={} if token is None else {CONTROL_TOKEN_HEADER: token})
         print(response.text, file=out)
         return 0 if response.status == 200 else 1
     finally:
@@ -789,22 +879,24 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
     """The built-in fault catalogue: name, provenance, phase, parameters and a
-    one-line description, read from the same mappings ``GET /__unit/chaos``
-    publishes each rule against, so the two cannot disagree."""
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PHASE, FAULT_PROVENANCE
+    one-line description, read from ``vendorfake.registry.faults()``, the same
+    catalogue ``GET /__unit/chaos`` publishes each rule against, so the two
+    cannot disagree."""
     from vendorfake.core.util.json import dump_json
+    from vendorfake.registry import faults as list_faults
 
-    names = sorted(FAULT_PARAM_KEYS)
+    found = list_faults()
     if _wants_json(args):
         payload = [
             {
-                "name": name,
-                "provenance": FAULT_PROVENANCE[name],
-                "phase": FAULT_PHASE[name],
-                "params": list(FAULT_PARAM_KEYS[name]),
-                "description": FAULT_DESCRIPTIONS[name],
+                "name": row.name,
+                "scope": row.scope,
+                "provenance": row.provenance,
+                "phase": row.phase,
+                "params": list(row.params),
+                "description": row.summary,
             }
-            for name in names
+            for row in found
         ]
         print(dump_json(payload).decode("utf-8"), file=out)
         return 0
@@ -812,13 +904,13 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
         _table(
             [
                 {
-                    "name": name,
-                    "provenance": FAULT_PROVENANCE[name],
-                    "phase": FAULT_PHASE[name],
-                    "params": ", ".join(FAULT_PARAM_KEYS[name]),
-                    "description": FAULT_DESCRIPTIONS[name],
+                    "name": row.name,
+                    "provenance": row.provenance,
+                    "phase": row.phase,
+                    "params": ", ".join(row.params),
+                    "description": row.summary,
                 }
-                for name in names
+                for row in found
             ],
             ("name", "provenance", "phase", "params", "description"),
         ),

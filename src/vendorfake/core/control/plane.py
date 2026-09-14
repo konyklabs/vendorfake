@@ -183,6 +183,7 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                         "active": ctx.config.seed_overlay_digest is not None,
                         "digest": ctx.config.seed_overlay_digest,
                     },
+                    "control": {"token_required": ctx.config.control.token is not None},
                     "state": {
                         "entities": ctx.store.stats(),
                         "journal_seq": ctx.store.journal_seq,

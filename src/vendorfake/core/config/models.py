@@ -22,6 +22,7 @@ __all__ = [
     "UNMATCHED_POLICIES",
     "ChaosSection",
     "ClockSection",
+    "ControlSection",
     "ErrorsSection",
     "ProfileDocument",
     "RequestsSection",
@@ -139,6 +140,15 @@ class TransportSection(BaseModel):
     host: str | None = None
 
 
+class ControlSection(BaseModel):
+    """Resolved from ``VENDORFAKE_CONTROL_TOKEN`` only: a profile document has no ``control`` key, a secret
+    belonging in no committed file. ``repr=False`` keeps the token out of every repr and log line."""
+
+    model_config = _MODEL
+
+    token: str | None = Field(default=None, repr=False)
+
+
 class ProfileDocument(BaseModel):
     """Every field is optional, so ``profile.py``'s merge can say "the fields
     this document set win over the layer beneath it" via ``model_fields_set``.
@@ -198,6 +208,7 @@ class ResolvedConfig(BaseModel):
     clock: ClockSection
     errors: ErrorsSection = Field(default_factory=ErrorsSection)
     transport: TransportSection
+    control: ControlSection = Field(default_factory=ControlSection)
     requests: RequestsSection = Field(default_factory=RequestsSection)
     #: Read here, not by the logger, so no module reaches the environment on its own.
     log_level: str = "info"

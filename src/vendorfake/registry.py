@@ -20,6 +20,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 
+from vendorfake.core.chaos.faults import FAULT_PARAM_KEYS
+from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 from vendorfake.core.config.models import parse_profile_document
 from vendorfake.core.config.profile import load_profile
 from vendorfake.core.control.plane import control_plane_routes
@@ -31,6 +33,7 @@ __all__ = [
     "ENTRY_POINT_GROUP",
     "ROLE_NAMES",
     "VENDOR_ENV_VAR",
+    "FaultInfo",
     "ProfileInfo",
     "RouteInfo",
     "SeedingVendor",
@@ -39,6 +42,7 @@ __all__ = [
     "available_profiles",
     "available_vendors",
     "create_unit",
+    "faults",
     "resolve_capabilities",
     "resolve_vendor",
     "routes",
@@ -170,6 +174,40 @@ def routes(vendor: str, profile: str = "full") -> tuple[RouteInfo, ...]:
         )
     finally:
         built.stop()
+
+
+@dataclass(frozen=True, slots=True)
+class FaultInfo:
+    """One fault the catalogue ships, as :func:`faults` publishes it."""
+
+    name: str
+    scope: str
+    provenance: str
+    phase: str
+    params: tuple[str, ...]
+    summary: str
+
+
+def faults() -> tuple[FaultInfo, ...]:
+    """Every built-in fault, sorted by name, read from the same catalogue
+    ``GET /__unit/chaos`` publishes each rule against, so the two cannot
+    disagree. No vendor to name and no unit to build: this starts none."""
+    return tuple(
+        sorted(
+            (
+                FaultInfo(
+                    name=spec.name,
+                    scope=spec.scope,
+                    provenance=spec.provenance,
+                    phase=spec.phase,
+                    params=FAULT_PARAM_KEYS[spec.name],
+                    summary=spec.summary,
+                )
+                for spec in BUILTIN_FAULTS
+            ),
+            key=lambda info: info.name,
+        )
+    )
 
 
 def _translate_capability_names(definition: VendorDefinition, requested: Sequence[str]) -> tuple[str, ...]:

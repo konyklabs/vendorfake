@@ -5,6 +5,7 @@ module builds no unit, because the boundary policy forbids the registry import.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import threading
 import time
@@ -19,7 +20,7 @@ except ImportError as exc:
 
 from vendorfake.asgi.mount import ASGIApp
 
-__all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server", "serve_in_thread"]
+__all__ = ["DEFAULT_HOST", "DEFAULT_PORT", "bind", "run_server", "run_split_server", "serve_in_thread"]
 
 _THREAD_STARTUP_TIMEOUT_S = 30.0
 _THREAD_SHUTDOWN_TIMEOUT_S = 10.0
@@ -68,6 +69,49 @@ def run_server(
         server.run(sockets=[sock])
     finally:
         sock.close()
+
+
+def run_split_server(
+    build: Callable[[int], tuple[FastAPI | ASGIApp, FastAPI | ASGIApp]],
+    *,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    control_host: str = DEFAULT_HOST,
+    control_port: int = 0,
+    log_level: str = "info",
+    on_bound: Callable[[str, int, str, int], None] | None = None,
+) -> None:
+    """Serve the vendor and control surfaces on two sockets in one event loop until interrupted. Blocking. ``build``
+    gets the vendor socket's real port and returns ``(vendor app, control app)``, so ``port=0`` is nameable."""
+    vendor_sock = bind(host, port)
+    try:
+        control_sock = bind(control_host, control_port)
+    except BaseException:
+        vendor_sock.close()
+        raise
+    try:
+        vendor_number, control_number = bound_port(vendor_sock), bound_port(control_sock)
+        vendor_app, control_app = build(vendor_number)
+        if on_bound is not None:
+            on_bound(host, vendor_number, control_host, control_number)
+        vendor_server = uvicorn.Server(uvicorn.Config(vendor_app, log_level=log_level, access_log=False))
+        control_server = uvicorn.Server(uvicorn.Config(control_app, log_level=log_level, access_log=False))
+
+        async def serve_both() -> None:
+            # Each server re-raises a caught signal to the handler it replaced, so one SIGTERM stops both.
+            await asyncio.gather(
+                vendor_server.serve(sockets=[vendor_sock]), control_server.serve(sockets=[control_sock])
+            )
+
+        factory = vendor_server.config.get_loop_factory()
+        if factory is None:
+            asyncio.run(serve_both())
+        else:
+            with asyncio.Runner(loop_factory=factory) as runner:
+                runner.run(serve_both())
+    finally:
+        vendor_sock.close()
+        control_sock.close()
 
 
 @contextmanager

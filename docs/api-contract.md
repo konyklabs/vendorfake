@@ -21,7 +21,7 @@ edit is the review trigger.
 
 ### `vendorfake` — the package root
 
-Five names, re-exported from `vendorfake.registry` because discovering what
+Six names, re-exported from `vendorfake.registry` because discovering what
 exists and building one are a single task:
 
 | Name | What it is |
@@ -29,6 +29,7 @@ exists and building one are a single task:
 | `available_vendors()` | Every vendor name that can actually be loaded |
 | `available_profiles(vendor)` | Every profile a vendor ships, with its summary, capabilities and seed |
 | `routes(vendor, profile)` | The route table a profile serves |
+| `faults()` | The built-in fault catalogue, readable without starting a unit |
 | `create_unit(...)` | The one constructor: a name and a profile in, a running `Unit` out |
 | `resolve_vendor(name)` | A name to a `VendorDefinition`, refusing a typo by listing the real ones |
 | `ambient_env()` | The exported `VENDORFAKE_*` variables; the one place a binding reads the process environment |
@@ -122,7 +123,7 @@ given `--profile` as a flag and the CLI prefers a flag to the variable.
 
 ### `vendorfake.registry` — discovery and construction
 
-The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
+The six names above, plus `FaultInfo`, `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
 `ENTRY_POINT_GROUP`, `VENDOR_ENV_VAR`, and the two protocols a third-party
 vendor implements — `VendorDefinition` and `SeedingVendor`, re-exported here
 from `vendorfake.core.kernel.types` for the reason given under *Publishing a
@@ -177,6 +178,14 @@ the vendor surfaces are: the conformance suite asserts a vendor's behaviour
 entirely through them, which is what lets an implementation in another
 language be checked against the same contract.
 
+With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request but `GET` or
+`HEAD /__unit/health` must carry the token in the `vendorfake-control-token`
+header, and is otherwise refused with the vendor's 401, `x-unit-error:
+unauthorized`, before routing. The root of a process mounting several vendors
+refuses its own `/__unit/*` paths the same way, with a 401 whose JSON body
+carries only `message`. `GET /__unit/info` carries
+`control: {token_required}` and never the token. Unset, nothing changes.
+
 ### The command line
 
 Every subcommand, every flag, and the JSON document `--json` prints. `--json`
@@ -184,6 +193,10 @@ is accepted on either side of the subcommand name and means the same thing.
 `serve --vendor` (and `$VENDORFAKE_VENDOR`) accepts a comma-separated list —
 `clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
 every other subcommand describes one vendor and refuses a list.
+`serve --control-port` (and `$VENDORFAKE_CONTROL_PORT`) serves `/__unit/*` on
+a second listener, bound to `--control-host` (`$VENDORFAKE_CONTROL_HOST`,
+defaulting to the vendor host); the announce line then ends
+` control on http://<host>:<port>`, and without it the line is unchanged.
 
 With one vendor mounted, `--profile` names that unit's profile outright,
 beating `$VENDORFAKE_PROFILE_<VENDOR>`, which beats the bare `$VENDORFAKE_PROFILE`
@@ -207,7 +220,8 @@ naming `serve`.
 
 Every key a profile JSON document accepts, and every `VENDORFAKE_*`
 environment variable that overrides one. `GET /__unit/info` publishes the
-resolved result.
+resolved result. `VENDORFAKE_CONTROL_TOKEN` is environment-only: the document
+has no key for it, and a `control` key is refused like any unknown one.
 
 ### The `Vendorfake-*` response headers
 

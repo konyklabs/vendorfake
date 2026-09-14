@@ -8,11 +8,12 @@ from vendorfake.registry import (
     available_profiles,
     available_vendors,
     create_unit,
+    faults,
     resolve_vendor,
     routes,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 """The imported code's version, which a source checkout's metadata may not be."""
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "available_profiles",
     "available_vendors",
     "create_unit",
+    "faults",
     "resolve_vendor",
     "routes",
 ]
