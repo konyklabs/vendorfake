@@ -3,9 +3,9 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.7.0"  # x-release-please-version
 # or, in a uv project:
-uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
+uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.7.0"  # x-release-please-version
 
 vendorfake vendors            # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square
@@ -16,7 +16,7 @@ serve` and the served/container bindings need; the in-process bindings
 (`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
 is enough for a test suite that only uses those. The extra exists from 0.6.0;
 at an earlier tag the ASGI stack installs unconditionally and pip warns that
-the extra does not exist, which is harmless. Drop the `@v0.6.0` <!-- x-release-please-version --> to track
+the extra does not exist, which is harmless. Drop the `@v0.7.0` <!-- x-release-please-version --> to track
 `main`. From a checkout of this repository: `uv sync && uv run vendorfake
 serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
 too, so nothing extra to ask for there).
