@@ -1,25 +1,19 @@
-"""The seed document's schema, as a model rather than as a cast.
+"""The seed document's schema, as a model rather than as a cast, so a typo in
+a scenario file is a startup failure naming the field instead of a unit that
+starts with an empty inventory and answers 404 to every read.
 
-FOR: stating what a scenario file may contain, so that a typo in one is a
-startup failure naming the field instead of a unit that starts with an empty
-inventory and answers 404 to every read as though the scenario were simply
-small.
+INVARIANT: a scenario is validated before a single entity is inserted --
+every model sets ``extra="forbid"``, since an unknown key here is a typo, not
+a documented field this build happens not to model.
 
-INVARIANT: **a scenario is validated before a single entity is inserted.**
-Every model here sets ``extra="forbid"`` -- a seed is this project's own
-document, so an unknown key is a typo and not a documented field this build
-happens not to model -- and hydration parses the whole document first.
+SECOND INVARIANT: a reference that does not resolve is a startup failure (an
+item naming an absent tax rate, a modifier naming an absent group, an order
+line naming an absent item) rather than a half-formed entity whose symptom is
+a total that is quietly wrong; see :func:`parse_seed_document`.
 
-SECOND INVARIANT: **a reference that does not resolve is a startup failure.**
-An item naming a tax rate that is not in the document, a modifier naming an
-absent group, an order line naming an absent item: each raises before
-anything is inserted (:func:`parse_seed_document`), rather than producing a
-half-formed entity whose symptom is a total that is quietly wrong.
-
-Keys: the top level is snake_case like every JSON this project publishes;
-the *entity documents* use Clover's own camelCase field names, because that
-is what the store holds and what the wire carries, and it lets a scenario
-author paste a documented Clover example straight in.
+The top level is snake_case; entity documents use Clover's own camelCase
+field names, since that is what the store holds and the wire carries, and it
+lets a scenario author paste a documented Clover example straight in.
 """
 
 from __future__ import annotations
@@ -234,8 +228,12 @@ class SeedOrder(BaseModel):
 
 class SeedToken(BaseModel):
     """A pre-minted bearer. ``permissions`` defaults to the app's full set;
-    the expirations are stamped at hydrate from the configured TTLs, which
-    is why they are not in the document."""
+    the expirations are stamped at hydrate from the configured TTLs unless
+    overridden here (JUDGMENT: relative-lifetime seed vocabulary, matching
+    Square's ``expires_in_ms``), which is why a document that names neither
+    field keeps today's TTL-derived behaviour. No ``merchant_id`` field: every
+    seed token is bound to the document's one merchant, published at
+    ``.seed.token.tenant_id`` (see ``docs/concepts/seed.md``)."""
 
     model_config = _SEED
 
@@ -244,6 +242,11 @@ class SeedToken(BaseModel):
     refresh_token: str = Field(min_length=1)
     permissions: list[str] | None = None
     client_id: str | None = None
+    #: Lifetime from unit start, in ms. ``0`` = expired the moment the unit
+    #: starts. Absent means the configured access-token TTL, as before.
+    access_token_expires_in_ms: int | None = Field(default=None, ge=0, strict=True)
+    #: Same semantics, for the refresh token.
+    refresh_token_expires_in_ms: int | None = Field(default=None, ge=0, strict=True)
 
 
 class SeedWebhookSubscription(BaseModel):
@@ -293,7 +296,7 @@ def _refuse(path: str, message: str) -> UnitError:
 
 
 def _check_references(doc: SeedDocument) -> None:
-    """Every reference resolves inside the document (second invariant)."""
+    """Enforces the module's second invariant."""
     tax_ids = {rate.id for rate in doc.tax_rates}
     group_ids = {group.id for group in doc.modifier_groups}
     modifier_ids = {modifier.id for modifier in doc.modifiers}

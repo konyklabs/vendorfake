@@ -48,6 +48,47 @@ def test_toast_has_no_refresh_token_and_the_restaurant_as_tenant() -> None:
         assert seed.token == Token(seed.access_token, None, seed.restaurant_guid)
 
 
+def test_a_running_units_token_expiry_is_patchable_and_advances_with_the_virtual_clock() -> None:
+    """The control-plane route documented in ``docs/concepts/seed.md``'s
+    "Token lifetimes" section: `POST /__unit/state/update` on `tokens`,
+    paired with `POST /__unit/clock/advance` (konyklabs/roadmap#131, item 4)."""
+    start_ms = 1767225600000  # 2026-01-01T00:00:00Z, epoch ms
+    with unit(
+        "clover",
+        clock_start="2026-01-01T00:00:00Z",
+        env={"VENDORFAKE_CLOCK": "virtual"},
+    ) as clover:
+        token = clover.seed.token
+        merchant_path = f"/v3/merchants/{clover.seed.merchant_id}"
+
+        patched = clover.client.post(
+            "/__unit/state/update",
+            json={
+                "collection": "tokens",
+                "id": "tok_seed_full",
+                "patch": {"access_token_expiration_ms": start_ms + 60_000},
+            },
+        )
+        assert patched.status_code == 200, patched.text
+
+        still_good = clover.client.get(merchant_path, headers=clover.seed.auth)
+        assert still_good.status_code == 200, still_good.text
+
+        advanced = clover.client.post("/__unit/clock/advance", json={"ms": 61_000})
+        assert advanced.status_code == 200, advanced.text
+
+        expired = clover.client.get(merchant_path, headers=clover.seed.auth)
+        assert expired.status_code == 401
+        assert expired.headers.get("x-unit-error") == "token_expired"
+
+        refreshed = clover.client.post(
+            "/oauth/v2/refresh",
+            json={"client_id": clover.seed.credentials.app_id, "refresh_token": token.refresh_token},
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["access_token_expiration"] > (start_ms + 61_000) // 1000
+
+
 def test_the_token_refreshes_on_a_rotating_vendor() -> None:
     """The neutral view is enough to drive a refresh, which is what a
     consumer's stored row exists for."""

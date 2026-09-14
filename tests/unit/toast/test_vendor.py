@@ -6,8 +6,8 @@ import pytest
 
 import vendorfake.toast as toast
 from tests.unit.toast.conftest import fake_ctx
-from tests.unit.toast.harness import LEDGER, SURFACE
-from vendorfake.core.kernel.types import MutableResponse, UnitError, UnitErrorKind, UnitRequest, VendorDefinition
+from tests.unit.toast.harness import validating_client
+from vendorfake.core.kernel.types import UnitError, UnitErrorKind, UnitRequest, VendorDefinition
 from vendorfake.fidelity.validate import ValidatingClient
 from vendorfake.registry import available_vendors, create_unit, resolve_vendor
 from vendorfake.toast.auth import ToastAuth
@@ -102,9 +102,9 @@ def test_volatile_fields_are_toasts_wall_clock_names() -> None:
 
 
 def test_decorate_stamps_only_the_unit_vendor_header() -> None:
-    res = MutableResponse(status=200, headers={}, body=b"{}")
-    create_toast_vendor().decorate(res, fake_ctx(), request())
-    assert res.headers == {"x-unit-vendor": "toast"}
+    headers: dict[str, str] = {}
+    create_toast_vendor().decorate(headers, fake_ctx(), request())
+    assert headers == {"x-unit-vendor": "toast"}
 
 
 def test_hydrate_resolves_the_profiles_vendor_block_and_reseeds_both_streams() -> None:
@@ -204,7 +204,7 @@ def test_the_control_plane_publishes_the_two_machines_and_the_documented_errors(
 
     unit = create_unit(vendor="toast", profile="full")
     try:
-        api = ValidatingClient(unit, SURFACE, LEDGER)
+        api = validating_client(unit)
         machines = api.get("/__unit/machines").json()["machines"]
         assert set(machines) == {"check", "order"}
         assert machines["check"]["field"] == "paymentStatus"
@@ -216,5 +216,20 @@ def test_the_control_plane_publishes_the_two_machines_and_the_documented_errors(
         assert missing.status == 404
         assert missing.headers["x-unit-error"] == "not_found"
         assert missing.json()["status"] == 404 and missing.json()["errors"] == []
+    finally:
+        unit.stop()
+
+
+def test_the_harness_falls_back_to_the_plain_client_without_an_extract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """T1: with no cached extract, every module's client is the unvalidated one
+    rather than a validating client over ``None``."""
+    import tests.unit.toast.harness as h
+    from vendorfake.core.transport.inprocess import InProcessClient
+
+    monkeypatch.setattr(h, "SURFACE", None)
+    unit = create_unit(vendor="toast", profile="full")
+    try:
+        client = h.validating_client(unit)
+        assert isinstance(client, InProcessClient) and not isinstance(client, ValidatingClient)
     finally:
         unit.stop()

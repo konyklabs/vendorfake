@@ -12,7 +12,9 @@ import io
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -137,12 +139,12 @@ def test_every_declared_subcommand_has_a_dispatch_arm() -> None:
     assert declared == {
         "serve",
         "info",
+        "manifest",
         "openapi",
         "vendors",
         "profiles",
         "routes",
         "faults",
-        "agent-setup",
         "explain",
         "conformance",
     }
@@ -422,6 +424,29 @@ def test_faults_table_form_has_a_provenance_column() -> None:
     assert any("vendor" in row for row in rows)
 
 
+def test_faults_json_is_the_registry_rows_projected_to_the_commands_keys() -> None:
+    """``cli.py`` projects ``registry.FaultInfo`` to the command's own JSON
+    keys; this pins that projection so the two cannot drift apart."""
+    import dataclasses
+
+    from vendorfake.registry import faults
+
+    code, out = run("faults", "--json")
+    assert code == 0
+    expected = [
+        {
+            "name": row["name"],
+            "scope": row["scope"],
+            "provenance": row["provenance"],
+            "phase": row["phase"],
+            "params": list(row["params"]),
+            "description": row["summary"],
+        }
+        for row in (dataclasses.asdict(f) for f in faults())
+    ]
+    assert json.loads(out) == expected
+
+
 def test_fault_descriptions_names_exactly_the_fault_param_keys_names() -> None:
     """The drift the CLI would otherwise reproduce silently: a fault with
     parameters and no prose, or prose for a fault the engine does not have."""
@@ -471,7 +496,6 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
     that out would make the test slower, racier and no more conclusive. The
     socket itself is proved out of process, in ``tests/integration``.
     """
-    import functools
 
     import vendorfake.asgi as asgi_module
     import vendorfake.cli as cli_module
@@ -483,13 +507,7 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
     units: list[object] = []
 
     def fake_create_unit(**kwargs: object) -> object:
-        built = make_unit(
-            control_routes=functools.partial(
-                control_plane_routes,
-                framework_answered=kwargs["framework_answered"],  # type: ignore[arg-type]
-            ),
-            log_level="warn",
-        )
+        built = make_unit(control_routes=control_plane_routes, log_level="warn")
         units.append(built)
         return built
 
@@ -523,42 +541,6 @@ def test_serve_applies_flag_then_environment_then_profile_then_default(monkeypat
             {"VENDORFAKE_HOST": "0.0.0.0", "VENDORFAKE_PORT": "9001", "VENDORFAKE_LOG_LEVEL": "debug"},
         )
         assert (chosen["host"], chosen["port"], chosen["log_level"]) == ("10.0.0.5", 0, "error")
-    finally:
-        for built in units:
-            built.stop()  # type: ignore[attr-defined]
-
-
-def test_serve_wires_the_tripwire_into_the_unit_before_building_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``framework_answered`` reaches ``create_unit``, not just ``create_app``.
-
-    The control plane closes over the callable at construction, so a tripwire
-    handed only to the application would leave ``GET /__unit/health`` reporting
-    a permanent 0 -- a tripwire that can never fire and would look like a pass
-    forever.
-    """
-    import vendorfake.asgi as asgi_module
-    import vendorfake.cli as cli_module
-    import vendorfake.registry as registry_module
-    from tests.fakes import make_unit
-
-    seen: dict[str, object] = {}
-    units: list[object] = []
-
-    def fake_create_unit(**kwargs: object) -> object:
-        seen.update(kwargs)
-        built = make_unit(log_level="error")
-        units.append(built)
-        return built
-
-    monkeypatch.setattr(registry_module, "create_unit", fake_create_unit)
-    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
-
-    parser = cli_module._build_parser()
-    try:
-        assert cli_module._serve(parser.parse_args(["serve"]), {}, sys.stdout) == 0
-        answered = seen["framework_answered"]
-        assert callable(answered)
-        assert answered() == 0
     finally:
         for built in units:
             built.stop()  # type: ignore[attr-defined]
@@ -642,3 +624,397 @@ def test_the_profiles_subcommand_refuses_a_malformed_profile_document_too(
         run("profiles", "--vendor", "acme")
 
     assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# manifest
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_prints_one_json_document_and_nothing_else() -> None:
+    """`--json` is implicit here: the output *is* the document. A banner, a
+    table or a trailing note would break `vendorfake manifest > square.json`,
+    which is the whole way a compose setup step uses it."""
+    code, out = run("manifest", "--vendor", "square")
+    assert code == 0
+    document = json.loads(out)
+    assert document["schema"] == "vendorfake.manifest/1"
+    assert (document["vendor"], document["profile"]) == ("square", "full")
+
+
+def test_manifest_matches_the_document_the_control_plane_serves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two ways in, one function behind them. Were these built separately, a
+    field added to one would silently be absent from the other, and a script
+    that read the file would fail only against the served world. Both units run
+    on the same pinned virtual clock: the seeded tokens carry an expiry."""
+    from vendorfake.core.transport.inprocess import in_process
+    from vendorfake.registry import create_unit
+
+    pinned = {"VENDORFAKE_CLOCK": "virtual", "VENDORFAKE_CLOCK_START": "2026-01-01T00:00:00Z"}
+    for key, value in pinned.items():
+        monkeypatch.setenv(key, value)
+    _, out = run("manifest", "--vendor", "square")
+    unit = create_unit(vendor="square", env=pinned)
+    try:
+        served = in_process(unit).get("/__unit/manifest").json()
+    finally:
+        unit.stop()
+    assert json.loads(out) == served
+
+
+def test_manifest_records_the_base_url_it_was_given_and_null_without_one() -> None:
+    """A process with no request cannot infer the address a container will be
+    reached at; guessing loopback would put a URL in the document that no
+    caller outside the container can use."""
+    _, given = run("manifest", "--vendor", "square", "--base-url", "http://fake:8080")
+    assert json.loads(given)["base_url"] == "http://fake:8080"
+    _, omitted = run("manifest", "--vendor", "square")
+    assert json.loads(omitted)["base_url"] is None
+
+
+def test_manifest_refuses_an_unknown_vendor_rather_than_printing_an_empty_document() -> None:
+    """An empty `ids` would read as "this unit has no entities", and a script
+    would fail somewhere further down on a missing key instead of here."""
+    with pytest.raises(SystemExit) as raised:
+        run("manifest", "--vendor", "nope")
+    assert str(raised.value).startswith("vendorfake: ")
+
+
+def test_serve_validate_refuses_a_vendor_with_no_fidelity_leg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--validate`` on a vendor with no declaration would start a server that
+    checks nothing, with the flag reading as satisfied. It refuses instead, and
+    says which vendor and why.
+
+    ``run_server`` is intercepted the way the precedence test does it: what is
+    under test is the refusal, and it happens before a socket would be bound.
+    """
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    bound: list[object] = []
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: bound.append(kwargs))
+
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--vendor", "clover", "--validate"])
+    with pytest.raises(SystemExit) as caught:
+        cli_module._serve(args, {}, sys.stdout)
+    message = str(caught.value)
+    assert "clover" in message and "fidelity leg" in message
+    assert bound == []
+
+
+def test_serve_validate_builds_the_observer_for_a_vendor_that_has_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flag reaches ``create_app`` as an observer; without it there is none."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    seen: list[object] = []
+    real_create_app = asgi_module.create_app
+
+    def spy_create_app(unit: object, **kwargs: object) -> object:
+        seen.append(kwargs.get("observer"))
+        return real_create_app(unit, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(asgi_module, "create_app", spy_create_app)
+    monkeypatch.setattr(asgi_module, "run_server", lambda app, **kwargs: None)
+
+    parser = cli_module._build_parser()
+    for argv in (["--validate"], []):
+        args = parser.parse_args(["serve", "--vendor", "square", *argv])
+        assert cli_module._serve(args, {}, sys.stdout) == 0
+    assert [observer is not None for observer in seen] == [True, False]
+
+
+# ---------------------------------------------------------------------------
+# `serve --vendor clover,square`: several vendors in one process.
+# ---------------------------------------------------------------------------
+
+
+def serve_intercepted(monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str]) -> tuple[object, str]:
+    """Run ``serve`` with ``run_server`` intercepted, returning the application
+    it was handed and what was announced.
+
+    The interception the precedence test uses, for the same reason: what is
+    under test is which units were built and what they were mounted into, and
+    binding a real port to find that out would be slower, racier and no more
+    conclusive. The socket is proved out of process, in ``tests/integration``.
+    Real units, because ``create_unit`` is what resolves a vendor name.
+    """
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    served: list[object] = []
+
+    def fake_run_server(app: object, **kwargs: object) -> None:
+        """``on_bound`` is called the way the real one calls it: the announce
+        line is printed from that callback, so a stub that skipped it would
+        assert nothing about the line."""
+        served.append(app)
+        announce = kwargs.get("on_bound")
+        assert callable(announce)
+        announce("127.0.0.1", 8080)
+
+    monkeypatch.setattr(asgi_module, "run_server", fake_run_server)
+    buffer = io.StringIO()
+    parser = cli_module._build_parser()
+    args = parser.parse_args(["serve", "--profile", "oauth-only", *argv])
+    assert cli_module._serve(args, env, buffer) == 0
+    assert len(served) == 1
+    return served[0], buffer.getvalue()
+
+
+def test_serve_mounts_one_app_per_vendor_when_several_are_named(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A comma-separated `--vendor` builds one unit per name and hands
+    `run_server` the mount; the announce line is how a parent process learns
+    both the port and where each vendor ended up."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover,square", "--port", "0"], {})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "(vendors=clover,square; mounts=/clover,/square)" in announced
+
+
+def test_serve_takes_the_vendor_list_from_the_environment_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`VENDORFAKE_VENDOR=clover,square` alone is the container form: one
+    variable on an image that names no vendor at all."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, [], {"VENDORFAKE_VENDOR": "clover,square"})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "(vendors=clover,square; mounts=/clover,/square)" in announced
+
+
+def test_serve_ignores_whitespace_around_a_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`clover, square` is what a human writes; a mount named `" square"` is
+    what an unstripped split would produce."""
+    from vendorfake.asgi.mount import MountedApp
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover, square"], {})
+
+    assert isinstance(app, MountedApp)
+    assert app.names == ("clover", "square")
+    assert "mounts=/clover,/square" in announced
+
+
+def test_serve_with_one_vendor_is_the_single_vendor_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One vendor is served as it always was: the unit's own application
+    straight onto the socket, no mount, no prefix, and the `vendor=` announce
+    line a parent process may already be parsing."""
+    from fastapi import FastAPI
+
+    app, announced = serve_intercepted(monkeypatch, ["--vendor", "clover"], {})
+
+    assert isinstance(app, FastAPI)
+    assert "(vendor=clover)" in announced
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "fragment"),
+    [
+        (["--vendor", "clover,clover"], {}, "twice"),
+        (["--vendor", "clover,"], {}, "empty vendor name"),
+        (["--vendor", ",square"], {}, "empty vendor name"),
+        ([], {"VENDORFAKE_VENDOR": "clover,clover"}, "twice"),
+        (["--vendor", "clover,square", "--validate"], {}, "--validate serves one vendor"),
+    ],
+)
+def test_serve_refuses_a_vendor_list_it_cannot_mount(argv: list[str], env: dict[str, str], fragment: str) -> None:
+    """A duplicate mount would be unreachable, an empty name is a mount at
+    `//`, and `--validate` has one ledger and one declaration to check against.
+    Each would otherwise be a server that started and answered some of what was
+    asked for."""
+    import vendorfake.cli as cli_module
+
+    parser = cli_module._build_parser()
+    with pytest.raises(SystemExit) as raised:
+        cli_module._serve(parser.parse_args(["serve", *argv]), env, io.StringIO())
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+    assert fragment in str(raised.value)
+
+
+def test_a_describing_subcommand_refuses_a_vendor_list() -> None:
+    """Only `serve` has somewhere to put a second vendor. `info` prints one
+    document about one unit, so describing the first name silently would be the
+    worst of the three possible behaviours."""
+    with pytest.raises(SystemExit) as raised:
+        run("info", "--vendor", "clover,square")
+
+    assert str(raised.value) == "vendorfake: --vendor names several vendors; only `serve` mounts more than one"
+
+
+# ---------------------------------------------------------------------------
+# `serve --control-port`: the control plane on a listener of its own (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+
+def serve_split_intercepted(
+    monkeypatch: pytest.MonkeyPatch,
+    argv: list[str],
+    env: dict[str, str],
+    probe: Callable[[Any, Any], None] | None = None,
+) -> tuple[dict[str, Any], str]:
+    """``serve`` with ``run_split_server`` intercepted: ``build`` gets vendor port 8080, ``probe`` the two apps while
+    their units still run, and the runner's keyword arguments and the announcement come back."""
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    seen: list[dict[str, Any]] = []
+
+    def fake_run_split_server(build: Callable[[int], tuple[Any, Any]], **kwargs: Any) -> None:
+        vendor_app, control_app = build(8080)
+        if probe is not None:
+            probe(vendor_app, control_app)
+        seen.append(kwargs)
+        kwargs["on_bound"](kwargs["host"], 8080, kwargs["control_host"], 8081)
+
+    def single_listener(app: object, **kwargs: object) -> None:
+        raise AssertionError("a control port was given, but the single-listener runner was used")
+
+    monkeypatch.setattr(asgi_module, "run_split_server", fake_run_split_server)
+    monkeypatch.setattr(asgi_module, "run_server", single_listener)
+    buffer = io.StringIO()
+    args = cli_module._build_parser().parse_args(["serve", "--profile", "oauth-only", *argv])
+    assert cli_module._serve(args, env, buffer) == 0
+    assert len(seen) == 1
+    return seen[0], buffer.getvalue()
+
+
+def test_serve_control_port_builds_a_vendor_app_and_a_control_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.asgi.test_adapt import call
+
+    answers: dict[str, Any] = {}
+
+    def probe(vendor_app: Any, control_app: Any) -> None:
+        answers["vendor info"] = call(vendor_app, "GET", "/__unit/info")
+        answers["vendor openapi"] = call(vendor_app, "GET", "/__unit/openapi.json")
+        answers["control info"] = call(control_app, "GET", "/__unit/info")
+        answers["control vendor path"] = call(control_app, "POST", "/oauth/v2/refresh", json={})
+
+    kwargs, announced = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--port", "0", "--control-port", "0"], {}, probe
+    )
+
+    assert (kwargs["host"], kwargs["port"], kwargs["control_host"], kwargs["control_port"]) == (
+        "127.0.0.1",
+        0,
+        "127.0.0.1",
+        0,
+    )
+    assert answers["vendor info"].status_code == 404
+    assert answers["vendor info"].headers["x-unit-error"] == "not_found"
+    assert answers["vendor openapi"].status_code == 404
+    assert answers["control info"].status_code == 200
+    assert answers["control vendor path"].status_code == 404
+    assert answers["control vendor path"].json() == {
+        "message": "POST /oauth/v2/refresh is the vendor surface; it is served on port 8080"
+    }
+    assert (
+        announced == "vendorfake: listening on http://127.0.0.1:8080 (vendor=clover) control on http://127.0.0.1:8081\n"
+    )
+
+
+def test_serve_control_listener_comes_from_the_environment_and_the_flag_beats_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env = {"VENDORFAKE_CONTROL_PORT": "9101", "VENDORFAKE_CONTROL_HOST": "0.0.0.0"}
+
+    kwargs, _ = serve_split_intercepted(monkeypatch, ["--vendor", "clover"], env)
+    assert (kwargs["control_host"], kwargs["control_port"]) == ("0.0.0.0", 9101)
+
+    kwargs, _ = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--control-port", "9102", "--control-host", "127.0.0.2"], env
+    )
+    assert (kwargs["control_host"], kwargs["control_port"]) == ("127.0.0.2", 9102)
+
+    kwargs, _ = serve_split_intercepted(
+        monkeypatch, ["--vendor", "clover", "--host", "127.0.0.3", "--control-port", "9103"], {}
+    )
+    assert (kwargs["host"], kwargs["control_host"], kwargs["control_port"]) == ("127.0.0.3", "127.0.0.3", 9103)
+
+
+@pytest.mark.parametrize(
+    ("argv", "env", "fragment"),
+    [
+        (
+            ["--vendor", "clover", "--port", "9000", "--control-port", "9000"],
+            {},
+            "--control-port 9000 is the vendor port",
+        ),
+        (["--vendor", "clover"], {"VENDORFAKE_PORT": "9000", "VENDORFAKE_CONTROL_PORT": "9000"}, "is the vendor port"),
+        (["--vendor", "clover,square", "--port", "9000", "--control-port", "9000"], {}, "is the vendor port"),
+        (["--vendor", "clover", "--control-host", "127.0.0.1"], {}, "--control-host needs --control-port"),
+        (["--vendor", "clover"], {"VENDORFAKE_CONTROL_PORT": "eighty"}, "VENDORFAKE_CONTROL_PORT='eighty'"),
+    ],
+)
+def test_serve_refuses_a_control_listener_it_cannot_bind(
+    monkeypatch: pytest.MonkeyPatch, argv: list[str], env: dict[str, str], fragment: str
+) -> None:
+    import vendorfake.asgi as asgi_module
+    import vendorfake.cli as cli_module
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a refused control listener reached a server runner")
+
+    monkeypatch.setattr(asgi_module, "run_server", never)
+    monkeypatch.setattr(asgi_module, "run_split_server", never)
+    parser = cli_module._build_parser()
+    with pytest.raises(SystemExit) as raised:
+        cli_module._serve(parser.parse_args(["serve", "--profile", "oauth-only", *argv]), env, io.StringIO())
+
+    assert str(raised.value).startswith("vendorfake: "), str(raised.value)
+    assert fragment in str(raised.value)
+
+
+def test_serve_without_a_control_port_announces_the_single_listener_lines_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, announced = serve_intercepted(monkeypatch, ["--vendor", "clover"], {})
+    assert announced == "vendorfake: listening on http://127.0.0.1:8080 (vendor=clover)\n"
+
+    _, announced = serve_intercepted(monkeypatch, ["--vendor", "clover,square"], {})
+    assert (
+        announced == "vendorfake: listening on http://127.0.0.1:8080 (vendors=clover,square; mounts=/clover,/square)\n"
+    )
+
+
+def test_serve_control_port_with_several_vendors_splits_every_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit.asgi.test_adapt import call
+
+    answers: dict[str, Any] = {}
+
+    def probe(vendor_app: Any, control_app: Any) -> None:
+        answers["vendor mount control path"] = call(vendor_app, "GET", "/clover/__unit/info")
+        answers["vendor root health"] = call(vendor_app, "GET", "/__unit/health")
+        answers["control mount info"] = call(control_app, "GET", "/square/__unit/info")
+        answers["control root health"] = call(control_app, "GET", "/__unit/health")
+        answers["control vendor path"] = call(control_app, "GET", "/clover/v3/merchants/abc")
+
+    _, announced = serve_split_intercepted(monkeypatch, ["--vendor", "clover,square", "--control-port", "0"], {}, probe)
+
+    assert answers["vendor mount control path"].status_code == 404
+    assert answers["vendor mount control path"].headers["x-unit-error"] == "not_found"
+    assert answers["vendor root health"].status_code == 404
+    assert answers["control mount info"].json()["vendor"]["name"] == "square"
+    assert answers["control root health"].json()["vendors"] == ["clover", "square"]
+    assert answers["control vendor path"].json() == {
+        "message": "GET /clover/v3/merchants/abc is the vendor surface; it is served on port 8080"
+    }
+    assert announced == (
+        "vendorfake: listening on http://127.0.0.1:8080 (vendors=clover,square; mounts=/clover,/square) "
+        "control on http://127.0.0.1:8081\n"
+    )
+
+
+def test_info_sends_the_control_token_its_unit_resolved() -> None:
+    """``vendorfake info`` reads ``/__unit/info`` in process, so an exported token must not turn it into a 401."""
+    import vendorfake.cli as cli_module
+
+    buffer = io.StringIO()
+    args = cli_module._build_parser().parse_args(["info", "--vendor", "clover", "--profile", "oauth-only"])
+    assert cli_module._info(args, {"VENDORFAKE_CONTROL_TOKEN": "cli-control-token"}, buffer) == 0
+    assert json.loads(buffer.getvalue())["control"] == {"token_required": True}

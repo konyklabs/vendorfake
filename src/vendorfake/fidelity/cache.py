@@ -44,9 +44,11 @@ from vendorfake.fidelity.types import CORPUS_DIR, DECLARATION_FILE, EXTRACT_FILE
 __all__ = [
     "CACHE_ENV_VAR",
     "DRIFT_FILE",
+    "EXTRACT_FILE",
     "CacheResult",
     "DriftRow",
     "ProseLeak",
+    "Unavailable",
     "cache_path",
     "cache_root",
     "cached_extract",
@@ -231,8 +233,11 @@ _WINDOW = 8
 
 def _prose_words(text: str) -> list[str]:
     """Words, lower-cased and stripped of punctuation, with URLs removed first:
-    a citation of the vendor's page is not a copy of the vendor's prose."""
-    return re.sub(r"[^a-z0-9 ]", " ", re.sub(r"https?://\S+", " ", text).lower()).split()
+    a citation of the vendor's page is not a copy of the vendor's prose. An
+    underscore joins rather than separates, so ``HALF_UP`` stays one word, escaped or not."""
+    no_urls = re.sub(r"\\+_", "_", re.sub(r"https?://\S+", " ", text)).lower()
+    stripped = re.sub(r"[^a-z0-9_ ]", " ", no_urls)
+    return [word.strip("_") for word in stripped.split() if word.strip("_")]
 
 
 def prose_leaks(texts: Mapping[str, str], documents: Sequence[bytes]) -> dict[str, list[str]]:
@@ -267,6 +272,13 @@ def _package_prose(anchor: str) -> dict[str, str]:
             if entry.name.endswith(".json"):
                 out[f"{CORPUS_DIR}/{entry.name}"] = entry.read_text(encoding="utf-8")
     return out
+
+
+class Unavailable(LookupError):
+    """No network and no cache (T1, konyklabs/roadmap#116) -- distinct from
+    :func:`populate`'s other ``LookupError``s (no pin, no modeled routes),
+    which stay configuration mistakes. The CLI turns this one into a named
+    skip instead of a usage error, and a harness can catch it and fall back."""
 
 
 def populate(
@@ -306,7 +318,7 @@ def populate(
                     file=out,
                 )
                 return CacheResult(anchor, path, json.loads(cached), hit=False, extract_differs=True, offline=True)
-            raise LookupError(
+            raise Unavailable(
                 f"{anchor}: cannot fetch {source.url} ({exc}) and there is no cached extract at "
                 f"{path / EXTRACT_FILE}; connect once, or set {CACHE_ENV_VAR} to a directory holding one"
             ) from exc

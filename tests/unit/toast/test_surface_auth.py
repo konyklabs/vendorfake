@@ -7,8 +7,15 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.unit.toast.harness import CLIENT_ID, CLIENT_SECRET, LEDGER, RESTAURANT, SURFACE, Harness, Silent, harness
-from vendorfake.fidelity.validate import ValidatingClient
+from tests.unit.toast.harness import (
+    CLIENT_ID,
+    CLIENT_SECRET,
+    RESTAURANT,
+    Harness,
+    Silent,
+    harness,
+    validating_client,
+)
 from vendorfake.toast.entities import COL
 from vendorfake.toast.jwt import decode_jwt_payload, verify_jwt
 from vendorfake.toast.seed.constants import SEED_PARTNER_GUID, SEED_SCOPES
@@ -71,6 +78,44 @@ def test_two_logins_mint_two_distinct_deterministic_tokens() -> None:
             assert first != second
             minted.append((decode_jwt_payload(first)["jti"], decode_jwt_payload(second)["jti"]))
     assert minted[0] == minted[1]  # the id stream is seeded: same jti sequence on two units
+
+
+def test_a_refresh_rejected_fault_answers_toasts_own_401_and_journals_nothing(h: Harness) -> None:
+    """konyklabs/roadmap#131: Toast has no refresh route -- a client logs in
+    again when its token expires -- so ``params.detail`` is set to the login
+    surface's own documented phrase (``INVALID_CREDENTIALS_MESSAGE``) and the
+    rule is matched on the login path. A one-shot fires the vendor's own 401
+    (code 10007) before the handler mints anything, then the next login
+    succeeds."""
+    before = h.journal_len()
+    armed = h.api.post(
+        "/__unit/chaos/rules",
+        {
+            "id": "refresh-rejected-toast",
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"path": LOGIN_PATH},
+            "when": {"times": 1},
+            "params": {"detail": INVALID_CREDENTIALS_MESSAGE},
+        },
+    )
+    assert armed.status == 200, armed.text
+
+    faulted = h.api.post(LOGIN_PATH, LOGIN)
+    assert faulted.status == 401
+    body = faulted.json()
+    assert body["code"] == 10007
+    assert body["message"] == INVALID_CREDENTIALS_MESSAGE
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+    assert h.journal_len() == before
+
+    second = h.api.post(LOGIN_PATH, LOGIN)
+    assert second.status == 200, second.text
+    assert "vendorfake-fault" not in second.headers
+
+    recorded = h.api.get("/__unit/requests?limit=2").json()["requests"]
+    assert recorded[1]["fault"] == "refresh_rejected"
+    assert recorded[1]["rule_id"] == "refresh-rejected-toast"
 
 
 @pytest.mark.parametrize(
@@ -140,9 +185,7 @@ def test_a_token_lacking_the_scope_gets_the_documented_403_through_the_kernel() 
     overlay = VendorOverlay(create_toast_vendor(), routes=lambda routes: (*routes, guarded))
     unit = create_unit(vendor=overlay, profile="full", logger=Silent())
     try:
-        api = ValidatingClient(
-            unit, SURFACE, LEDGER, strict_undeclared=False
-        )  # the test-only route is not a vendor route
+        api = validating_client(unit, strict_undeclared=False)  # the test-only route is not a vendor route
         p = Harness(unit=unit, api=api, auth={})
         weak = p.restricted_token("menus:read")
         forbidden = api.post("/test/guarded", {}, headers=weak)

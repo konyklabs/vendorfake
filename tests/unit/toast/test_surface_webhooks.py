@@ -6,8 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from tests.unit.toast.harness import LEDGER, SURFACE, Harness, Silent, harness
-from vendorfake.fidelity.validate import ValidatingClient
+from tests.unit.toast.harness import Harness, Silent, harness, validating_client
 from vendorfake.toast.seed import constants as c
 from vendorfake.toast.surface.webhooks import STAND_IN
 
@@ -54,7 +53,7 @@ def test_https_is_required_unless_the_switch_lifts_it() -> None:
     )
     try:
         assert (
-            ValidatingClient(unit, SURFACE, LEDGER)
+            validating_client(unit)
             .post("/__toast/webhooks/subscriptions", {"url": "http://localhost:19999/hooks"})
             .status
             == 201
@@ -75,6 +74,19 @@ def test_https_is_required_unless_the_switch_lifts_it() -> None:
 def test_a_malformed_registration_names_the_field(h: Harness, body: dict[str, object], field: str) -> None:
     response = h.api.post("/__toast/webhooks/subscriptions", body)
     assert response.status == 400 and response.json()["unit_error"]["field"] == field
+
+
+def test_a_link_local_url_is_refused(h: Harness) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this stand-in refuses it
+    the same way the control plane's own subscription route already does."""
+    response = h.api.post("/__toast/webhooks/subscriptions", {"url": "https://169.254.169.254/latest"})
+    assert response.status == 400 and response.json()["unit_error"]["field"] == "url"
+
+
+def test_a_loopback_url_is_accepted(h: Harness) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    response = h.api.post("/__toast/webhooks/subscriptions", {"url": "https://127.0.0.1:9/hook"})
+    assert response.status == 201, response.text
 
 
 def test_remove_deletes_from_the_one_list_and_a_second_remove_is_404(h: Harness) -> None:

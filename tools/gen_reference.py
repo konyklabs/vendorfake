@@ -178,14 +178,18 @@ def _faults_page() -> None:
         ),
         title="Faults",
         intro=(
-            "Every built-in fault. `provenance: vendor` reproduces a failure mode "
+            "Every built-in fault, readable without a unit via "
+            "`vendorfake.registry.faults()` or `vendorfake faults --json`. "
+            "`provenance: vendor` reproduces a failure mode "
             "the vendor documents; `provenance: transport` is a transport-level "
             "failure mode no vendor documents. `phase: request` fires instead of "
-            "the handler, so nothing is committed; `phase: response` fires on the "
+            "the handler, so nothing is committed; `phase: handler` is handed to "
+            "the route, whose own handler answers the way the vendor does and "
+            "commits nothing; `phase: response` fires on the "
             "answer *after* the handler committed, so a retry does not start "
             "clean; `phase: delivery` is a webhook delivery. See "
-            "[Chaos rules and faults](../concepts/chaos-rules-and-faults.md) and "
-            "[Provenance labels](../concepts/provenance-labels.md)."
+            "[Chaos](../concepts/chaos.md) and "
+            "[Provenance labels](../concepts/chaos.md#provenance)."
         ),
         body=_table(("Fault", "Scope", "Provenance", "Phase", "Params", "Description"), rows),
     )
@@ -202,7 +206,6 @@ def _env_page() -> None:
     rows = [
         (
             f"`{var.name}{'<suffix>' if var.is_prefix else ''}`",
-            f"`{var.replaces}`" if var.replaces else "",
             var.applies_to,
             var.summary,
         )
@@ -212,12 +215,8 @@ def _env_page() -> None:
         "env.md",
         source="`vendorfake.core.config.profile.ENV_TABLE`",
         title="Environment variables",
-        intro=(
-            "Every environment variable `load_profile` reads. `Replaces` names the "
-            "reference TypeScript implementation's variable this one renames; empty "
-            "marks a control this Python build added that the reference never had."
-        ),
-        body=_table(("Variable", "Replaces", "Applies to", "Summary"), rows),
+        intro="Every environment variable `load_profile` reads.",
+        body=_table(("Variable", "Applies to", "Summary"), rows),
     )
 
 

@@ -52,8 +52,7 @@ from typing import Any
 
 from vendorfake.conformance.client import MISSING, ConformanceClient, ConformanceResponse, FormPairs, QueryPairs
 from vendorfake.core.capability.gates import CoreCapability
-from vendorfake.core.capability.registry import CapabilityRegistry
-from vendorfake.core.chaos.engine import ChaosDecision, ChaosEngine, ChaosSubject
+from vendorfake.core.chaos.engine import ChaosDecision, ChaosSubject
 from vendorfake.core.chaos.selector import FaultSelection, FaultSelector
 from vendorfake.core.config.models import ProfileDocument
 from vendorfake.core.kernel.magic import MagicExtraction
@@ -68,7 +67,6 @@ from vendorfake.core.kernel.types import (
     HandlerArgs,
     JournalEntry,
     MagicTriggerSpec,
-    MutableResponse,
     ReplyInit,
     Route,
     ShapedError,
@@ -95,6 +93,7 @@ __all__ = [
     "LeakyFaultSelector",
     "LoopBreakingFaultSelector",
     "PermissiveStateMachine",
+    "RefreshRejectedSwallowingFaultSelector",
     "SignerOverlay",
     "UngatedWebhookDispatcher",
     "VendorOverlay",
@@ -229,8 +228,8 @@ class VendorOverlay:
             return
         self._hydrate(self._inner, ctx, seed)
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
-        self._inner.decorate(res, ctx, req)
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
+        self._inner.decorate(headers, ctx, req)
 
 
 class ErrorShaperOverlay:
@@ -567,6 +566,30 @@ class LeakyFaultSelector(FaultSelector):
         return super().select_request(subject, in_band)
 
 
+class RefreshRejectedSwallowingFaultSelector(FaultSelector):
+    """A selector that discards a ``refresh_rejected`` decision before it
+    reaches the pipeline.
+
+    The defect C37 exists to catch: a standing ``refresh_rejected`` rule is
+    armed, matches, and would fire -- but this selector reports "nothing
+    decided" for that one fault name instead of the engine's real decision,
+    so the request falls through to the handler as if no rule existed. The
+    seam is the only one a selector-level defect can ride in through, and it
+    is deliberately narrow (only this one fault name is swallowed) so the
+    mutant does not also trip every other request-scope contract.
+    """
+
+    def select_request(
+        self,
+        subject: ChaosSubject,
+        in_band: Callable[[], MagicExtraction] | None = None,
+    ) -> FaultSelection:
+        selection = super().select_request(subject, in_band)
+        if selection.decision is not None and selection.decision.fault == "refresh_rejected":
+            return FaultSelection()
+        return selection
+
+
 class LoopBreakingFaultSelector(FaultSelector):
     """A selector under which the engine's rule loop stops at the first fire.
 
@@ -662,26 +685,3 @@ def carries_magic(args: HandlerArgs) -> bool:
         return False
     values = (*args.req.query.values(), *args.req.headers.values())
     return any(value.startswith(spec.prefix) for value in values)
-
-
-def shaped(status: int, body: object) -> ShapedError:
-    return ShapedError(status=status, body=body)
-
-
-def unit_error(kind: UnitErrorKind, detail: str) -> UnitError:
-    return UnitError(kind, detail=detail)
-
-
-def subject_of(args: HandlerArgs) -> ChaosSubject:
-    """A request-scope chaos subject for the route now running."""
-    return ChaosSubject(
-        scope="request",
-        route_key=args.route.key if args.route is not None else None,
-        method=args.req.method,
-        path=args.req.path,
-    )
-
-
-def make_selector(engine: ChaosEngine, capabilities: CapabilityRegistry) -> FaultSelector:
-    """The production selector, spelled as the factory the seam expects."""
-    return FaultSelector(engine, capabilities)

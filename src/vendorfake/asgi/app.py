@@ -1,69 +1,43 @@
-"""The ASGI application: one catch-all route over a synchronous unit.
-
-FOR: putting a socket in front of ``Unit.handle`` and doing nothing else. This
-module and :mod:`vendorfake.asgi.adapt` are the only places in the
-distribution that import a web framework, and everything about their shape is
-chosen to keep that true.
-
-INVARIANT: **the unit answers every request, including every error.** There is
-exactly one route -- ``/{full_path:path}`` over the complete verb set -- and it
-declares no typed parameters, so the framework has nothing to validate, no
-path to fail to match and no method to reject. A framework 404 would be an
-error document in the framework's vocabulary rather than the vendor's, and a
-consumer testing their error handling against it would be testing Starlette.
-A framework 422 would be worse: it would mean the framework parsed a body,
-which is the leak the core exists to prevent.
-
-That the property *holds* is not left to reading. Handlers are registered for
-the two exceptions a framework answers with -- ``HTTPException`` and
-``RequestValidationError`` -- and each one increments a counter before handing
-the request to the unit anyway. The counter is reported by
-``GET /__unit/health`` as ``framework_answered``, so it is readable over HTTP
-from the parent of an out-of-process test, which a module-level list inside the
-serving process would not be. Its correct value is 0, forever; a non-zero one
-means the catch-all has a hole and names the request that found it.
-
-Two more shapes worth stating, because both are easy to undo by accident:
-
-**No middleware.** Not for compression, not for CORS, not for a request id.
-Every middleware in the stack is a chance to rewrite the bytes the unit
-produced, and byte-for-byte agreement between this binding and the in-process
-one is a conformance contract, not a nicety. Anything a response needs is set
-by the vendor's ``decorate`` hook inside the core, where every binding gets it.
-
-**The synchronous core is bridged, not adapted.** ``Unit.handle`` is a plain
-``def`` holding a real lock; calling it directly from the event loop would
-block every other connection for the duration. ``run_in_threadpool`` gives it
-a worker thread, which is also what makes the ``serialized=False`` routes --
-draining the webhook queue, advancing a virtual clock -- work at all: they wait
-on machinery another request has to feed.
+"""The ASGI application: one catch-all route over a synchronous unit. The unit
+answers every request, including every error; no typed parameters and no
+middleware, and ``Unit.handle`` runs via ``run_in_threadpool``.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI
-from fastapi.concurrency import run_in_threadpool
-from fastapi.exceptions import RequestValidationError
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.requests import Request
-from starlette.responses import Response, StreamingResponse
+try:
+    from fastapi import FastAPI
+    from fastapi.concurrency import run_in_threadpool
+    from fastapi.exceptions import RequestValidationError
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.requests import Request
+    from starlette.responses import Response, StreamingResponse
+except ImportError as exc:
+    raise ImportError("vendorfake serve needs the 'serve' extra: pip install 'vendorfake[serve]'") from exc
 
-from vendorfake.asgi.adapt import to_response, to_unit_request
+from vendorfake.asgi.adapt import request_headers, request_path, to_response, to_unit_request
+from vendorfake.core.control.access import control_access_error, names_control_plane
 from vendorfake.core.control.openapi import document_for_unit
-from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE
-from vendorfake.core.kernel.types import Logger, TransportDirective
+from vendorfake.core.kernel.reply import JSON_CONTENT_TYPE, normalize
+from vendorfake.core.kernel.types import (
+    Logger,
+    ReplyInit,
+    ResponseObserver,
+    TransportDirective,
+    UnitError,
+    UnitErrorKind,
+)
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.util.json import dump_json
 
 __all__ = [
     "HTTP_METHODS",
     "OPENAPI_PATH",
-    "FrameworkTripwire",
+    "Surface",
     "TransportFaultAbort",
     "create_app",
     "registered_methods",
@@ -79,74 +53,18 @@ HTTP_METHODS: tuple[str, ...] = (
     "OPTIONS",
     "TRACE",
 )
-"""Every verb the catch-all is registered for.
-
-Complete on purpose and pinned by a test. A verb missing from this tuple is
-answered by Starlette with a 405 that never reaches the unit -- which is the
-one way the catch-all can have a hole while still looking like a catch-all.
-An exotic method outside this set (``PROPFIND``, say) is what the tripwire
-below exists to catch, and is the only request in this design a framework can
-still answer first."""
+"""Every verb the catch-all is registered for; a missing one gets a Starlette 405."""
 
 OPENAPI_PATH = "/__unit/openapi.json"
-"""Where the generated description of the surface is served.
+"""Where the generated surface description is served, per binding."""
 
-Deliberately *not* a control-plane route. The document describes an HTTP
-surface, so it is a fact about this binding rather than about the unit, and the
-unit's own route table stays the same whichever binding is in front of it. The
-same document is printed by ``vendorfake openapi`` with no server running, from
-the generator in the core -- which is why the framework's own generator is
-switched off entirely rather than merely ignored: pointed at a single catch-all
-route it would publish one wildcard entry and call it a description."""
-
-
-@dataclass
-class FrameworkTripwire:
-    """A counter of requests the web framework tried to answer by itself.
-
-    Not a log and not a list: a number, because the only place it can be read
-    is over HTTP from another process, and a number survives that trip. Each
-    hit also carries a description into the unit's logger at ``error`` level,
-    so the number tells you *that* the catch-all has a hole and the log tells
-    you which request found it.
-    """
-
-    count: int = 0
-    #: The most recent few hits, for a test failure message that says what
-    #: happened. Bounded, because an unbounded list in a long-running server is
-    #: a leak, and because after the first hit the invariant is already broken.
-    recent: list[str] = field(default_factory=list)
-    limit: int = 8
-
-    def get(self) -> int:
-        """The count, as the callable ``/__unit/health`` reports through."""
-        return self.count
-
-    def record(self, description: str) -> None:
-        self.count += 1
-        if len(self.recent) < self.limit:
-            self.recent.append(description)
+Surface = Literal["all", "vendor", "control"]
+"""What one listener answers: both surfaces, or one of them when the control plane has a port of its own."""
 
 
 class TransportFaultAbort(Exception):
-    """Raised from inside a streaming ASGI body for ``connection_reset`` /
-    ``empty_response``, and never caught.
-
-    FOR: forcing the connection closed after the response has already started,
-    which is the one thing a served unit can do that an in-process one cannot
-    fake by raising a client-side exception directly -- there is a real socket
-    here, and the fault is what happens to it. Starlette's
-    :class:`~starlette.responses.StreamingResponse` sends ``http.response.start``
-    (status and headers) before it ever asks its body iterator for a chunk, so
-    by the time this is raised the caller has already committed to reading a
-    body it will not finish getting -- which is the "after http.response.start,
-    close without completing" the spec describes for ``connection_reset``, and
-    the closest this ASGI server allows for ``empty_response`` (no vendor
-    lets an HTTP response omit its status line, so "before any bytes" cannot
-    mean before *those*). Left to propagate: uvicorn logs the exception and
-    aborts the connection, which is what a real reset or a real stalled
-    connection looks like from the client's side too.
-    """
+    """Raised from a streaming body for ``connection_reset``/``empty_response``
+    and never caught; the status line is sent, so uvicorn aborts the connection."""
 
 
 async def _aborted_body() -> AsyncIterator[bytes]:
@@ -155,14 +73,7 @@ async def _aborted_body() -> AsyncIterator[bytes]:
 
 
 async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> AsyncIterator[bytes]:
-    """Stream ``body`` in ``chunk_bytes`` pieces, sleeping ``chunk_delay_ms``
-    between them -- awaited, never slept, so the event loop keeps serving
-    every other connection while this one dribbles in. Unlike the in-process
-    transport, this is a real stream over a real socket: a client whose own
-    read timeout is shorter than a gap disconnects on its own, with nothing
-    here needing to predict it (contrast ``testing/transport.py``, which has
-    no socket to let the client's own timeout race against).
-    """
+    """Stream ``body`` in ``chunk_bytes`` pieces, awaiting ``chunk_delay_ms``."""
     chunk_bytes = max(1, chunk_bytes)
     for offset in range(0, len(body), chunk_bytes):
         if offset > 0:
@@ -170,23 +81,27 @@ async def _slow_body(body: bytes, chunk_bytes: int, chunk_delay_ms: int) -> Asyn
         yield body[offset : offset + chunk_bytes]
 
 
+def _transport_error_response(unit: Unit, err: UnitError) -> Response:
+    """Shape an error the binding itself raised -- the adapter's transport-level
+    refusals, such as an oversized body, and the ``internal`` a refusing
+    ``observer`` turns an answer into -- through the vendor's own error table,
+    so the consumer sees the vendor's document and never a framework one.
+
+    Neither case can go through ``Unit.handle``: the first has no
+    :class:`UnitRequest` yet and the second has an answer already. It mirrors
+    the small slice of ``Unit._shape`` that applies with no route, no chaos
+    decision and no request to log.
+    """
+    ctx = unit.context
+    shaped = ctx.vendor.errors.shape(err, ctx)
+    headers = dict(shaped.headers)
+    headers["x-unit-error"] = err.kind.value
+    return to_response(normalize(ReplyInit(status=shaped.status, json=shaped.body, headers=headers)))
+
+
 def _directive_response(status: int, headers: dict[str, str], directive: TransportDirective, body: bytes) -> Response:
     if directive.kind == "slow_body":
-        # ``chunk_delay_ms`` is read raw, not defaulted here: the kernel
-        # already resolved it once, in ``core/chaos/faults.py``'s
-        # ``_directive`` (``max(0, as_int(params.get("chunk_delay_ms"), 100))``),
-        # so an explicit ``0`` is a value a rule reached on purpose and this
-        # binding must honour it rather than re-substituting its own 100ms
-        # default over it. ``testing/transport.py``'s ``_wait_owed_ms`` reads
-        # the same field the same way, for the same reason: parity between
-        # bindings is the invariant this module's own docstring states, and a
-        # rule that asks for no gap must produce no gap served or in process
-        # (found by review round 2 of konyklabs/roadmap#73). ``chunk_bytes``
-        # has no equivalent problem -- the kernel clamps it with
-        # ``max(1, ...)`` before a directive ever exists, so the ``else 64``
-        # fallback below is unreachable from the rule path and only guards a
-        # ``TransportDirective`` built by hand with the field left at its
-        # dataclass default.
+        # Kernel-resolved: an explicit ``0`` delay is honoured as given.
         chunk_bytes = directive.chunk_bytes if directive.chunk_bytes > 0 else 64
         chunk_delay_ms = directive.chunk_delay_ms
         return StreamingResponse(_slow_body(body, chunk_bytes, chunk_delay_ms), status_code=status, headers=headers)
@@ -194,81 +109,104 @@ def _directive_response(status: int, headers: dict[str, str], directive: Transpo
     return StreamingResponse(_aborted_body(), status_code=status, headers=headers)
 
 
+def _vendor_surface_refusal(request: Request, path: str, vendor_port: int | None) -> Response:
+    """The control listener's 404 for a vendor path, naming where the vendor surface is."""
+    shown = f"{request.scope.get('root_path', '')}{path}"
+    message = f"{request.method} {shown} is the vendor surface; it is served on port {vendor_port}"
+    return Response(
+        content=dump_json({"message": message}), status_code=404, headers={"content-type": JSON_CONTENT_TYPE}
+    )
+
+
 def create_app(
     unit: Unit,
     *,
-    tripwire: FrameworkTripwire | None = None,
     logger: Logger | None = None,
+    observer: ResponseObserver | None = None,
+    surface: Surface = "all",
+    vendor_port: int | None = None,
 ) -> FastAPI:
-    """Build the ASGI application in front of ``unit``.
+    """Build the ASGI application in front of ``unit``; a factory, never a global.
 
-    A factory, never a module-level ``app = FastAPI()``. A module-level
-    application would be constructed on import -- by the CLI's ``--help``, by a
-    test collecting a neighbouring module, by anything that touched this
-    package -- and would need a unit to exist before anyone asked for one,
-    which means a global unit, which means one test's state reaching another's.
-
-    ``tripwire`` is the same object whose ``get`` was handed to ``create_unit``
-    as ``framework_answered``. Passing it here and there is the whole wiring:
-    the unit reports the number, this application increments it, and neither
-    knows anything else about the other.
+    ``observer`` runs after the unit answered and before the answer is converted, so it can read the exchange and
+    change nothing -- except by raising, which is the point: an ``AssertionError`` (a ``FidelityViolation`` is one)
+    becomes a 500 in the vendor's own error shape, on the wire where the caller sees it. Anything else propagates.
     """
-    fired = FrameworkTripwire() if tripwire is None else tripwire
+    if surface == "control" and vendor_port is None:
+        raise ValueError("create_app(surface='control') needs vendor_port, which its 404 for a vendor path names")
     log = unit.context.log if logger is None else logger
     vendor = unit.context.vendor
+    token = unit.context.config.control.token
 
     app = FastAPI(
         title=f"{vendor.display_name} (vendorfake)",
         version=vendor.api_version or "unversioned",
-        # The framework's own generator is switched off, not left unused: with
-        # one catch-all route it can only describe a wildcard, and a wrong
-        # description served at a conventional path is worse than none.
+        # Off, not unused: over one catch-all route it describes only a wildcard.
         openapi_url=None,
         docs_url=None,
         redoc_url=None,
     )
     app.state.unit = unit
-    app.state.tripwire = fired
     app.state.methods = HTTP_METHODS
 
     document = document_for_unit(unit)
-    #: Serialised once. The route table is fixed at unit construction, so the
-    #: document cannot change while the process runs, and re-encoding it per
-    #: request would only add a way for two requests to disagree.
     document_bytes = dump_json(document)
 
-    async def dispatch(request: Request) -> Response:
-        """The one path from a socket to the unit and back."""
-        unit_request = await to_unit_request(request)
+    async def forward(request: Request) -> Response:
+        """The one path from a socket to the unit and back, reached only through ``dispatch``."""
+        try:
+            unit_request = await to_unit_request(request)
+        except UnitError as err:
+            return _transport_error_response(unit, err)
         response = await run_in_threadpool(unit.handle, unit_request)
+        if observer is not None:
+            try:
+                observer(unit_request, response)
+            except AssertionError as violation:
+                log.error(
+                    "the response observer refused the unit's answer",
+                    {
+                        "method": unit_request.method,
+                        "path": unit_request.path,
+                        "status": response.status,
+                        "violation": str(violation),
+                    },
+                )
+                return _transport_error_response(unit, UnitError(UnitErrorKind.INTERNAL, detail=str(violation)))
         if response.transport is not None:
             return _directive_response(response.status, dict(response.headers), response.transport, response.body)
         if response.delay_ms > 0:
-            # The kernel decided *whether* to delay; this binding decides how,
-            # and for a server holding a real socket that means awaiting rather
-            # than sleeping. `time.sleep` on the worker thread would be nearly
-            # as good -- it is not the event loop -- but the pool is finite, so
-            # a handful of concurrently delayed requests would stop answering
-            # everyone else, which is not what the fault is meant to rehearse.
-            #
-            # Nothing is short-circuited here the way the in-process transport
-            # short-circuits a delay longer than the caller's read timeout: over
-            # a socket the client's timeout is the client's business, and it
-            # will disconnect on its own. From the caller's point of view served
-            # mode behaves exactly as it did when the kernel slept.
+            # Awaited, not slept: the threadpool is finite.
             await asyncio.sleep(response.delay_ms / 1000.0)
         return to_response(response)
 
-    async def framework_answered(request: Request, exc: Exception) -> Response:
-        """What to do when the framework tried to answer -- which it should not.
+    async def not_served_here(request: Request) -> Response:
+        """A control path on the vendor listener: the vendor's own 404, as for any path it does not serve."""
+        try:
+            unit_request = await to_unit_request(request)
+        except UnitError as err:
+            return _transport_error_response(unit, err)
+        return to_response(unit.answer_unmatched(unit_request))
 
-        Recording and then dispatching anyway, rather than returning the
-        framework's own document. The consumer still gets a vendor-shaped
-        response, so a hole in the catch-all cannot present as "your error
-        handling is broken"; and the counter, not the response, is where the
-        hole is reported.
-        """
-        fired.record(f"{request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+    async def dispatch(request: Request) -> Response:
+        """Every entry point's way in, the framework's refusals included: the surface split, then the document."""
+        # The raw path, for every decision: uvicorn's decoded one reads ``/%5F%5Funit/openapi.json`` as the document.
+        path = request_path(request)
+        if surface != "all" and names_control_plane(path) != (surface == "control"):
+            if surface == "vendor":
+                return await not_served_here(request)
+            return _vendor_surface_refusal(request, path, vendor_port)
+        if (
+            request.method in {"GET", "HEAD"}
+            and path == OPENAPI_PATH
+            and control_access_error(request.method, path, request_headers(request), token) is None
+        ):
+            return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
+        # A refused document request falls through: the kernel answers it with the same 401 as any control path.
+        return await forward(request)
+
+    async def framework_answered(request: Request, exc: Exception) -> Response:
+        """The framework tried to answer; log it and dispatch to the unit anyway."""
         log.error(
             "the web framework answered a request instead of the unit",
             {
@@ -276,7 +214,6 @@ def create_app(
                 "path": request.url.path,
                 "exception": type(exc).__name__,
                 "detail": str(exc),
-                "framework_answered": fired.count,
             },
         )
         return await dispatch(request)
@@ -286,29 +223,14 @@ def create_app(
 
     @app.api_route("/{full_path:path}", methods=list(HTTP_METHODS), include_in_schema=False)
     async def catch_all(request: Request) -> Response:
-        """No typed parameters, by construction.
-
-        ``request`` is the only argument, and it is a ``Request``, so FastAPI
-        has nothing to validate and can raise no ``RequestValidationError``.
-        The moment a second parameter appears here -- a ``Form(...)``, a
-        ``Body(...)``, even an annotated query string -- the framework starts
-        deciding what a body is, and the core stops being the thing under test.
-        """
-        if request.method in {"GET", "HEAD"} and request.url.path == OPENAPI_PATH:
-            return Response(content=document_bytes, status_code=200, headers={"content-type": JSON_CONTENT_TYPE})
+        """No typed parameters: a second one would let the framework parse a body."""
         return await dispatch(request)
 
     return app
 
 
 def registered_methods(app: FastAPI) -> frozenset[str]:
-    """Every method the application's routes actually answer.
-
-    Exists for the test that pins :data:`HTTP_METHODS`. Reading it back off the
-    built application rather than off the constant is the point: the constant
-    is what we meant, this is what the framework did with it, and a divergence
-    between the two is exactly the failure the pin is for.
-    """
+    """Every method the built routes answer, for the test that pins HTTP_METHODS."""
     methods: set[str] = set()
     for route in app.routes:
         found: Any = getattr(route, "methods", None)

@@ -186,3 +186,48 @@ def test_the_seeded_webhook_subscriber_ships_disabled_and_receives_nothing() -> 
         h.create_order()
         h.api.post("/__unit/webhooks/drain", {})
         assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# Seed token lifetimes (konyklabs/roadmap#131, item 4). JUDGMENT: a relative
+# lifetime in the seed document, matching Square's `expires_in_ms`.
+# ---------------------------------------------------------------------------
+
+
+def _seeded_unit(tmp_path: Any, mutate: Any) -> Iterator[Harness]:
+    """The shipped document, with `mutate` applied to its first (full) token,
+    written to `tmp_path` and loaded through `VENDORFAKE_SEED`."""
+    document = json.loads(c.DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
+    mutate(document["tokens"][0])
+    path = tmp_path / "custom.seed.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    yield from harness(env={"VENDORFAKE_SEED": str(path)})
+
+
+def test_an_access_token_expires_in_ms_of_zero_is_expired_on_the_wire_but_the_refresh_still_works(
+    tmp_path: Any,
+) -> None:
+    for h in _seeded_unit(tmp_path, lambda t: t.update(access_token_expires_in_ms=0)):
+        denied = h.get("/orders")
+        assert denied.status == 401
+        assert denied.header("x-unit-error") == "token_expired"
+        refreshed = h.refresh(refresh_token=c.SEED_REFRESH_TOKEN)
+        assert refreshed.status == 200, refreshed.text
+
+
+def test_a_refresh_token_expires_in_ms_of_zero_refuses_the_refresh_but_the_access_token_still_authenticates(
+    tmp_path: Any,
+) -> None:
+    for h in _seeded_unit(tmp_path, lambda t: t.update(refresh_token_expires_in_ms=0)):
+        assert h.get("/orders").status == 200
+        refused = h.refresh(refresh_token=c.SEED_REFRESH_TOKEN)
+        assert refused.status == 401
+        assert refused.json()["message"] == "The refresh token expired."
+
+
+def test_a_seed_token_naming_neither_field_keeps_the_configured_ttl(tmp_path: Any) -> None:
+    for h in _seeded_unit(tmp_path, lambda t: None):
+        now = h.unit.context.clock.now()
+        full = TokenEntity.from_entity(h.unit.context.store.collection(COL.tokens).require("tok_seed_full"))
+        assert abs(full.access_token_expiration_ms - (now + 30 * 60 * 1000)) < 5000
+        assert abs(full.refresh_token_expiration_ms - (now + 365 * 24 * 60 * 60 * 1000)) < 5000

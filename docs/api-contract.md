@@ -21,7 +21,7 @@ edit is the review trigger.
 
 ### `vendorfake` — the package root
 
-Five names, re-exported from `vendorfake.registry` because discovering what
+Six names, re-exported from `vendorfake.registry` because discovering what
 exists and building one are a single task:
 
 | Name | What it is |
@@ -29,8 +29,11 @@ exists and building one are a single task:
 | `available_vendors()` | Every vendor name that can actually be loaded |
 | `available_profiles(vendor)` | Every profile a vendor ships, with its summary, capabilities and seed |
 | `routes(vendor, profile)` | The route table a profile serves |
+| `faults()` | The built-in fault catalogue, readable without starting a unit |
 | `create_unit(...)` | The one constructor: a name and a profile in, a running `Unit` out |
 | `resolve_vendor(name)` | A name to a `VendorDefinition`, refusing a typo by listing the real ones |
+| `ambient_env()` | The exported `VENDORFAKE_*` variables; the one place a binding reads the process environment |
+| `resolve_capabilities(definition, profile, capabilities)` | A `capabilities=` request to `(profile, env layer)`, shared by `create_unit` and `served()` |
 
 `__version__` is the version of the code that is imported, which is not always
 what `importlib.metadata` reports — the two disagree in a source checkout.
@@ -64,16 +67,14 @@ child's inherited `os.environ` — an entry beats the ambient variable of the
 same name, `clock_start=` layers beneath it exactly as in `unit()`, and the
 parent-resolved `.seed` reads the same `VENDORFAKE_VENDOR_*` layer. Additive:
 a call without it behaves as before. Entries for what `served()` passes as a
-flag (`VENDORFAKE_PROFILE`, `VENDORFAKE_HOST`, `VENDORFAKE_PORT`,
-`VENDORFAKE_LOG_LEVEL`), for `VENDORFAKE_TRANSPORT` and
-`VENDORFAKE_TRANSPORT_DIR`, for `VENDORFAKE_SEED` and for
-`VENDORFAKE_SEED_OVERLAY` are refused with
-`ValueError` before the child is spawned — the first four because the flag
-would beat them (the message names the parameter to use), the transport pair
-because `serve` only ever binds HTTP and there is no parameter to use, the
-seed because `.seed` could not describe it, and the overlay because
-`seed_overlay=` is the parameter for it and only the parameter's path checks
-the document in the calling process. There is still no `capabilities=`.
+flag (`VENDORFAKE_HOST`, `VENDORFAKE_PORT`, `VENDORFAKE_LOG_LEVEL`), for
+`VENDORFAKE_SEED` and for `VENDORFAKE_SEED_OVERLAY` are refused with
+`ValueError` before the child is spawned — the first three because the flag
+would beat them (the message names the parameter to use), the seed because
+`.seed` could not describe it, and the overlay because `seed_overlay=` is the
+parameter for it and only the parameter's path checks the document in the
+calling process. `served()` takes `capabilities=` and `unmatched=` with
+`unit()`'s meaning, and every HTTP driver has `.async_client`.
 
 **All three bindings take `seed_overlay=`.** A partial seed document merged
 over the profile's before the store is hydrated — an inline mapping, or a
@@ -88,7 +89,9 @@ collection the seed does not have are in
 
 **An overlay may not name the collections `.seed` is built from.** `tokens`,
 and the vendor's identity collection (`merchant` on Square and Clover,
-`restaurant` on Toast), are refused with `UnitError` when the unit starts —
+`restaurant` on Toast, `retailer` on Lightspeed, which also refuses
+`personal_tokens` and `refresh_tokens`), are refused with `UnitError` when the
+unit starts —
 on all three bindings, and in the parent process before `served()` spawns a
 child. `.seed` carries the shipped credentials and tenant id from this
 distribution's constants rather than from the loaded document, so an overlay
@@ -120,7 +123,7 @@ given `--profile` as a flag and the CLI prefers a flag to the variable.
 
 ### `vendorfake.registry` — discovery and construction
 
-The five names above, plus `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
+The six names above, plus `FaultInfo`, `ProfileInfo`, `RouteInfo`, `ROLE_NAMES`,
 `ENTRY_POINT_GROUP`, `VENDOR_ENV_VAR`, and the two protocols a third-party
 vendor implements — `VendorDefinition` and `SeedingVendor`, re-exported here
 from `vendorfake.core.kernel.types` for the reason given under *Publishing a
@@ -135,8 +138,9 @@ loaded explicitly with `-p vendorfake.conformance.plugin`.
 
 ### The per-vendor path constants
 
-`vendorfake.square.paths`, `vendorfake.clover.paths` and
-`vendorfake.toast.paths` — one `UPPER_SNAKE` constant per route carrying an
+`vendorfake.square.paths`, `vendorfake.clover.paths`,
+`vendorfake.toast.paths` and `vendorfake.lightspeed.paths` — one
+`UPPER_SNAKE` constant per route carrying an
 `operation_id`, named after that `operation_id`, which is the same identifier
 `registry.routes` and `GET /__unit/routes` publish.
 `tests/unit/test_paths_drift.py` asserts every constant against the live route
@@ -174,16 +178,32 @@ the vendor surfaces are: the conformance suite asserts a vendor's behaviour
 entirely through them, which is what lets an implementation in another
 language be checked against the same contract.
 
+With `VENDORFAKE_CONTROL_TOKEN` set, every `/__unit/*` request but `GET` or
+`HEAD /__unit/health` must carry the token in the `vendorfake-control-token`
+header, and is otherwise refused with the vendor's 401, `x-unit-error:
+unauthorized`, before routing. The root of a process mounting several vendors
+refuses its own `/__unit/*` paths the same way, with a 401 whose JSON body
+carries only `message`. `GET /__unit/info` carries
+`control: {token_required}` and never the token. Unset, nothing changes.
+
 ### The command line
 
 Every subcommand, every flag, and the JSON document `--json` prints. `--json`
 is accepted on either side of the subcommand name and means the same thing.
+`serve --vendor` (and `$VENDORFAKE_VENDOR`) accepts a comma-separated list —
+`clover,square` mounts one unit per vendor under `/<vendor>/` in one process;
+every other subcommand describes one vendor and refuses a list.
+`serve --control-port` (and `$VENDORFAKE_CONTROL_PORT`) serves `/__unit/*` on
+a second listener, bound to `--control-host` (`$VENDORFAKE_CONTROL_HOST`,
+defaulting to the vendor host); the announce line then ends
+` control on http://<host>:<port>`, and without it the line is unchanged.
 
 ### The profile document
 
 Every key a profile JSON document accepts, and every `VENDORFAKE_*`
 environment variable that overrides one. `GET /__unit/info` publishes the
-resolved result.
+resolved result. `VENDORFAKE_CONTROL_TOKEN` is environment-only: the document
+has no key for it, and a `control` key is refused like any unknown one.
 
 ### The `Vendorfake-*` response headers
 
@@ -238,11 +258,10 @@ upgrade may move them under you.
   `.config`, `.errors`, `.seed`, `.model`, and the names their `__init__`
   re-exports. What a vendor surface *does* is pinned by the conformance suite;
   where it lives is not.
-- **`vendorfake.agent`** — the machinery behind `vendorfake agent-setup` and
-  `vendorfake explain`: the rules-file template, the `.mcp.json` merge, and
-  the lookups `explain` renders. `vendorfake.agent.__init__` declares
-  `__all__ = []` and is reached only from `vendorfake.cli`'s two subcommand
-  bodies. The command line those two subcommands are part of is pinned — see
+- **`vendorfake.agent`** — the lookups behind `vendorfake explain`.
+  `vendorfake.agent.__init__` declares
+  `__all__ = []` and is reached only from `vendorfake.cli`'s subcommand
+  bodies. The command line that subcommand is part of is pinned — see
   *The command line*, above — this package's internal shape is not; a test
   or an agent reaches this surface through the `vendorfake` command, never by
   importing `vendorfake.agent` directly.
@@ -280,3 +299,32 @@ A behaviour change to a symbol that keeps its name is not a deprecation and
 does not get a grace release; it is announced under Behaviour changes or
 Breaking changes with a migration note saying what to do instead. The 0.2.0
 entries are written that way, and they are the model.
+
+## Compatibility policy for 0.x
+
+While the major version is 0, a minor release may change or remove public
+behaviour, and every such change is listed under "Breaking changes" in the
+release notes with the removal and its replacement. A change that is not
+listed there follows the deprecation policy above. The public surface is the
+`__all__` of the modules this page names, pinned by
+`tests/unit/test_public_api.py`; a consumer pins a tag and reads the
+breaking-changes section before each bump.
+
+The shipped scenario's credentials and identity are part of that surface
+too: the app credentials, the seeded bearers and refresh tokens, and the
+tenant ids in the tables of `docs/concepts/seed.md` — a consumer may copy
+them into its own store, and they change only with a minor version and a
+changelog entry.
+
+This round's release is 0.6.0, a breaking minor under this policy. Its removals (konyklabs/vendorfake#49
+and #51): `agent-setup`, the file-drop transport and `FileSink`,
+`VENDORFAKE_TRANSPORT`/`VENDORFAKE_TRANSPORT_DIR`, `VENDORFAKE_UNMATCHED` and
+the profile's `unmatched` section, `FrameworkTripwire` and the
+`framework_answered` health field, `MutableResponse`, the `Unit` constructor
+seams. Its behaviour changes: `unit()` and `served()` honour exported
+`VENDORFAKE_*` variables; `served()` and `serve_in_thread()` drivers raise on
+an unmatched path by default; `WebhookReceiver.url` refuses a wildcard bind;
+`vendorfake serve`, `served()` and the container need the `serve` extra
+(`pip install "vendorfake[serve]"`); request bodies over 8 MiB are refused and
+six collections are bounded at 10,000 entries; the Square test-webhook route
+runs serialized and reports the first attempt only.

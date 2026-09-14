@@ -21,7 +21,6 @@ from vendorfake.core.kernel.types import (
     JournalEntry,
     MagicTriggerSpec,
     MappedEvent,
-    MutableResponse,
     Route,
     ShapedError,
     SignerProperties,
@@ -172,9 +171,9 @@ class FakeVendor:
     def hydrate(self, ctx: UnitContext, seed: object) -> None:
         self.hydrated += 1
 
-    def decorate(self, res: MutableResponse, ctx: UnitContext, req: UnitRequest) -> None:
+    def decorate(self, headers: dict[str, str], ctx: UnitContext, req: UnitRequest) -> None:
         self.decorated.append(f"{req.method} {req.path}")
-        res.headers["acme-version"] = self.api_version or ""
+        headers["acme-version"] = self.api_version or ""
 
 
 class VendorWithoutRoles:
@@ -220,11 +219,12 @@ def make_config(
     subscribers: Sequence[Mapping[str, object]] = (),
     disable_delivery: bool = False,
     request_log_capacity: int | None = None,
-    unmatched: str | None = None,
+    control_token: str | None = None,
 ) -> object:
     """A ``ResolvedConfig`` for a kernel test, with the knobs those tests move."""
     from vendorfake.core.config.models import (
         ClockSection,
+        ControlSection,
         ErrorsSection,
         RequestsSection,
         ResolvedChaos,
@@ -233,7 +233,6 @@ def make_config(
         RetryPolicy,
         SubscriberConfig,
         TransportSection,
-        UnmatchedSection,
     )
 
     return ResolvedConfig(
@@ -250,8 +249,8 @@ def make_config(
         clock=ClockSection(mode=clock_mode, start=clock_start),  # type: ignore[arg-type]
         errors=ErrorsSection(sidecar=error_sidecar),  # type: ignore[arg-type]
         transport=TransportSection(),
+        control=ControlSection(token=control_token),
         requests=RequestsSection() if request_log_capacity is None else RequestsSection(capacity=request_log_capacity),
-        unmatched=UnmatchedSection(policy=unmatched),  # type: ignore[arg-type]
         log_level=log_level,
     )
 
@@ -262,6 +261,7 @@ def make_unit(
     vendor: FakeVendor | None = None,
     control_routes: object = None,
     sink: object = None,
+    logger: object = None,
     **config_kwargs: object,
 ) -> object:
     """A started :class:`Unit` over a fake vendor. Returns the unit."""
@@ -273,6 +273,7 @@ def make_unit(
         vendor=definition,  # type: ignore[arg-type]
         config=make_config(**config_kwargs),  # type: ignore[arg-type]
         sink=sink,  # type: ignore[arg-type]
+        logger=logger,  # type: ignore[arg-type]
         control_routes=control_routes,  # type: ignore[arg-type]
     )
     unit.start()

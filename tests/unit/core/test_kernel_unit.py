@@ -12,17 +12,32 @@ from typing import Any
 
 import pytest
 
-from tests.fakes import FakeAuth, FakeErrors, FakeVendor, capability, make_unit, route
+from tests.fakes import (
+    WEBHOOK_CAPABILITIES,
+    FakeAuth,
+    FakeErrors,
+    FakeEvents,
+    FakeSigner,
+    FakeVendor,
+    capability,
+    make_unit,
+    route,
+)
+from vendorfake.core.control.plane import control_plane_routes
 from vendorfake.core.kernel.reply import json_, no_content
 from vendorfake.core.kernel.types import (
+    HandlerArgs,
     IdempotencySpec,
     MagicTriggerSpec,
     PaginationSpec,
+    ReplyInit,
     UnitError,
     UnitErrorKind,
 )
 from vendorfake.core.kernel.unit import REQUEST_ID_HEADER, RouteInfo, Unit, make_request
 from vendorfake.core.transport.inprocess import in_process
+from vendorfake.core.webhooks.models import PreparedEvent
+from vendorfake.core.webhooks.sink import MemorySink
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -151,6 +166,141 @@ def test_a_disabled_chaos_capability_arms_nothing() -> None:
     )
     assert in_process(unit).get("/v2/orders").status == 200
     assert unit.context.chaos.status()[0].matches == 0
+
+
+# ---------------------------------------------------------------------------
+# step 8 -- the handler phase, for a fault only the route can answer
+# ---------------------------------------------------------------------------
+
+
+def _denying(calls: list[str]):  # type: ignore[no-untyped-def]
+    """A route that implements ``authorize_denied`` the way an authorize route does."""
+
+    def run(args):  # type: ignore[no-untyped-def]
+        calls.append("run")
+        if args.consume_fault("authorize_denied") is not None:
+            return json_({"denied": True})
+        return json_({"ok": True})
+
+    return run
+
+
+class _Warnings:
+    """A logger that keeps the warnings and drops everything else."""
+
+    def __init__(self) -> None:
+        self.warned: list[tuple[str, object]] = []
+
+    def debug(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+    def info(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+    def warn(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        self.warned.append((msg, fields))
+
+    def error(self, msg, fields=None):  # type: ignore[no-untyped-def]
+        return None
+
+
+_DENY_RULE: dict[str, object] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /oauth/authorize"},
+    "when": {"times": 1},
+}
+
+
+def test_a_handler_that_consumes_the_fault_is_stamped_and_recorded_as_faulted() -> None:
+    """The route answered, so the two mechanism headers and the request record
+    say so -- exactly as they would for a fault the core raised itself."""
+    calls: list[str] = []
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _denying(calls))],
+        control_routes=control_plane_routes,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 200
+    assert res.json() == {"denied": True}
+    assert res.header("vendorfake-fault") == "authorize_denied"
+    assert res.header("vendorfake-rule") == "decline-once"
+    assert calls == ["run"]
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records] == [("authorize_denied", "decline-once")]
+
+
+def test_a_route_that_ignores_the_fault_answers_normally_and_is_warned_about() -> None:
+    """A handler-phase fault means nothing to most routes. The core must not
+    invent an answer for them: the reply, the headers and the record are the
+    unfaulted ones, and the mismatch is logged rather than swallowed."""
+    calls: list[str] = []
+    log = _Warnings()
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _handler(calls))],
+        control_routes=control_plane_routes,
+        logger=log,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 200
+    assert res.json() == {"ok": True}
+    assert res.header("vendorfake-fault") is None
+    assert res.header("vendorfake-rule") is None
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [r.get("fault") for r in records] == [None]
+    assert [msg for msg, _ in log.warned] == ["handler-phase fault not implemented by the route"]
+    assert log.warned[0][1] == {
+        "fault": "authorize_denied",
+        "rule": "decline-once",
+        "route": "GET /oauth/authorize",
+    }
+    rules = in_process(unit).get("/__unit/chaos").json()["rules"]
+    assert [r["fires"] for r in rules if r["id"] == "decline-once"] == [0]
+
+
+def test_a_route_that_refuses_before_reaching_its_denial_keeps_the_budget_and_says_so() -> None:
+    """A malformed authorize request is refused before the handler reaches its
+    denial branch: the miss is logged, the refusal is recorded unfaulted, and
+    the rule keeps its budget for the call that can consume it."""
+
+    def refusing(args: HandlerArgs) -> ReplyInit:
+        raise UnitError(UnitErrorKind.INVALID_VALUE, detail="redirect_uri is not registered.", field="redirect_uri")
+
+    log = _Warnings()
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", refusing)],
+        control_routes=control_plane_routes,
+        logger=log,
+        chaos_rules=[_DENY_RULE],
+    )
+    res = in_process(unit).get("/oauth/authorize")
+    assert res.status == 400
+    assert res.header("vendorfake-fault") is None
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    assert [r.get("fault") for r in records] == [None]
+    assert [msg for msg, _ in log.warned] == ["handler-phase fault not reached: the route refused first"]
+    assert log.warned[0][1] == {"fault": "authorize_denied", "rule": "decline-once", "route": "GET /oauth/authorize"}
+    rules = in_process(unit).get("/__unit/chaos").json()["rules"]
+    assert [r["fires"] for r in rules if r["id"] == "decline-once"] == [0]
+
+
+def test_a_times_one_handler_phase_rule_denies_the_first_call_only() -> None:
+    """The rehearsal the fault exists for: decline, then approve, in one test."""
+    calls: list[str] = []
+    unit = make_unit(
+        [route("GET", "/oauth/authorize", _denying(calls))],
+        control_routes=control_plane_routes,
+        chaos_rules=[_DENY_RULE],
+    )
+    api = in_process(unit)
+    assert api.get("/oauth/authorize").json() == {"denied": True}
+    second = api.get("/oauth/authorize")
+    assert second.json() == {"ok": True}
+    assert second.header("vendorfake-fault") is None
+    assert calls == ["run", "run"]
 
 
 # ---------------------------------------------------------------------------
@@ -891,3 +1041,240 @@ def test_a_malformed_percent_escape_reaches_the_caller_as_a_shaped_400() -> None
     assert res.status == 400
     assert res.header("x-unit-error") == "invalid_value"
     assert res.json()["error"]["field"] == "path"
+
+
+# ---------------------------------------------------------------------------
+# step 8/9 -- params.commit on a response-phase fault
+# ---------------------------------------------------------------------------
+
+_SUBSCRIBER: dict[str, Any] = {
+    "id": "sub_1",
+    "notification_url": "https://subscriber.test/hook",
+    "event_types": ("order.created",),
+    "signature_key": "shh",
+    "enabled": True,
+}
+
+
+def _mutating(calls: list[str]):  # type: ignore[no-untyped-def]
+    """Insert one order per call, so a rolled-back request is visible as an
+    entity that is not there, a journal that did not move and no event."""
+
+    def run(args):  # type: ignore[no-untyped-def]
+        calls.append("ok")
+        order_id = f"o{len(calls)}"
+        args.ctx.store.collection("orders").insert({"id": order_id, "state": "OPEN"})
+        return json_({"id": order_id})
+
+    return run
+
+
+def _commit_unit(
+    rule: dict[str, object],
+    calls: list[str],
+    *,
+    idempotency: IdempotencySpec | None = None,
+) -> tuple[Any, MemorySink]:
+    """A webhook-capable unit whose one route mutates, armed with ``rule``."""
+    sink = MemorySink()
+    vendor = FakeVendor(capabilities=WEBHOOK_CAPABILITIES, not_supported={}, signer=FakeSigner(), events=FakeEvents())
+    unit = make_unit(
+        [route("POST", "/v2/orders", _mutating(calls), idempotency=idempotency)],
+        vendor=vendor,
+        sink=sink,
+        control_routes=control_plane_routes,
+        capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
+        subscribers=(_SUBSCRIBER,),
+        schedule_ms=(1,),
+        chaos_rules=[rule],
+    )
+    return unit, sink
+
+
+def _malformed(commit: object | None = None) -> dict[str, object]:
+    params: dict[str, object] = {"mode": "invalid_json"}
+    if commit is not None:
+        params["commit"] = commit
+    return {
+        "id": "r1",
+        "scope": "request",
+        "fault": "malformed_body",
+        "match": {"route": "POST /v2/orders"},
+        "params": params,
+    }
+
+
+def _newest(unit: Any) -> dict[str, Any]:
+    records = in_process(unit).get("/__unit/requests").json()["requests"]
+    return dict(records[0])
+
+
+def test_commit_after_rolls_the_handlers_whole_commit_back_and_still_corrupts_the_answer() -> None:
+    """The named failure: `commit: before` on a single-use rotation spends the
+    credential on a call the consumer saw fail. Under `after` the entity, the
+    journal, the webhook event and the idempotency record are all withheld,
+    and the caller still gets the corrupted body it armed the rule for."""
+    calls: list[str] = []
+    unit, sink = _commit_unit(_malformed("after"), calls)
+    store = unit.context.store
+    seeded_seq = store.journal_seq
+    res = in_process(unit).post("/v2/orders", {})
+
+    assert calls == ["ok"]
+    assert store.collection("orders").all() == []
+    assert store.journal_seq == seeded_seq
+    assert unit.webhooks.prepared() == ()
+    unit.webhooks.drain()
+    assert sink.received == []
+
+    assert res.header("vendorfake-fault") == "malformed_body"
+    assert res.header("vendorfake-rule") == "r1"
+    with pytest.raises(ValueError):
+        res.json()
+
+    record = _newest(unit)
+    assert record["fault_commit"] == "after"
+    assert record["discarded_mutation"] is False
+    assert "committed_journal_seq" not in record
+    unit.stop()
+
+
+def test_commit_after_withholds_an_event_the_handler_queued_directly() -> None:
+    """Some routes hand the dispatcher an event themselves instead of journalling
+    a mutation for it. Muting journal listeners alone would let that event out;
+    ``commit: after`` must withhold it too, or the rollback lies."""
+
+    def queueing(args: HandlerArgs) -> ReplyInit:
+        args.ctx.webhooks.enqueue(
+            PreparedEvent(
+                type="order.created",
+                event_id="evt-direct",
+                entity_id="o1",
+                created_at="2024-01-01T00:00:00.000Z",
+                body={"id": "o1"},
+            )
+        )
+        return json_({"queued": True})
+
+    sink = MemorySink()
+    vendor = FakeVendor(capabilities=WEBHOOK_CAPABILITIES, not_supported={}, signer=FakeSigner(), events=FakeEvents())
+    for commit, expected in (("after", 0), ("before", 1)):
+        unit = make_unit(
+            [route("POST", "/v2/orders", queueing)],
+            vendor=vendor,
+            sink=sink,
+            control_routes=control_plane_routes,
+            capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
+            subscribers=(_SUBSCRIBER,),
+            schedule_ms=(1,),
+            chaos_rules=[_malformed(commit)],
+        )
+        assert in_process(unit).post("/v2/orders", {}).header("vendorfake-fault") == "malformed_body"
+        assert len(unit.webhooks.prepared()) == expected, commit
+        unit.webhooks.drain()
+        assert len(sink.received) == expected, commit
+        sink.received.clear()
+        unit.stop()
+
+
+def test_commit_before_is_the_default_and_leaves_the_mutation_standing() -> None:
+    """Today's behaviour, unchanged, whether the key is written or absent."""
+    for rule in (_malformed("before"), _malformed()):
+        calls: list[str] = []
+        unit, _ = _commit_unit(rule, calls)
+        store = unit.context.store
+        seeded_seq = store.journal_seq
+        res = in_process(unit).post("/v2/orders", {})
+
+        assert calls == ["ok"]
+        assert [e["id"] for e in store.collection("orders").all()] == ["o1"]
+        assert store.journal_seq == seeded_seq + 1
+        assert [e.type for e in unit.webhooks.prepared()] == ["order.created"]
+        assert res.header("vendorfake-fault") == "malformed_body"
+
+        record = _newest(unit)
+        assert record["fault_commit"] == "before"
+        assert record["discarded_mutation"] is True
+        assert record["committed_journal_seq"] == seeded_seq + 1
+        unit.stop()
+
+
+def test_fault_commit_is_a_property_of_the_fault_that_fired_not_of_every_row() -> None:
+    """Present on a row a commit-capable fault corrupted; absent on a
+    request-phase refusal and on ``slow_body``, which delivers intact and
+    refuses ``commit`` outright."""
+    calls: list[str] = []
+    unit, _ = _commit_unit(_malformed("after"), calls)
+    assert in_process(unit).post("/v2/orders", {}).status == 200
+    assert _newest(unit)["fault_commit"] == "after"
+    unit2, _ = _commit_unit({"id": "r1", "scope": "request", "fault": "rate_limit"}, calls)
+    assert in_process(unit2).post("/v2/orders", {}).status == 429
+    assert "fault_commit" not in _newest(unit2)
+    unit3, _ = _commit_unit({"id": "r1", "scope": "request", "fault": "slow_body"}, calls)
+    assert in_process(unit3).post("/v2/orders", {}).status == 200
+    assert "fault_commit" not in _newest(unit3)
+    for u in (unit, unit2, unit3):
+        u.stop()
+
+
+def test_commit_after_leaves_the_idempotency_key_free_so_the_retry_really_runs() -> None:
+    """Nothing was committed, so there is nothing to replay: the retry is a
+    first attempt, and its mutation is the only one that stands."""
+    calls: list[str] = []
+    rule = {
+        "id": "r1",
+        "scope": "request",
+        "fault": "connection_reset",
+        "match": {"route": "POST /v2/orders"},
+        "params": {"commit": "after"},
+        "when": {"times": 1},
+    }
+    unit, _ = _commit_unit(rule, calls, idempotency=_IDEM)
+    seeded_seq = unit.context.store.journal_seq
+    api = in_process(unit)
+    first = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert first.header("vendorfake-fault") == "connection_reset"
+    store = unit.context.store
+    assert store.collection("orders").all() == []
+
+    second = api.post("/v2/orders", {"idempotency_key": "k1"})
+    assert second.header("x-unit-idempotent-replay") is None
+    assert second.header("vendorfake-fault") is None
+    assert calls == ["ok", "ok"]
+    assert [e["id"] for e in store.collection("orders").all()] == ["o2"]
+    assert store.journal_seq == seeded_seq + 1
+    unit.stop()
+
+
+def test_an_unknown_commit_mode_is_refused_before_the_handler_runs() -> None:
+    calls: list[str] = []
+    unit, _ = _commit_unit(_malformed("sometimes"), calls)
+    seeded_seq = unit.context.store.journal_seq
+    res = in_process(unit).post("/v2/orders", {})
+    assert res.status == 400
+    assert res.json()["error"]["code"] == "invalid_value"
+    assert res.json()["error"]["field"] == "params.commit"
+    assert res.header("vendorfake-rule-error") == "r1"
+    assert calls == []
+    assert unit.context.store.journal_seq == seeded_seq
+    unit.stop()
+
+
+def test_commit_on_slow_body_or_on_a_request_phase_fault_is_refused_the_same_way() -> None:
+    """Neither can honour it: `slow_body` delivers the answer intact, and a
+    request-phase fault never let the handler run at all."""
+    for fault in ("slow_body", "server_error"):
+        calls: list[str] = []
+        rule = {
+            "id": "r1",
+            "scope": "request",
+            "fault": fault,
+            "match": {"route": "POST /v2/orders"},
+            "params": {"commit": "after"},
+        }
+        unit, _ = _commit_unit(rule, calls)
+        res = in_process(unit).post("/v2/orders", {})
+        assert res.status == 400, fault
+        assert res.json()["error"]["field"] == "params.commit", fault
+        assert calls == [], fault
+        unit.stop()

@@ -195,6 +195,23 @@ def test_the_seeded_tokens_carry_the_documented_ttl_and_their_scopes(h: Harness)
     assert read_only.scopes == c.SEED_READ_ONLY_SCOPES
 
 
+# ---------------------------------------------------------------------------
+# Seed token lifetimes (konyklabs/roadmap#131, item 4). JUDGMENT: a relative
+# lifetime in the seed document, matching Square's `expires_in_ms`.
+# ---------------------------------------------------------------------------
+
+
+def test_an_expires_in_ms_of_zero_is_expired_the_moment_the_unit_starts(tmp_path: Any) -> None:
+    document = json.loads(c.DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
+    document["tokens"][0]["expires_in_ms"] = 0
+    path = tmp_path / "custom.seed.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    for h in harness(env={"VENDORFAKE_SEED": str(path)}):
+        denied = h.get("/menus/v3/menus")
+        assert denied.status == 401
+        assert denied.header("x-unit-error") == "token_expired"
+
+
 def test_two_units_seeded_alike_hash_alike_and_reset_rebuilds_the_same_world() -> None:
     digests = []
     for _ in range(2):

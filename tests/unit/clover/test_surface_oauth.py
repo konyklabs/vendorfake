@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from tests.unit.clover.harness import (
@@ -24,6 +25,7 @@ from tests.unit.clover.harness import (
 )
 from vendorfake.clover.entities import COL, AuthorizationCodeEntity, TokenEntity
 from vendorfake.core.util.b64 import b64url_encode
+from vendorfake.testing import CloverSeed, StartedUnit, unit
 
 DAY_S = 24 * 60 * 60
 
@@ -362,6 +364,44 @@ def test_a_refresh_token_issued_to_another_app_is_refused_before_any_write(h: Ha
     assert stored.refresh_used_at_ms is None  # not rotated
 
 
+def test_a_refresh_rejected_fault_answers_clovers_own_401_and_rotates_nothing(h: Harness) -> None:
+    """konyklabs/roadmap#131: a one-shot ``refresh_rejected`` rule reproduces
+    the vendor's own "refresh token invalid" 401 -- Clover's phrase verbatim
+    (https://docs.clover.com/dev/docs/refresh-access-tokens) -- without
+    touching stored state, then lets the next call succeed."""
+    first = h.exchange()
+    armed = h.api.post(
+        "/__unit/chaos/rules",
+        {
+            "id": "refresh-rejected-clover",
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"path": "/oauth/v2/refresh"},
+            "when": {"times": 1},
+        },
+    )
+    assert armed.status == 200, armed.text
+
+    faulted = h.refresh(refresh_token=first["refresh_token"])
+    assert faulted.status == 401
+    assert faulted.json()["message"] == "The refresh token is invalid."
+    assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
+
+    tokens = h.unit.context.store.collection(COL.tokens)
+    record = TokenEntity.from_entity(
+        tokens.find(lambda entity: entity.get("access_token") == first["access_token"]) or {}
+    )
+    assert record.refresh_used_at_ms is None  # nothing rotated by the faulted call
+
+    second = h.refresh(refresh_token=first["refresh_token"])
+    assert second.status == 200, second.text
+    assert "vendorfake-fault" not in second.headers
+
+    recorded = h.api.get("/__unit/requests?limit=2").json()["requests"]
+    assert recorded[1]["fault"] == "refresh_rejected"
+    assert recorded[1]["rule_id"] == "refresh-rejected-clover"
+
+
 def test_an_expired_refresh_token_is_refused(h: Harness) -> None:
     first = h.exchange()
     tokens = h.unit.context.store.collection(COL.tokens)
@@ -468,3 +508,125 @@ def test_clock_start_makes_the_documented_access_token_lifetime_reproducible_acr
             seen.append(int(body["access_token_expiration"]))
 
     assert seen == [expected, expected]
+
+
+# ---------------------------------------------------------------------------
+# The authorize_denied fault: the merchant declines on the consent screen.
+# ---------------------------------------------------------------------------
+
+DENY_RULE: dict[str, object] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /oauth/v2/authorize"},
+    "when": {"times": 1},
+}
+
+
+def test_an_armed_denial_redirects_with_access_denied_and_mints_no_code(h: Harness) -> None:
+    """JUDGMENT -- Clover documents only the approved redirect, so the denial
+    takes RFC 6749 s4.1.2.1's shape: ``error=access_denied`` and the state
+    echoed back. What the fault must NOT do is mint a code the vendor never
+    minted, which is why it reaches the handler rather than rewriting the
+    answer afterwards.
+    """
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    codes = h.unit.context.store.collection(COL.codes)
+    before = len(codes.all())
+
+    denied = h.authorize(state="xyz")
+    assert denied.status == 302
+    assert denied.headers["vendorfake-fault"] == "authorize_denied"
+    assert denied.headers["vendorfake-rule"] == "decline-once"
+    query = _location_query(denied)
+    assert query["error"] == ["access_denied"]
+    assert query["state"] == ["xyz"]
+    assert "code" not in query
+    assert len(codes.all()) == before
+
+
+def test_the_second_authorize_approves_and_its_code_exchanges(h: Harness) -> None:
+    """``when.times: 1`` is what makes one test cover the refusal and the retry."""
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    assert "error" in _location_query(h.authorize(state="xyz"))
+
+    approved = h.authorize(state="xyz")
+    assert approved.status == 302
+    assert "vendorfake-fault" not in approved.headers
+    code = _location_query(approved)["code"][0]
+    exchanged = h.token(client_secret=CLIENT_SECRET, code=code)
+    assert exchanged.status == 200, exchanged.text
+    assert exchanged.json()["access_token"]
+
+
+def test_the_request_log_names_the_fault_on_the_declined_call_only(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    h.authorize(state="xyz")
+    h.authorize(state="xyz")
+    records = h.api.get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records if r.get("fault")] == [("authorize_denied", "decline-once")]
+
+
+# ---------------------------------------------------------------------------
+# params.commit on the refresh rotation
+# ---------------------------------------------------------------------------
+
+
+def _reset_refresh(commit: str | None = None) -> dict[str, object]:
+    rule: dict[str, object] = {
+        "id": "reset-refresh",
+        "scope": "request",
+        "fault": "connection_reset",
+        "match": {"route": "POST /oauth/v2/refresh"},
+        "when": {"times": 1},
+    }
+    if commit is not None:
+        rule["params"] = {"commit": commit}
+    return rule
+
+
+def _refresh_with(started: StartedUnit[CloverSeed], token: str) -> httpx.Response:
+    body = {"client_id": started.seed.client_id, "refresh_token": token}
+    return started.client.post("/oauth/v2/refresh", json=body)
+
+
+def test_a_reset_with_commit_after_leaves_the_seeded_refresh_token_usable() -> None:
+    """The consumer's scenario. The connection dies on the first refresh; with
+    ``commit: after`` the rotation never happened, so the credential the
+    consumer still holds works on the retry."""
+    with unit("clover", profile="oauth-only") as started:
+        started.add_chaos_rule(_reset_refresh("after"))
+        token = started.seed.refresh_token
+        with pytest.raises(httpx.RemoteProtocolError):
+            _refresh_with(started, token)
+
+        retried = _refresh_with(started, token)
+        assert retried.status_code == 200, retried.text
+        assert retried.json()["access_token"]
+
+        records = started.requests(route="POST /oauth/v2/refresh")
+        first = records[-1]
+        assert first["fault"] == "connection_reset"
+        assert first["fault_commit"] == "after"
+        assert first["discarded_mutation"] is False
+        assert "committed_journal_seq" not in first
+
+
+def test_the_same_reset_without_commit_spends_the_token_as_it_always_has() -> None:
+    """The default is unchanged: the rotation stands behind the dead
+    connection, so the retry is the documented single-use 401."""
+    with unit("clover", profile="oauth-only") as started:
+        started.add_chaos_rule(_reset_refresh())
+        token = started.seed.refresh_token
+        with pytest.raises(httpx.RemoteProtocolError):
+            _refresh_with(started, token)
+
+        retried = _refresh_with(started, token)
+        assert retried.status_code == 401
+        assert "already used" in retried.text
+
+        records = started.requests(route="POST /oauth/v2/refresh")
+        first = records[-1]
+        assert first["fault_commit"] == "before"
+        assert first["discarded_mutation"] is True
+        assert first["committed_journal_seq"] > 0

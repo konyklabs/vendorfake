@@ -1,40 +1,17 @@
-"""``vendorfake`` -- the command line, and the one place that reads ``os.environ``.
+"""``vendorfake`` -- the command line.
 
-FOR: turning a shell invocation into a running unit, a description of one, or a
-report about one, without any other module in the distribution needing to know
-that a process environment exists.
+Invariant: the process environment reaches a unit through one function,
+``registry.ambient_env()``, which this module, ``unit()`` and ``served()`` all
+layer explicit configuration over; ``create_unit``'s ``env`` itself defaults to
+an empty mapping.
 
-INVARIANT: **this is the only module that resolves a unit's config from
-``os.environ``.** ``create_unit``'s ``env`` parameter defaults to an empty
-mapping, deliberately, so that a variable set by one test cannot change the
-profile a unit built by another test resolves to -- a whole class of
-order-dependent flake that simply cannot occur when the environment is passed
-in rather than read. The privilege of reading the real environment to resolve
-a unit belongs to the process boundary, and this is it.
+Invariant: ``vendorfake --help`` imports no web framework. Every first-party
+import happens inside a subcommand body, and ``serve`` is the only one that
+reaches :mod:`vendorfake.asgi` -- the single named exception in
+``tools/boundary.toml``. Module level here is standard library only.
 
-``vendorfake.testing.served()`` reads ``os.environ`` too, and is the one
-documented exception: it spawns this module's own ``serve`` subcommand as a
-child, which inherits the real environment by construction (that is what
-running a subprocess means, not a choice this project made), so it reads
-``os.environ``'s ``VENDORFAKE_VENDOR_*`` entries in the parent as well, to
-keep the seed it hands back in step with what that child resolves. See its
-docstring in ``vendorfake/testing/__init__.py``. Nothing about that exception
-lets a unit built *in this process* -- by ``create_unit``, or by ``unit()``,
-which calls it -- see a variable its caller did not pass explicitly.
-
-SECOND INVARIANT: **``vendorfake --help`` imports no web framework.** Every
-first-party import below happens inside a subcommand body, and the ``serve``
-subcommand is the only one that reaches :mod:`vendorfake.asgi`. That import is
-the single named exception in ``tools/boundary.toml``, and it is named there
-rather than waived because the point of the exception is that a reviewer sees
-it. Module level here is standard library only.
-
-Precedence, applied the same way by every subcommand: an explicit flag beats a
-``VENDORFAKE_*`` environment variable, which beats what the profile document
-says, which beats the built-in default. Flags win because a flag is the most
-specific thing a caller can say, and the environment wins over the profile
-because that is the layer an operator has when the profile is baked into an
-image.
+Precedence, in every subcommand: an explicit flag beats a ``VENDORFAKE_*``
+variable, which beats the profile document, which beats the built-in default.
 """
 
 from __future__ import annotations
@@ -46,32 +23,30 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at run time
+    from vendorfake.asgi.mount import ASGIApp
     from vendorfake.core.kernel.unit import Unit
+    from vendorfake.fidelity.validate import ResponseValidator
 
 __all__ = ["main"]
 
 PROG = "vendorfake"
 
 
-# ---------------------------------------------------------------------------
-# Shared argument wiring.
-# ---------------------------------------------------------------------------
+# -- shared argument wiring --
 
 
 def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
-    """The two flags every subcommand needs to name a unit.
-
-    Both default to ``None`` rather than to a value, so that "not given" stays
-    distinguishable from "given the default" all the way down to the profile
-    loader, which is the only thing that knows what the environment and the
-    profile document have to say about it.
-    """
+    """The two flags every subcommand needs to name a unit. Both default to
+    ``None``, so "not given" stays distinguishable from "given the default" all
+    the way down to the profile loader."""
     parser.add_argument(
         "--vendor",
         default=None,
         help=(
             "Vendor to serve (see `vendorfake vendors`). Defaults to $VENDORFAKE_VENDOR; with exactly one "
-            "vendor installed that one is used, otherwise the command refuses and lists them."
+            "vendor installed that one is used, otherwise the command refuses and lists them. `serve` also "
+            "takes a comma-separated list (`clover,square`) and mounts each vendor under /<vendor>/; every "
+            "other subcommand describes one vendor and refuses a list."
         ),
     )
     parser.add_argument(
@@ -82,31 +57,15 @@ def _add_unit_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def _json_flag_parent() -> argparse.ArgumentParser:
-    """A parent parser carrying only ``--json``, added to both the top-level
-    parser and every subcommand that describes something and returns rather
-    than serving or forwarding to another CLI -- so the flag reads naturally
-    on either side of the subcommand name: ``vendorfake --json profiles`` and
+    """A parent parser carrying only ``--json``, added to the top-level parser and
+    to every describing subcommand, so ``vendorfake --json profiles`` and
     ``vendorfake profiles --json`` are the same request.
 
-    The default is ``argparse.SUPPRESS`` rather than ``False``, at *both*
-    parsers, and every reader takes ``getattr(args, "json", False)`` rather
-    than ``args.json``. Subparser dispatch (``_SubParsersAction.__call__``)
-    parses the remainder into a fresh namespace and then copies every
-    attribute that namespace holds onto the top-level one -- defaults
-    included. A subcommand copy defaulting to plain ``False`` would silently
-    stomp a ``--json`` given *before* the subcommand name back to ``False``
-    whenever the subcommand's own flag was not repeated; ``SUPPRESS`` means
-    "not given" sets nothing, so whichever side actually named the flag is
-    the one that decides it, and naming it at neither leaves the attribute
-    absent rather than falsely ``False`` on a parser that never declared it
-    (``serve``, ``conformance``) -- which is what ``getattr(..., False)``
-    is for.
-
-    ``serve`` and ``conformance`` do not carry it: a running server has no
-    single document to print, and ``conformance`` forwards its arguments
-    verbatim to a runner with its own reporting format (``--strict`` and a
-    text or JSON report of its own) -- a second ``--json`` at this level
-    would be a second, disagreeing answer to what that flag means.
+    The default is ``argparse.SUPPRESS`` at both parsers, and every reader uses
+    ``getattr(args, "json", False)``: subparser dispatch copies a subcommand's
+    defaults onto the top-level namespace, so a plain ``False`` would stomp a
+    ``--json`` given before the subcommand name. ``serve`` and ``conformance``
+    do not carry the flag, having no single document to print.
     """
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument(
@@ -119,15 +78,14 @@ def _json_flag_parent() -> argparse.ArgumentParser:
 
 
 def _wants_json(args: argparse.Namespace) -> bool:
-    """``args.json``, true only where a parser actually declared the flag and
-    it (or the top-level flag) was given. See :func:`_json_flag_parent`."""
+    """``args.json``, true only where a parser declared the flag and it was given."""
     return bool(getattr(args, "json", False))
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
-        description="Run or describe a high-fidelity fake of a third-party vendor API.",
+        description="Run or describe a fake of a third-party vendor API, checked against its published schema.",
         epilog=(
             "Unofficial. Not affiliated with, endorsed by, or connected to any vendor whose public API "
             "a module here imitates."
@@ -147,9 +105,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Port to bind; 0 picks a free one and prints it. Defaults to $VENDORFAKE_PORT, then 8080.",
     )
     serve.add_argument(
+        "--control-port",
+        type=int,
+        default=None,
+        help=(
+            "Serve /__unit/* on this port of its own, answering it on --port with the vendor's 404; 0 picks a free "
+            "one. Defaults to $VENDORFAKE_CONTROL_PORT; unset, one port serves both."
+        ),
+    )
+    serve.add_argument(
+        "--control-host",
+        default=None,
+        help="Interface for --control-port. Defaults to $VENDORFAKE_CONTROL_HOST, then the vendor host.",
+    )
+    serve.add_argument(
         "--log-level",
         default=None,
         help="uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL, then the profile's.",
+    )
+    serve.add_argument(
+        "--validate",
+        action="store_true",
+        help=(
+            "Check every answer against the vendor's own published schema, and answer 500 naming the "
+            "violation when one fails. Refused for a vendor with no fidelity leg."
+        ),
     )
 
     # already the only thing each of these prints; --json accepted so a caller need not special-case it
@@ -166,6 +146,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-internal",
         action="store_true",
         help="Omit the /__unit/* control plane, describing only the vendor surface.",
+    )
+
+    manifest = subcommands.add_parser(
+        "manifest",
+        help="Print the world-neutral manifest: credentials, webhook keys and entity ids.",
+        parents=[_json_flag_parent()],
+    )
+    _add_unit_flags(manifest)
+    manifest.add_argument(
+        "--base-url",
+        default=None,
+        help="The address the unit will be reached at, recorded in the document. Omitted, base_url is null.",
     )
 
     subcommands.add_parser("vendors", help="List the vendors that would resolve here.", parents=[_json_flag_parent()])
@@ -200,25 +192,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     subcommands.add_parser("faults", help="List the built-in fault catalogue.", parents=[_json_flag_parent()])
-
-    agent_setup = subcommands.add_parser(
-        "agent-setup",
-        help="Write a Claude Code rules file for a consumer repo (and optionally an .mcp.json entry).",
-    )
-    agent_setup.add_argument("--dir", default=".", help="Repo root to write into. Defaults to the current directory.")
-    agent_setup.add_argument(
-        "--tests-glob",
-        default=None,
-        help="Glob the rules file's `paths:` frontmatter is scoped to. Defaults to 'tests/**'.",
-    )
-    agent_setup.add_argument("--mcp", action="store_true", help="Also add a vendorfake entry to <dir>/.mcp.json.")
-    agent_setup.add_argument(
-        "--allow-future",
-        action="store_true",
-        help="Required together with --mcp to actually write the .mcp.json entry; `vendorfake mcp` does not "
-        "exist until 0.4. Without it, --mcp only prints a notice.",
-    )
-    agent_setup.add_argument("--force", action="store_true", help="Overwrite an existing rules file.")
 
     explain = subcommands.add_parser(
         "explain",
@@ -291,11 +264,8 @@ def _env_str(env: Mapping[str, str], name: str) -> str | None:
 
 
 def _env_int(env: Mapping[str, str], name: str) -> int | None:
-    """An integer environment variable, or a refusal that says which one.
-
-    Silently falling back to the default on ``VENDORFAKE_PORT=eighty`` would
-    bind a port the operator did not ask for and report success.
-    """
+    """An integer environment variable, or a refusal naming it: falling back on
+    ``VENDORFAKE_PORT=eighty`` would bind a port nobody asked for."""
     raw = _env_str(env, name)
     if raw is None:
         return None
@@ -305,16 +275,23 @@ def _env_int(env: Mapping[str, str], name: str) -> int | None:
         raise SystemExit(f"{PROG}: {name}={raw!r} is not an integer") from None
 
 
+def _refuse_a_vendor_list(name: str) -> None:
+    """Refuse a comma-separated ``--vendor`` anywhere but ``serve``: every other subcommand describes exactly
+    one unit, and the alternative is picking a name for the caller."""
+    if "," in name:
+        raise SystemExit(f"{PROG}: --vendor names several vendors; only `serve` mounts more than one")
+
+
 def _resolve_vendor_name(args: argparse.Namespace, env: Mapping[str, str]) -> str:
-    """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed
-    vendor when there is exactly one -- the same precedence ``create_unit``
-    resolves through its own vendor argument, reached here for a subcommand
-    that only needs a name and never builds a unit at all.
-    """
+    """``--vendor``, then ``$VENDORFAKE_VENDOR``, then the sole installed vendor:
+    ``create_unit``'s own precedence, for a subcommand that builds no unit. A
+    comma-separated list is refused rather than truncated to its first name --
+    only ``serve`` mounts more than one."""
     from vendorfake.registry import VENDOR_ENV_VAR, available_vendors
 
     name = args.vendor or _env_str(env, VENDOR_ENV_VAR)
     if name:
+        _refuse_a_vendor_list(name)
         return name
     offered = available_vendors()
     if len(offered) == 1:
@@ -338,44 +315,26 @@ def _table(rows: Sequence[Mapping[str, object]], columns: Sequence[str]) -> str:
     return "\n".join(lines)
 
 
-def _make_unit(
-    args: argparse.Namespace,
-    env: Mapping[str, str],
-    *,
-    framework_answered: Callable[[], int] | None = None,
-) -> Unit:
+def _make_unit(args: argparse.Namespace, env: Mapping[str, str]) -> Unit:
     """Resolve the vendor and build the unit, turning a bad name into a refusal.
 
-    ``resolve_vendor`` raises ``ValueError`` naming every available vendor,
-    because it runs before a unit exists and therefore before there is a vendor
-    to shape an error with. At this boundary that becomes a message and a
-    non-zero exit, which is what a typo in a container's environment should
-    look like -- not a server that starts and 404s everything.
-
-    ``UnitError`` is caught for the same reason, and it was not before: a bad
-    ``--vendor`` was a one-line refusal while a bad ``--profile`` -- the
-    adjacent flag, the same kind of typo -- was a raw traceback out of the
-    profile loader. Both now read the same way. The loader's message already
-    names every profile the vendor ships, so nothing is reformatted here; what
-    changes is only that a startup failure stops presenting as a crash. Any
-    other ``UnitError`` raised while a unit is being built is a startup
-    failure too -- a profile that fails validation, a vendor declaring
-    ``webhooks`` with an empty retry schedule -- and each is a thing the
-    caller can fix from the message.
-
-    The import is inside the function because module level here is standard
-    library only (see this module's second invariant); ``UnitError`` lives in
-    the kernel, which ``create_unit`` is about to import anyway.
+    ``ValueError`` from ``resolve_vendor`` and any ``UnitError`` raised while the
+    unit is built both become a message and a non-zero exit, so a typo in a
+    container's environment reads the same whichever flag carried it, rather than
+    a traceback or a server that starts and 404s everything.
     """
     from vendorfake.core.kernel.types import UnitError
-    from vendorfake.registry import create_unit
+    from vendorfake.registry import VENDOR_ENV_VAR, create_unit
+
+    # These name their vendor through `create_unit`'s resolution, not `_resolve_vendor_name`, so the refusal
+    # is repeated rather than left to the registry.
+    _refuse_a_vendor_list(args.vendor or _env_str(env, VENDOR_ENV_VAR) or "")
 
     try:
         return create_unit(
             vendor=args.vendor,
             profile=args.profile,
             env=env,
-            framework_answered=framework_answered,
         )
     except (ValueError, UnitError) as exc:
         raise SystemExit(f"{PROG}: {exc}") from None
@@ -386,74 +345,298 @@ def _make_unit(
 # ---------------------------------------------------------------------------
 
 
-def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Build a unit, put the ASGI adapter in front of it, and listen.
+def _serve_vendor_names(args: argparse.Namespace, env: Mapping[str, str]) -> tuple[str, ...]:
+    """The vendors ``serve`` was asked to mount, or ``()`` for "just the one" -- not "no vendor": only a comma
+    makes this speak at all, so a name without one resolves as it always did, through ``create_unit``, which
+    knows both ``$VENDORFAKE_VENDOR`` and the sole-installed-vendor case. A list either mounts two or more or
+    is refused, and the flag is read as given, so ``--vendor ''`` stays the empty-name refusal."""
+    from vendorfake.registry import VENDOR_ENV_VAR
 
-    The import is inside the function body on purpose: it is the only reach
-    into :mod:`vendorfake.asgi`, and therefore the only import of a web
-    framework anywhere outside that package. ``vendorfake --help`` must not pay
-    for it, and no other subcommand should be able to.
+    if args.vendor is not None:
+        raw, source = args.vendor, "--vendor"
+    else:
+        found = _env_str(env, VENDOR_ENV_VAR)
+        if found is None:
+            return ()
+        raw, source = found, VENDOR_ENV_VAR
+    if "," not in raw:
+        return ()
+    names = tuple(part.strip() for part in raw.split(","))
+    if any(not name for name in names):
+        raise SystemExit(f"{PROG}: {source} {raw!r} has an empty vendor name; the list form is `clover,square`")
+    seen: set[str] = set()
+    for name in names:
+        if name in seen:
+            # Two mounts cannot share a prefix, and the second unit would
+            # simply be unreachable -- a silent half-start rather than a
+            # server that answers what the operator asked for.
+            raise SystemExit(f"{PROG}: {source} {raw!r} names {name!r} twice; a vendor is mounted once")
+        seen.add(name)
+    return names
 
-    The tripwire is created *before* the unit, because the unit's control plane
-    closes over the callable that reads it -- that is what puts
-    ``framework_answered`` in ``GET /__unit/health``, where a parent process can
-    read it over HTTP.
-    """
-    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT, FrameworkTripwire, create_app, run_server
 
-    tripwire = FrameworkTripwire()
-    unit = _make_unit(args, env, framework_answered=tripwire.get)
+def _serve_binding(args: argparse.Namespace, env: Mapping[str, str], unit: Unit) -> tuple[str, int, str]:
+    """Host, port and log level for the socket: flag, environment, profile, default -- the last two from the
+    unit passed, which with several mounted is the *first* named, one socket having one profile to honour."""
+    from vendorfake.asgi import DEFAULT_HOST, DEFAULT_PORT
+
     transport = unit.context.config.transport
-
     host = args.host or _env_str(env, "VENDORFAKE_HOST") or transport.host or DEFAULT_HOST
     port = args.port if args.port is not None else _env_int(env, "VENDORFAKE_PORT")
     if port is None:
         port = transport.port if transport.port else DEFAULT_PORT
     log_level = args.log_level or _env_str(env, "VENDORFAKE_LOG_LEVEL") or unit.context.config.log_level
+    return host, port, log_level
 
-    app = create_app(unit, tripwire=tripwire)
 
-    def announce(bound_host: str, bound_port: int) -> None:
-        # One line, flushed, before a single request can arrive. `--port 0` is
-        # only usable if the number reaches the parent process while it is
-        # still reading, rather than after the server begins answering.
-        print(f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name})", file=out, flush=True)
+def _control_listener(args: argparse.Namespace, env: Mapping[str, str], host: str, port: int) -> tuple[str, int] | None:
+    """Host and port for a control listener of its own, flag beating environment, or ``None`` to share the vendor's."""
+    flag_port = getattr(args, "control_port", None)
+    flag_host = getattr(args, "control_host", None)
+    control_port = flag_port if flag_port is not None else _env_int(env, "VENDORFAKE_CONTROL_PORT")
+    if control_port is None:
+        if flag_host is not None:
+            raise SystemExit(f"{PROG}: --control-host needs --control-port (or $VENDORFAKE_CONTROL_PORT)")
+        return None
+    if control_port == port and port != 0:
+        raise SystemExit(
+            f"{PROG}: --control-port {control_port} is the vendor port too; the control plane needs its own"
+        )
+    return flag_host or _env_str(env, "VENDORFAKE_CONTROL_HOST") or host, control_port
 
+
+def _control_suffix(control_at: Sequence[str | int]) -> str:
+    """The announce line's tail naming the control listener; empty without one, so the line is unchanged."""
+    return f" control on http://{control_at[0]}:{control_at[1]}" if control_at else ""
+
+
+def _serve_mounted(args: argparse.Namespace, env: Mapping[str, str], out: TextIO, names: tuple[str, ...]) -> int:
+    """Build one unit per name and serve them all under ``/<vendor>/``.
+
+    ``$VENDORFAKE_VENDOR`` is dropped from the environment each unit is built with -- it holds the list, not a
+    name; every other ``VENDORFAKE_*`` variable and the single ``--profile`` applies to every mount. A failure
+    part-way through stops what was built: half a mounted process would answer for some vendors and 404 for
+    the rest."""
+    from vendorfake.asgi import create_app, create_mounted_app, run_server, run_split_server
+    from vendorfake.core.kernel.types import UnitError
+    from vendorfake.registry import VENDOR_ENV_VAR, create_unit
+
+    if getattr(args, "validate", False):
+        # One ledger, one summary line, one vendor's declaration: the flag has no meaning spread over several.
+        raise SystemExit(f"{PROG}: --validate serves one vendor")
+
+    per_vendor_env = {key: value for key, value in env.items() if key != VENDOR_ENV_VAR}
+    units: list[Unit] = []
+    apps: dict[str, ASGIApp] = {}
     try:
-        run_server(app, host=host, port=port, log_level=log_level, on_bound=announce)
+        for name in names:
+            try:
+                built = create_unit(vendor=name, profile=args.profile, env=per_vendor_env)
+            except (ValueError, UnitError) as exc:
+                raise SystemExit(f"{PROG}: {exc}") from None
+            units.append(built)
+            apps[name] = create_app(built)
+
+        host, port, log_level = _serve_binding(args, env, units[0])
+        control = _control_listener(args, env, host, port)
+        control_token = units[0].context.config.control.token
+        mounts = ",".join(f"/{name}" for name in names)
+
+        def announce(bound_host: str, bound_port: int, *control_at: str | int) -> None:
+            # The single-vendor line plus where each vendor is.
+            print(
+                f"{PROG}: listening on http://{bound_host}:{bound_port} (vendors={','.join(names)}; mounts={mounts})"
+                f"{_control_suffix(control_at)}",
+                file=out,
+                flush=True,
+            )
+
+        if control is None:
+            run_server(
+                create_mounted_app(apps, control_token=control_token),
+                host=host,
+                port=port,
+                log_level=log_level,
+                on_bound=announce,
+            )
+        else:
+            run_split_server(
+                lambda vendor_port: (
+                    create_mounted_app(
+                        {name: create_app(built, surface="vendor") for name, built in zip(names, units, strict=True)},
+                        index=False,
+                    ),
+                    create_mounted_app(
+                        {
+                            name: create_app(built, surface="control", vendor_port=vendor_port)
+                            for name, built in zip(names, units, strict=True)
+                        },
+                        control_token=control_token,
+                    ),
+                ),
+                host=host,
+                port=port,
+                control_host=control[0],
+                control_port=control[1],
+                log_level=log_level,
+                on_bound=announce,
+            )
     except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
         pass
     finally:
+        for built in units:
+            built.stop()
+    return 0
+
+
+def _serve(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Build a unit, put the ASGI adapter in front of it, and listen. The import is
+    inside the body because it is the only reach into :mod:`vendorfake.asgi`, and
+    ``vendorfake --help`` must not pay for it. A comma-separated ``--vendor``
+    hands off to :func:`_serve_mounted`; one vendor is served by the code below,
+    unchanged."""
+    from vendorfake.asgi import create_app, run_server, run_split_server
+
+    names = _serve_vendor_names(args, env)
+    if names:
+        return _serve_mounted(args, env, out, names)
+
+    unit = _make_unit(args, env)
+
+    host, port, log_level = _serve_binding(args, env, unit)
+
+    validator = _response_validator(unit) if getattr(args, "validate", False) else None
+    observer = None if validator is None else validator.observe
+
+    def announce(bound_host: str, bound_port: int, *control_at: str | int) -> None:
+        # One line, flushed, before a single request can arrive, so `--port 0`
+        # reaches the parent while it is still reading.
+        print(
+            f"{PROG}: listening on http://{bound_host}:{bound_port} (vendor={unit.name}){_control_suffix(control_at)}",
+            file=out,
+            flush=True,
+        )
+
+    reported = False
+
+    def report() -> None:
+        """The ledger summary, once, however the server ends: a served unit has no other moment at which the
+        session is over. Flushed because stderr is a pipe to whoever spawned this."""
+        nonlocal reported
+        if validator is None or reported:
+            return
+        reported = True
+        unit.context.log.info(validator.ledger.summary())
+        sys.stderr.flush()
+
+    if validator is not None:
+        _report_before_terminating(report)
+    try:
+        control = _control_listener(args, env, host, port)
+        if control is None:
+            run_server(
+                create_app(unit, observer=observer), host=host, port=port, log_level=log_level, on_bound=announce
+            )
+        else:
+            run_split_server(
+                lambda vendor_port: (
+                    create_app(unit, observer=observer, surface="vendor"),
+                    create_app(unit, surface="control", vendor_port=vendor_port),
+                ),
+                host=host,
+                port=port,
+                control_host=control[0],
+                control_port=control[1],
+                log_level=log_level,
+                on_bound=announce,
+            )
+    except KeyboardInterrupt:  # pragma: no cover - uvicorn normally absorbs this
+        pass
+    finally:
+        report()
         unit.stop()
     return 0
 
 
-def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Print ``GET /__unit/info`` without a server.
+def _report_before_terminating(report: Callable[[], None]) -> None:
+    """Make ``report`` run on ``SIGTERM``, then terminate as if it had not.
 
-    The same bytes the control plane serves, produced by driving the unit
-    through the in-process binding. Going through the binding rather than
-    reaching into the unit is the point: what this prints is exactly what a
-    consumer would read over HTTP, so the two can never drift.
+    uvicorn restores each caught signal's previous handler and re-raises it on its way out
+    (``Server.capture_signals``), so with the default handler the process dies inside ``run_server`` and no
+    ``finally`` after it ever runs -- and ``served(validate=True)`` stops its child with exactly this signal. The
+    exit status is unchanged: the handler puts the default back and raises the signal again.
     """
+    import signal
+
+    def on_terminate(signum: int, frame: object) -> None:
+        report()
+        signal.signal(signum, signal.SIG_DFL)
+        signal.raise_signal(signum)
+
+    signal.signal(signal.SIGTERM, on_terminate)
+
+
+def _response_validator(unit: Unit) -> ResponseValidator:
+    """The fidelity validator for the unit ``--validate`` is serving, or a refusal: a vendor with no declaration
+    has nothing to check against, and serving anyway would leave the flag reading as satisfied."""
+    from vendorfake.fidelity.validate import ResponseValidator
+    from vendorfake.testing.fidelity import surface_for, target_for
+
+    target = target_for(unit.name)
+    if target is None:
+        raise SystemExit(f"{PROG}: {unit.name} has no fidelity leg, so --validate has nothing to check against")
+    # Not strict: a route the declaration has not caught up with is counted, never turned into a 500 on a
+    # unit somebody is developing against.
+    from vendorfake.fidelity.cache import Unavailable
+
+    try:
+        surface = surface_for(target)
+    except Unavailable as exc:
+        raise SystemExit(f"{PROG}: --validate: {exc}") from None
+    return ResponseValidator(unit, surface, strict_undeclared=False)
+
+
+def _info(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print ``GET /__unit/info`` without a server: the same bytes the control
+    plane serves, produced through the in-process binding so the two cannot
+    drift."""
+    from vendorfake.core.control.access import CONTROL_TOKEN_HEADER
     from vendorfake.core.transport.inprocess import in_process
 
     unit = _make_unit(args, env)
+    token = unit.context.config.control.token
     try:
-        response = in_process(unit).get("/__unit/info")
+        response = in_process(unit).get("/__unit/info", headers={} if token is None else {CONTROL_TOKEN_HEADER: token})
         print(response.text, file=out)
         return 0 if response.status == 200 else 1
     finally:
         unit.stop()
 
 
-def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Print the OpenAPI 3.1 document generated from the unit's route table.
+def _manifest(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print the document ``GET /__unit/manifest`` serves, without a server.
 
-    No server, and no web framework: the generator lives in the core precisely
-    so this subcommand can exist. It is the same document the adapter serves at
-    ``/__unit/openapi.json``, from the same function and the same route rows.
+    The same function builds both, so the two cannot drift. ``--json`` is
+    implicit -- the output *is* the document, and nothing else goes to stdout --
+    and ``--base-url`` is the one thing a process with no request cannot infer:
+    a unit reached over a container port mapping does not know its own address.
     """
+    from vendorfake.core.control.plane import manifest_document
+    from vendorfake.core.util.json import dump_json
+
+    unit = _make_unit(args, env)
+    try:
+        document = manifest_document(unit.context, base_url=args.base_url)
+        print(dump_json(document).decode("utf-8"), file=out)
+        return 0
+    finally:
+        unit.stop()
+
+
+def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
+    """Print the OpenAPI 3.1 document generated from the unit's route table. No
+    server and no web framework: the generator lives in the core, and this is the
+    same document the adapter serves at ``/__unit/openapi.json``."""
     from vendorfake.core.control.openapi import document_for_unit
     from vendorfake.core.util.json import dump_json
 
@@ -467,12 +650,8 @@ def _openapi(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
 
 
 def _vendors(args: argparse.Namespace, out: TextIO) -> int:
-    """List what would actually resolve, not what is declared.
-
-    ``available_vendors`` filters through an importability check, so a name
-    printed here is a name that will start. A list that advertised a vendor
-    which then failed to import would be worse than no list.
-    """
+    """List what would actually resolve, not what is declared: ``available_vendors``
+    filters through an importability check, so a name printed here will start."""
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_vendors
 
@@ -489,15 +668,10 @@ def _vendors(args: argparse.Namespace, out: TextIO) -> int:
 
 
 def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """List the profiles a vendor ships: ``vendorfake.registry.available_profiles``,
-    over the command line, so a consumer never has to list a package's
-    ``profiles/`` directory in a scratch clone to find a name.
-
+    """``vendorfake.registry.available_profiles`` over the command line.
     ``UnitError`` is caught alongside ``ValueError`` for the reason
-    :func:`_make_unit` gives: reading a vendor's profiles can fail on a
-    profile document rather than on the vendor's name, and a caller who
-    mistyped one flag should not get a refusal for the other and a traceback
-    for this."""
+    :func:`_make_unit` gives: reading profiles can fail on a document rather than
+    on the vendor's name."""
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import available_profiles
@@ -531,15 +705,9 @@ def _profiles(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> 
 
 
 def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """List a vendor's route table: ``vendorfake.registry.routes``, over the
-    command line. Internal (``/__unit/*``) routes are omitted unless
-    ``--internal`` is given -- this describes the vendor surface by default.
-
-    ``UnitError`` is caught alongside ``ValueError`` for the reason
-    :func:`_make_unit` gives: this subcommand takes ``--profile``, so a
-    nonexistent profile reaches it just as often as a nonexistent vendor
-    does, and the loader's refusal already names every profile the vendor
-    ships."""
+    """``vendorfake.registry.routes`` over the command line; internal routes are
+    omitted unless ``--internal`` is given. ``UnitError`` is caught alongside
+    ``ValueError`` for the reason :func:`_make_unit` gives."""
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
     from vendorfake.registry import routes as list_routes
@@ -585,31 +753,25 @@ def _routes_cmd(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -
 
 
 def _faults(args: argparse.Namespace, out: TextIO) -> int:
-    """List the built-in fault catalogue: name, provenance, phase, parameters,
-    one-line description.
-
-    Read from ``FAULT_PARAM_KEYS``, ``FAULT_PROVENANCE`` and
-    ``FAULT_DESCRIPTIONS`` in ``core/chaos/faults.py`` -- the same mappings
-    ``GET /__unit/chaos`` and ``GET /__unit/info`` publish each rule against,
-    so this can never name a fault the unit itself has never heard of, or
-    disagree with those two about which faults are ``provenance: "transport"``
-    (E-transport-faults.md's definition of done item 5: provenance appears in
-    the chaos listings *and in the ``faults`` CLI output*).
-    """
-    from vendorfake.core.chaos.faults import FAULT_DESCRIPTIONS, FAULT_PARAM_KEYS, FAULT_PHASE, FAULT_PROVENANCE
+    """The built-in fault catalogue: name, provenance, phase, parameters and a
+    one-line description, read from ``vendorfake.registry.faults()``, the same
+    catalogue ``GET /__unit/chaos`` publishes each rule against, so the two
+    cannot disagree."""
     from vendorfake.core.util.json import dump_json
+    from vendorfake.registry import faults as list_faults
 
-    names = sorted(FAULT_PARAM_KEYS)
+    found = list_faults()
     if _wants_json(args):
         payload = [
             {
-                "name": name,
-                "provenance": FAULT_PROVENANCE[name],
-                "phase": FAULT_PHASE[name],
-                "params": list(FAULT_PARAM_KEYS[name]),
-                "description": FAULT_DESCRIPTIONS[name],
+                "name": row.name,
+                "scope": row.scope,
+                "provenance": row.provenance,
+                "phase": row.phase,
+                "params": list(row.params),
+                "description": row.summary,
             }
-            for name in names
+            for row in found
         ]
         print(dump_json(payload).decode("utf-8"), file=out)
         return 0
@@ -617,13 +779,13 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
         _table(
             [
                 {
-                    "name": name,
-                    "provenance": FAULT_PROVENANCE[name],
-                    "phase": FAULT_PHASE[name],
-                    "params": ", ".join(FAULT_PARAM_KEYS[name]),
-                    "description": FAULT_DESCRIPTIONS[name],
+                    "name": row.name,
+                    "provenance": row.provenance,
+                    "phase": row.phase,
+                    "params": ", ".join(row.params),
+                    "description": row.summary,
                 }
-                for name in names
+                for row in found
             ],
             ("name", "provenance", "phase", "params", "description"),
         ),
@@ -632,63 +794,11 @@ def _faults(args: argparse.Namespace, out: TextIO) -> int:
     return 0
 
 
-def _agent_setup(args: argparse.Namespace, out: TextIO) -> int:
-    """Write a Claude Code rules file for a consumer repo, and its ``.mcp.json``
-    entry if asked.
-
-    Deferred imports throughout, matching every other subcommand body in this
-    module: nothing about ``agent-setup`` should cost anything until a
-    consumer actually types it. The mechanics live in
-    :mod:`vendorfake.agent.setup`; this only wires argparse onto it and
-    prints what it reports.
-
-    ``ValueError`` is caught alongside ``FileExistsError``: ``FileExistsError``
-    is an existing rules file without ``--force``; ``ValueError`` is a
-    ``.mcp.json`` that ``--mcp --allow-future`` cannot safely merge into (not
-    valid JSON, or not a JSON object at the top level) -- see
-    :func:`vendorfake.agent.setup.write_agent_setup`. Both are refusals with
-    nothing written, not crashes.
-    """
-    from pathlib import Path
-
-    from vendorfake.agent.rules_template import DEFAULT_TESTS_GLOB
-    from vendorfake.agent.setup import write_agent_setup
-
-    try:
-        result = write_agent_setup(
-            directory=Path(args.dir),
-            tests_glob=args.tests_glob or DEFAULT_TESTS_GLOB,
-            mcp=args.mcp,
-            allow_future=args.allow_future,
-            force=args.force,
-        )
-    except (FileExistsError, ValueError) as exc:
-        raise SystemExit(f"{PROG}: {exc}") from None
-
-    for path in result.written:
-        print(path, file=out)
-    if result.notice is not None:
-        print(f"{PROG}: {result.notice}", file=out)
-    return 0
-
-
 def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> int:
-    """Look up one route, fault, profile, error kind or header, and print it.
-
-    Every lookup lives in :mod:`vendorfake.agent.explain`; this only picks
-    which one ``args.explain_kind`` named, resolves the vendor/profile flags
-    the same way every other describing subcommand does, and chooses text or
-    ``--json``.
-
-    ``UnitError`` is caught alongside ``ValueError`` for the same reason
-    ``_make_unit``/``_profiles``/``_routes_cmd`` do: ``route`` and ``error``
-    build a unit (:func:`~vendorfake.agent.explain.explain_route`,
-    :func:`~vendorfake.agent.explain.explain_error`), and
-    :func:`~vendorfake.agent.explain.explain_profile` scans the same profile
-    directory ``vendorfake profiles`` does -- either can raise it for a
-    malformed profile document, and this subcommand was the one place that
-    still turned that into a traceback (konyklabs/roadmap#74).
-    """
+    """Look up one route, fault, profile, error kind or header, and print it. Every
+    lookup lives in :mod:`vendorfake.agent.explain`; this picks which one, resolves
+    the vendor and profile flags, and chooses text or ``--json``. ``UnitError`` is
+    caught alongside ``ValueError`` for the reason :func:`_make_unit` gives."""
     from vendorfake.agent import explain as explainer
     from vendorfake.core.kernel.types import UnitError
     from vendorfake.core.util.json import dump_json
@@ -731,12 +841,9 @@ def _explain(args: argparse.Namespace, env: Mapping[str, str], out: TextIO) -> i
 
 
 def _conformance(args: argparse.Namespace) -> int:
-    """Hand off to the conformance runner, which owns its own arguments.
-
-    Forwarded rather than re-declared: the suite is the specification, and a
-    second copy of its flags here would be a second thing to keep in step with
-    it. ``vendorfake-conformance`` is the same entry point under its own name.
-    """
+    """Hand off to the conformance runner, which owns its own arguments. Forwarded
+    rather than re-declared, a second copy of its flags being a second thing to
+    keep in step; ``vendorfake-conformance`` is the same entry point."""
     from vendorfake.conformance.__main__ import main as conformance_main
 
     rest: list[str] = [arg for arg in args.rest if arg != "--"]
@@ -749,13 +856,8 @@ def _conformance(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Parse, dispatch, and return an exit code.
-
-    ``os.environ`` is read here and nowhere else, and it is copied into a plain
-    ``dict`` before it goes any further: everything downstream takes a
-    ``Mapping[str, str]``, so nothing can mutate the process environment by
-    accident and a test can substitute one without monkeypatching a global.
-    """
+    """Parse, dispatch, and return an exit code. The environment is copied into a
+    plain ``dict`` so nothing downstream can mutate it and a test can substitute one."""
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     env: Mapping[str, str] = dict(os.environ)
@@ -775,6 +877,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _serve(args, env, out)
     if args.command == "info":
         return _info(args, env, out)
+    if args.command == "manifest":
+        return _manifest(args, env, out)
     if args.command == "openapi":
         return _openapi(args, env, out)
     if args.command == "vendors":
@@ -785,16 +889,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _routes_cmd(args, env, out)
     if args.command == "faults":
         return _faults(args, out)
-    if args.command == "agent-setup":
-        return _agent_setup(args, out)
     if args.command == "explain":
         return _explain(args, env, out)
     if args.command == "conformance":
         return _conformance(args)
 
-    # argparse rejects an unknown subcommand before this is reachable; the
-    # branch exists so that adding a parser without adding a dispatch arm is a
-    # loud failure rather than a silent exit 0.
+    # Unreachable via argparse; a parser added without a dispatch arm fails loud.
     raise SystemExit(f"{PROG}: no handler for subcommand {args.command!r}")
 
 

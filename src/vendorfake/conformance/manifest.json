@@ -36,7 +36,8 @@
     "C33": "control plane: an unmatched request is named and recorded",
     "C34": "discovery: every vendor maps all four capability roles to a declared capability",
     "C35": "discovery: the profile-name contract holds for the profile this unit was built on",
-    "C36": "state: a seed overlay is applied, and may not invent a collection"
+    "C36": "state: a seed overlay is applied, and may not invent a collection",
+    "C37": "chaos: refresh_rejected is the vendor's own 401 and commits nothing"
   },
   "expected_skips": {
     "C07": [
@@ -94,6 +95,9 @@
       "no-faults",
       "oauth-only",
       "orders-only"
+    ],
+    "C37": [
+      "no-faults"
     ]
   }
 }

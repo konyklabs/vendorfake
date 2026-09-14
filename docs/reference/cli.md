@@ -9,19 +9,20 @@ Every subcommand's `--help`.
 ```text
 usage: vendorfake [-h] [--json] [--version] COMMAND ...
 
-Run or describe a high-fidelity fake of a third-party vendor API.
+Run or describe a fake of a third-party vendor API, checked against its
+published schema.
 
 positional arguments:
   COMMAND
     serve        Serve a unit over HTTP.
     info         Print what a unit would be, as JSON, without serving it.
     openapi      Print the OpenAPI 3.1 document for a unit's route table.
+    manifest     Print the world-neutral manifest: credentials, webhook keys
+                 and entity ids.
     vendors      List the vendors that would resolve here.
     profiles     List the profiles a vendor ships.
     routes       List a vendor's route table.
     faults       List the built-in fault catalogue.
-    agent-setup  Write a Claude Code rules file for a consumer repo (and
-                 optionally an .mcp.json entry).
     explain      Explain one route, fault, profile, error kind, or
                  Vendorfake-* header.
     conformance  Run the conformance contracts against a unit.
@@ -40,23 +41,40 @@ public API a module here imitates.
 
 ```text
 usage: vendorfake serve [-h] [--vendor VENDOR] [--profile PROFILE]
-                        [--host HOST] [--port PORT] [--log-level LOG_LEVEL]
+                        [--host HOST] [--port PORT]
+                        [--control-port CONTROL_PORT]
+                        [--control-host CONTROL_HOST] [--log-level LOG_LEVEL]
+                        [--validate]
 
 options:
   -h, --help            show this help message and exit
   --vendor VENDOR       Vendor to serve (see `vendorfake vendors`). Defaults
                         to $VENDORFAKE_VENDOR; with exactly one vendor
                         installed that one is used, otherwise the command
-                        refuses and lists them.
+                        refuses and lists them. `serve` also takes a comma-
+                        separated list (`clover,square`) and mounts each
+                        vendor under /<vendor>/; every other subcommand
+                        describes one vendor and refuses a list.
   --profile PROFILE     Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                         then to the vendor's default profile.
   --host HOST           Interface to bind. Defaults to $VENDORFAKE_HOST, then
                         loopback.
   --port PORT           Port to bind; 0 picks a free one and prints it.
                         Defaults to $VENDORFAKE_PORT, then 8080.
+  --control-port CONTROL_PORT
+                        Serve /__unit/* on this port of its own, answering it
+                        on --port with the vendor's 404; 0 picks a free one.
+                        Defaults to $VENDORFAKE_CONTROL_PORT; unset, one port
+                        serves both.
+  --control-host CONTROL_HOST
+                        Interface for --control-port. Defaults to
+                        $VENDORFAKE_CONTROL_HOST, then the vendor host.
   --log-level LOG_LEVEL
                         uvicorn log level. Defaults to $VENDORFAKE_LOG_LEVEL,
                         then the profile's.
+  --validate            Check every answer against the vendor's own published
+                        schema, and answer 500 naming the violation when one
+                        fails. Refused for a vendor with no fidelity leg.
 ```
 
 ## `vendorfake info`
@@ -71,7 +89,10 @@ options:
   --vendor VENDOR    Vendor to serve (see `vendorfake vendors`). Defaults to
                      $VENDORFAKE_VENDOR; with exactly one vendor installed
                      that one is used, otherwise the command refuses and lists
-                     them.
+                     them. `serve` also takes a comma-separated list
+                     (`clover,square`) and mounts each vendor under
+                     /<vendor>/; every other subcommand describes one vendor
+                     and refuses a list.
   --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                      then to the vendor's default profile.
 ```
@@ -89,11 +110,37 @@ options:
   --vendor VENDOR    Vendor to serve (see `vendorfake vendors`). Defaults to
                      $VENDORFAKE_VENDOR; with exactly one vendor installed
                      that one is used, otherwise the command refuses and lists
-                     them.
+                     them. `serve` also takes a comma-separated list
+                     (`clover,square`) and mounts each vendor under
+                     /<vendor>/; every other subcommand describes one vendor
+                     and refuses a list.
   --profile PROFILE  Profile name or path. Defaults to $VENDORFAKE_PROFILE,
                      then to the vendor's default profile.
   --no-internal      Omit the /__unit/* control plane, describing only the
                      vendor surface.
+```
+
+## `vendorfake manifest`
+
+```text
+usage: vendorfake manifest [-h] [--json] [--vendor VENDOR] [--profile PROFILE]
+                           [--base-url BASE_URL]
+
+options:
+  -h, --help           show this help message and exit
+  --json               Machine output: one JSON document on stdout, nothing
+                       else on stdout.
+  --vendor VENDOR      Vendor to serve (see `vendorfake vendors`). Defaults to
+                       $VENDORFAKE_VENDOR; with exactly one vendor installed
+                       that one is used, otherwise the command refuses and
+                       lists them. `serve` also takes a comma-separated list
+                       (`clover,square`) and mounts each vendor under
+                       /<vendor>/; every other subcommand describes one vendor
+                       and refuses a list.
+  --profile PROFILE    Profile name or path. Defaults to $VENDORFAKE_PROFILE,
+                       then to the vendor's default profile.
+  --base-url BASE_URL  The address the unit will be reached at, recorded in
+                       the document. Omitted, base_url is null.
 ```
 
 ## `vendorfake vendors`
@@ -151,26 +198,6 @@ options:
   -h, --help  show this help message and exit
   --json      Machine output: one JSON document on stdout, nothing else on
               stdout.
-```
-
-## `vendorfake agent-setup`
-
-```text
-usage: vendorfake agent-setup [-h] [--dir DIR] [--tests-glob TESTS_GLOB]
-                              [--mcp] [--allow-future] [--force]
-
-options:
-  -h, --help            show this help message and exit
-  --dir DIR             Repo root to write into. Defaults to the current
-                        directory.
-  --tests-glob TESTS_GLOB
-                        Glob the rules file's `paths:` frontmatter is scoped
-                        to. Defaults to 'tests/**'.
-  --mcp                 Also add a vendorfake entry to <dir>/.mcp.json.
-  --allow-future        Required together with --mcp to actually write the
-                        .mcp.json entry; `vendorfake mcp` does not exist until
-                        0.4. Without it, --mcp only prints a notice.
-  --force               Overwrite an existing rules file.
 ```
 
 ## `vendorfake explain`

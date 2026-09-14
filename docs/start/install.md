@@ -3,16 +3,28 @@
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
 # or, in a uv project:
-uv add "vendorfake @ git+https://github.com/konyklabs/vendorfake@v0.2.0"
+uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.6.0"  # x-release-please-version
 
-vendorfake vendors            # -> clover, square, toast
+vendorfake vendors            # -> clover, lightspeed, square, toast
 vendorfake serve --vendor square
 ```
 
-Drop the `@v0.2.0` to track `main`. From a checkout of this repository:
-`uv sync && uv run vendorfake serve --vendor square`.
+The `serve` extra pulls in the ASGI stack (`fastapi`, `uvicorn`) that `vendorfake
+serve` and the served/container bindings need; the in-process bindings
+(`unit()`, `async_unit()`) never import it, so a plain `pip install vendorfake`
+is enough for a test suite that only uses those. The extra exists from 0.6.0;
+at an earlier tag the ASGI stack installs unconditionally and pip warns that
+the extra does not exist, which is harmless. Drop the `@v0.6.0` <!-- x-release-please-version --> to track
+`main`. From a checkout of this repository: `uv sync && uv run vendorfake
+serve --vendor square` (`uv sync`'s `dev` group carries the extra's packages
+too, so nothing extra to ask for there).
+
+The pin lines above carry a release-please marker (`x-release-please-version`)
+and `release-please-config.json` lists the three pages as extra files, so a
+release bumps them; `tests/unit/test_docs_pins.py` asserts every pin equals
+`vendorfake.__version__`.
 
 ## Pinning a commit instead of a tag
 
@@ -41,20 +53,29 @@ docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE
 docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square
 
 curl -s http://localhost:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"framework_answered":0}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
 ```
 
-Publish the port on loopback (`-p 127.0.0.1:...`), as above: the control
-plane is deliberately unauthenticated — it hands out the seeded credentials
-and will POST webhooks at any URL it is told — so a fake published to the
-network is an outbound-request primitive for anyone who can route to your
-host. When another container or machine must reach it deliberately, put both
-on a Docker network (or use Testcontainers, as the [docker compose
-recipe](../recipes/docker-compose.md) does) rather than widening the host
-bind.
+`VENDORFAKE_VENDOR` (and `serve --vendor`) also takes a comma-separated list —
+`-e VENDORFAKE_VENDOR=clover,square` serves both from one container, each
+under its own prefix (`http://localhost:8080/clover`, `.../square`, control
+planes at `/clover/__unit/...`), with the root `/__unit/info` listing them;
+see [Bindings → Docker compose](bindings.md#docker-compose).
+
+Publish the port on loopback (`-p 127.0.0.1:...`), as above: by default the
+control plane is unauthenticated — it hands out the seeded credentials and
+will POST webhooks at any URL it is told — so a fake published to the network
+is an outbound-request primitive for anyone who can route to your host. When
+another container or machine must reach it deliberately, put both on a Docker
+network (or use Testcontainers, as the [docker compose
+section](bindings.md#docker-compose) does) rather than widening the host
+bind. Two opt-ins exist for a fake that must be networked: a control plane on
+its own port (`VENDORFAKE_CONTROL_PORT`), and a token every control-plane call
+but `GET` or `HEAD /__unit/health` must carry (`VENDORFAKE_CONTROL_TOKEN`). See [Bindings →
+A control plane on its own port](bindings.md#a-control-plane-on-its-own-port).
 
 The image runs as a non-root user, listens on 8080, and carries a
-`HEALTHCHECK` on `/__unit/info` so `docker ps` (and any orchestrator) reports
+`HEALTHCHECK` on `/__unit/health` so `docker ps` (and any orchestrator) reports
 `healthy` only once the unit has hydrated its seed and is answering. With no
 vendor set it refuses and lists what it found — it never guesses.
 `tools/verify_image_build.sh` is the build's own proof: it builds, serves each

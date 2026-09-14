@@ -3,9 +3,11 @@
 For an agent working *in this repository* -- building, fixing, or extending
 vendorfake itself. If instead you are writing tests **against** an installed
 vendorfake in a consumer repository, this is the wrong file: run `vendorfake
-agent-setup` there (or `vendorfake explain <kind> <name>` for one answer at a
-time), or read
-https://github.com/konyklabs/vendorfake/blob/main/docs/for-agents.md.
+explain <kind> <name>` there for one answer at a time, or read
+https://github.com/konyklabs/vendorfake/blob/main/docs/concepts/unit.md for
+the vocabulary and
+https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md for
+the four ways to hold a unit.
 
 ## Layout
 
@@ -22,16 +24,15 @@ src/vendorfake/
   testing/      the fixture layer a consumer's test suite imports:
                 unit()/async_unit()/served()/serve_in_thread(), Driver,
                 StartedUnit, seeds.
-  agent/        this surface: agent-setup's rules-file template and
-                explain's lookups.
-  square/ clover/ toast/
+  agent/        the lookups behind `vendorfake explain`.
+  square/ clover/ toast/ lightspeed/
                 one vendor surface each: routes, error vocabulary, signature
                 scheme, retry schedule, seed.
-  cli.py        the vendorfake command; the only module that reads
-                os.environ.
+  cli.py        the vendorfake command.
   registry.py   vendor discovery and the one create_unit() constructor.
 tests/
   unit/         fast, no server, no vendor-specific fixtures required.
+  parity/       one behaviour asserted across unit(), served() and the CLI.
   integration/  needs a running server (marker: integration).
   conformance/  the suite that exercises tests/conformance's own harness
                 against the checks in src/vendorfake/conformance/checks/.
@@ -39,6 +40,9 @@ tools/          self-test.sh, boundary_check.py, boundary.toml, and the
                 other scripts self-test.sh's steps call.
 docs/           the docs site's source (see mkdocs.yml if present).
 ```
+
+`docs/testing.md` is the testing strategy: the tiers, and the two rules that
+decide whether a test exists.
 
 ## The one command
 
@@ -72,12 +76,13 @@ matter most:
 - Pydantic is permitted in `core/` only in the three files
   `tools/boundary.toml` names, because it parses an external document there;
   everywhere else in `core/` an entity stays a plain dict.
-- `cli.py` is the only module that resolves a unit's config from `os.environ`;
-  every first-party import in it happens inside a function body so `vendorfake
-  --help` never pays for importing a web framework. `vendorfake.testing.served()`
-  is the one documented exception, because it spawns `cli.py`'s own `serve`
-  subcommand as a child that inherits the real environment regardless -- see
-  its docstring in `src/vendorfake/testing/__init__.py`.
+- The process environment is read in one function, `registry.ambient_env()`,
+  which `unit()`, `served()` and `cli.py` layer explicit configuration over, so
+  an exported `VENDORFAKE_*` variable means one thing on every binding.
+  `create_unit()` itself takes `env` as a parameter defaulting to `{}`.
+  `cli.py`'s first-party imports happen inside function bodies so `vendorfake
+  --help` never pays for importing a web framework; `served()` spawns that
+  command as a child that inherits the real environment.
 
 ## Provenance labels
 
@@ -105,11 +110,11 @@ committing it.
 `@check(id=...)` in whichever module under
 `src/vendorfake/conformance/checks/` matches their subsystem (`auth`,
 `capabilities`, `chaos`, `control_plane`, `discovery`, `errors`, `state`,
-`transport`, `webhooks`); a new check takes the next free id. C01–C35 are
-all allocated, and C36 with them (C24–C32 by the conformance-coverage stack of roadmap #15,
+`transport`, `webhooks`); a new check takes the next free id. C01–C36 are
+all allocated, and C37 with them (C24–C32 by the conformance-coverage stack of roadmap #15,
 #46 and #42; C33 by stream S and C34–C35 by stream C of the 0.2 batch, C36
-by the seed-overlay stream of konyklabs/roadmap#85).
-**Next free id: C37.** `checks/__init__.py`
+by the seed-overlay stream of konyklabs/roadmap#85; C37 by konyklabs/roadmap#131).
+**Next free id: C38.** `checks/__init__.py`
 imports every module and sorts the registry into id order, so report order
 never depends on import order. `manifest.json` is the committed
 id-to-name-and-expected-skips record; `tests/conformance/test_manifest.py`

@@ -375,6 +375,69 @@ def test_a_case_note_that_repeats_the_vendor_document_is_a_leak() -> None:
     assert any(window.startswith("the tax rate is expressed as a decimal") for window in leak["corpus/b.json"])
 
 
+def test_enum_identifier_matchers_do_not_leak_against_a_json_schema_enum() -> None:
+    """konyklabs/roadmap#135: an underscore joins a token, so a corpus matcher
+    like ``${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}`` is a handful of
+    words, not an eight-word run of bare identifiers that also occurs in the
+    vendor's own enum listing."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = (
+        b'"roundingType": {"enum": ["HALF_UP", "HALF_EVEN", "ALWAYS_UP", "ALWAYS_DOWN"]}, '
+        b'"pricingStrategy": {"enum": ["BASE_PRICE", "MENU_SPECIFIC_PRICE", "TIME_SPECIFIC_PRICE", '
+        b'"SIZE_PRICE", "OPEN_PRICE"]}'
+    )
+    corpus = {
+        "corpus/config.taxrates.list.json": '"roundingType": "${re:HALF_UP|HALF_EVEN|ALWAYS_UP|ALWAYS_DOWN}"',
+        "corpus/menus.v3.menus.json": (
+            '"pricingStrategy": "${re:BASE_PRICE|MENU_SPECIFIC_PRICE|TIME_SPECIFIC_PRICE|SIZE_PRICE|OPEN_PRICE}"'
+        ),
+    }
+    assert prose_leaks(corpus, [document]) == {}
+
+
+def test_a_copied_sentence_with_one_identifier_still_leaks() -> None:
+    """One identifier inside a copied sentence must still count as a word: the
+    sentence is exactly eight tokens, so a tokenizer that dropped identifiers
+    instead of keeping them whole would leave seven and miss the copy."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"The HALF_UP mode rounds half away from zero.\n"
+    copied = {"corpus/e.json": '{"note": "the HALF_UP mode rounds half away from zero"}'}
+    leak = prose_leaks(copied, [document])
+    assert list(leak) == ["corpus/e.json"]
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        rb"Use HALF\_UP to round half away from zero",
+        rb'"description": "Use HALF\\_UP to round half away from zero"',
+    ],
+    ids=["markdown", "markdown-inside-json"],
+)
+def test_an_escaped_identifier_still_matches_its_unescaped_copy(document: bytes) -> None:
+    """A vendor description written in Markdown escapes the underscore, and a
+    JSON document escapes that backslash again; a sentence copied from the
+    rendering carries a bare underscore. All three must tokenize alike, or the
+    escape hides the copy."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    copied = {"corpus/g.json": '{"note": "Use HALF_UP to round half away from zero"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/g.json"]
+
+
+def test_markdown_emphasis_underscores_do_not_hide_a_copied_sentence() -> None:
+    """An underscore now joins a word, so the edges must be trimmed: a vendor
+    sentence set in Markdown emphasis (``_a ... always_``) and its plain copy
+    have to tokenize alike, as they did when an underscore was a separator."""
+    from vendorfake.fidelity.cache import prose_leaks
+
+    document = b"_a tax rate applies to every order line always_\n"
+    copied = {"corpus/h.json": '{"note": "a tax rate applies to every order line always"}'}
+    assert list(prose_leaks(copied, [document])) == ["corpus/h.json"]
+
+
 def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
     """Adversarial A8 (konyklabs/roadmap#56): the cache must never be the
     package directory, where `git add -A` would sweep the vendor's document in."""
@@ -388,3 +451,49 @@ def test_a_cache_inside_the_package_is_refused(tmp_path: Path) -> None:
     with pytest.raises(LookupError, match="must not be inside or above the package"):
         cache_path("vendorfake.fidelity", cache_dir=package.parent.parent)
     assert cache_path("vendorfake.fidelity", cache_dir=tmp_path) == tmp_path / "vendorfake.fidelity"
+
+
+# ---------------------------------------------------------------------------
+# T1 (konyklabs/roadmap#116): the `fetch` CLI's own exit code for this case.
+# ---------------------------------------------------------------------------
+
+_FETCH_TARGET_ANCHOR = ""
+"""Set per test by monkeypatch; :func:`_fetch_target` reads it fresh, the same
+trick ``tests/unit/fidelity/test_cli.py``'s own ``target()`` uses, so the
+CLI's ``module:attr`` resolution reaches a package this test wrote."""
+
+
+def _fetch_target() -> Any:
+    """A :class:`~vendorfake.fidelity.runner.FidelityTarget` the ``fetch``
+    subcommand can resolve without ever opening a unit -- ``_fetch`` never
+    calls ``open_unit``, so a call here would mean the CLI took a wrong turn."""
+    from contextlib import contextmanager
+
+    from vendorfake.fidelity.runner import FidelityTarget
+
+    @contextmanager
+    def open_unit(profile: str | None) -> Any:
+        raise AssertionError("`fetch` must never open a unit")
+        yield  # pragma: no cover
+
+    return FidelityTarget(name=_FETCH_TARGET_ANCHOR, anchor=_FETCH_TARGET_ANCHOR, open_unit=open_unit)
+
+
+def test_fetch_with_no_network_and_no_cache_is_a_named_skip_not_a_usage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """T1 (konyklabs/roadmap#116): the ``fetch`` CLI turns "no network, no
+    cache" into exit 3 -- a named skip ``tools/self-test.sh`` reports as SKIP
+    rather than failing the whole run -- never the generic usage-error exit 2
+    a bad ``--target`` or a pin-less anchor still get (see
+    ``populate``'s ``Unavailable``, which this is the CLI's own view of)."""
+    from vendorfake.fidelity.__main__ import main
+
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    monkeypatch.setattr(f"{__name__}._FETCH_TARGET_ANCHOR", name)
+    offline = counting_fetcher(None, error=ConnectionError("unreachable"))
+    assert main(["fetch", "--target", f"{__name__}:_fetch_target"], fetcher=offline) == 3
+    assert offline.calls == [URL]
+    err = capsys.readouterr().err
+    assert "fidelity fetch: " in err and " UNAVAILABLE -- " in err and name in err
+    assert "its fidelity leg is skipped in this run" in err

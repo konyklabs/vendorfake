@@ -1,4 +1,4 @@
-"""The control plane's thirty-three routes, asserted on shape rather than on 200.
+"""The control plane's thirty-four routes, asserted on shape rather than on 200.
 
 Every test here pins something a reviewer could reasonably disagree about: a
 path, a key name, an error kind, an ordering, or which of two plausible
@@ -59,7 +59,7 @@ REFERENCE_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/clock/advance"),
 )
 
-#: Nine the conformance design requires so that every check can be driven
+#: Ten the conformance design requires so that every check can be driven
 #: through a URL instead of an in-process object graph -- three of those closed
 #: measured holes: with no ``/__unit/auth`` no check could obtain a credential,
 #: so the whole authentication layer could be deleted and the suite stayed
@@ -78,6 +78,7 @@ ADDED_ROUTES: tuple[tuple[str, str], ...] = (
     ("POST", "/__unit/webhooks/emit"),
     ("POST", "/__unit/webhooks/sink"),
     ("GET", "/__unit/auth"),
+    ("GET", "/__unit/manifest"),
     ("POST", "/__unit/state/update"),
     ("POST", "/__unit/state/page"),
     ("GET", "/__unit/requests"),
@@ -159,13 +160,13 @@ def test_every_reference_path_is_present_byte_for_byte() -> None:
     assert missing == []
 
 
-def test_the_plane_is_exactly_the_twenty_one_plus_twelve_and_nothing_else() -> None:
+def test_the_plane_is_exactly_the_twenty_one_plus_thirteen_and_nothing_else() -> None:
     """A count, and then the set, because a count alone would pass if one route
     were dropped and an unrelated one added."""
     unit = _unit()
     control = {(r.method, r.path) for r in unit.routes if r.internal}
     assert control == set(REFERENCE_ROUTES) | set(ADDED_ROUTES)
-    assert len(control) == 33
+    assert len(control) == 34
 
 
 def test_every_control_route_is_internal_and_owns_the_control_capability() -> None:
@@ -204,32 +205,14 @@ def test_every_control_route_carries_a_summary_and_an_operation_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_health_names_the_vendor_the_profile_and_the_framework_counter() -> None:
+def test_health_names_the_vendor_the_profile_and_the_uptime() -> None:
     api, _ = _api()
     body = api.get("/__unit/health").json()
     assert body["status"] == "ok"
     assert body["vendor"] == "acme"
     assert body["profile"] == "test"
     assert isinstance(body["uptime_ms"], int)
-    # Zero over the in-process binding is the true answer, not a stub: there is
-    # no framework present that could have answered anything.
-    assert body["framework_answered"] == 0
-
-
-def test_health_reports_the_transport_adapters_counter_when_one_is_supplied() -> None:
-    """The counter is surfaced rather than kept in the serving process,
-    because a list inside a uvicorn child is unreadable from the parent of an
-    out-of-process test -- which is the only place the number matters."""
-    hits = [3]
-    unit = make_unit(
-        [],
-        vendor=_vendor(),
-        control_routes=lambda binding: control_plane_routes(binding, framework_answered=lambda: hits[0]),
-        sink=MemorySink(),
-        capabilities=("orders", "chaos", "webhooks", "webhooks.chaos"),
-        schedule_ms=(5,),
-    )
-    assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 3
+    assert isinstance(body["version"], str) and body["version"]
 
 
 def test_info_carries_all_eight_keys_the_conformance_suite_asserts_by_name() -> None:
@@ -430,6 +413,28 @@ def test_a_rule_reports_the_routes_it_actually_resolves_to() -> None:
         {"id": "r1", "scope": "request", "fault": "rate_limit", "match": {"route": "GET /v2/orders"}},
     )
     assert res.json()["rules"][0]["matched_routes"] == ["GET /v2/orders"]
+
+
+def test_a_bad_params_commit_is_refused_when_the_rule_is_written() -> None:
+    """A rule that cannot fire says so when written, not on every matching
+    request: an unknown mode, or ``commit`` on a fault that delivers intact
+    or fires before the handler, is a 400 naming ``params.commit``."""
+    api, _ = _api()
+    for fault, params in (
+        ("malformed_body", {"mode": "invalid_json", "commit": "After"}),
+        ("slow_body", {"commit": "after"}),
+        ("rate_limit", {"commit": "after"}),
+    ):
+        res = api.post("/__unit/chaos/rules", {"id": "r1", "scope": "request", "fault": fault, "params": params})
+        assert res.status == 400, (fault, res.text)
+        assert res.header("x-unit-error") == "invalid_value"
+        assert res.header("vendorfake-rule-error") == "r1"
+        assert '"field":"params.commit"' in res.text
+    ok = api.post(
+        "/__unit/chaos/rules",
+        {"id": "r1", "scope": "request", "fault": "connection_reset", "params": {"commit": "after"}},
+    )
+    assert ok.status == 200, ok.text
 
 
 def test_matched_routes_never_counts_a_control_route() -> None:
@@ -784,14 +789,11 @@ def test_programming_a_sink_that_is_not_the_memory_sink_is_a_conflict() -> None:
     """`conflict`, not the brief's `invalid_state`: the twenty kinds are fixed
     by a conformance check asserting the literal count, and "the unit is not in
     a state where this is possible" is what `conflict` already means."""
-    import tempfile
+    from vendorfake.core.webhooks.sink import HttpSink
 
-    from vendorfake.core.webhooks.sink import FileSink
-
-    with tempfile.TemporaryDirectory() as tmp:
-        api, _ = _api(sink=FileSink(tmp))
-        res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
-        assert (res.status, res.header("x-unit-error")) == (409, "conflict")
+    api, _ = _api(sink=HttpSink())
+    res = api.post("/__unit/webhooks/sink", {"statuses": [500]})
+    assert (res.status, res.header("x-unit-error")) == (409, "conflict")
 
 
 # ---------------------------------------------------------------------------
@@ -1043,3 +1045,92 @@ def test_the_control_plane_survives_every_capability_being_switched_off() -> Non
     assert api.post("/__unit/capabilities", {"set": []}).status == 200
     assert api.get("/__unit/capabilities").status == 200
     assert api.post("/__unit/capabilities", {"enable": ["orders"]}).status == 200
+
+
+# ---------------------------------------------------------------------------
+# GET /__unit/manifest -- the world-neutral document
+# ---------------------------------------------------------------------------
+
+
+def test_the_manifest_publishes_the_same_credentials_as_the_auth_route() -> None:
+    """One helper builds both. A manifest carrying a credential `/__unit/auth`
+    would not offer -- or missing one it would -- is a consumer authenticating
+    against a document that disagrees with the unit that wrote it."""
+    api, _ = _api()
+    manifest = api.get("/__unit/manifest").json()
+    assert manifest["credentials"] == api.get("/__unit/auth").json()["credentials"]
+
+
+def test_the_manifest_lists_every_collection_ids_only_in_stored_order() -> None:
+    """Ids, not entities. The document is what a script needs to *address* the
+    unit; shipping whole entities would make it a state dump, and a script that
+    asserted against one would be asserting against a fake rather than against
+    the vendor's own API."""
+    api, unit = _api()
+    unit.context.store.collection("widgets").insert({"id": "w_2", "colour": "red"}, {})
+    unit.context.store.collection("widgets").insert({"id": "w_1", "colour": "blue"}, {})
+    ids = api.get("/__unit/manifest").json()["ids"]
+    assert ids["widgets"] == ["w_2", "w_1"]
+
+
+def test_the_manifest_collects_signature_keys_from_subscriber_collections_only() -> None:
+    """Matched on the collection's name -- vendors spell it `subscriptions`,
+    `webhooks`, `webhook_subscriptions` -- because a key on an unrelated entity
+    is not a key that signs a delivery. Deduplicated, since one key shared by
+    two subscribers is one key a receiver has to try."""
+    api, unit = _api()
+    store = unit.context.store
+    store.collection("subscriptions").insert({"id": "s_1", "signature_key": "shared"}, {})
+    store.collection("subscriptions").insert({"id": "s_2", "signature_key": "shared"}, {})
+    store.collection("webhook_endpoints").insert({"id": "e_1", "webhook_secret": "second"}, {})
+    store.collection("merchants").insert({"id": "m_1", "secret": "not-a-webhook-key"}, {})
+    keys = api.get("/__unit/manifest").json()["webhooks"]["signature_keys"]
+    assert keys == ["shared", "second"]
+
+
+def test_the_manifest_takes_its_base_url_from_the_host_that_was_asked() -> None:
+    """A unit behind a container port mapping does not know its own address, so
+    the only honest answer is where the caller reached it. Absent a Host header
+    the field is null rather than a guess a webhook URL would be built from."""
+    api, _ = _api()
+    reached = api.get("/__unit/manifest", headers={"host": "unit.internal:8080"}).json()
+    assert reached["base_url"] == "http://unit.internal:8080"
+    forwarded = api.get(
+        "/__unit/manifest",
+        headers={"host": "unit.example.com", "x-forwarded-proto": "https"},
+    ).json()
+    assert forwarded["base_url"] == "https://unit.example.com"
+    assert api.get("/__unit/manifest").json()["base_url"] is None
+
+
+def test_the_manifest_base_url_carries_the_prefix_a_request_arrived_under() -> None:
+    """One process can serve several units, each mounted under its own prefix
+    (``vendorfake serve --vendor clover,square``), and the mount tells the unit
+    where it is with ``x-forwarded-prefix``. Without it the manifest would
+    publish a base URL that answers nothing: the host is right and the path is
+    a mount short. The value is normalised the way a proxy chain leaves it --
+    first value of the list, one leading slash, no trailing one."""
+    api, _ = _api()
+
+    def base_url(**headers: str) -> object:
+        return api.get("/__unit/manifest", headers={"host": "unit.internal:8080", **headers}).json()["base_url"]
+
+    assert base_url() == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "/clover"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "/clover/"}) == "http://unit.internal:8080/clover"
+    assert base_url(**{"x-forwarded-prefix": "clover"}) == "http://unit.internal:8080/clover"
+    # A chain of proxies appends; the outermost prefix is the one the caller spoke to.
+    assert base_url(**{"x-forwarded-prefix": "/edge/clover, /clover"}) == "http://unit.internal:8080/edge/clover"
+    # An empty or bare-slash value is a proxy saying "no prefix", not a trailing slash to keep.
+    assert base_url(**{"x-forwarded-prefix": "/"}) == "http://unit.internal:8080"
+    assert base_url(**{"x-forwarded-prefix": "", "x-forwarded-proto": "https"}) == "https://unit.internal:8080"
+
+
+def test_the_manifest_names_its_schema_and_the_unit_it_describes() -> None:
+    """`schema` is what a consumer branches on and what a hand-written
+    deployed-world manifest has to declare; without it a later shape is
+    indistinguishable from a malformed document."""
+    api, unit = _api()
+    manifest = api.get("/__unit/manifest").json()
+    assert manifest["schema"] == "vendorfake.manifest/1"
+    assert (manifest["vendor"], manifest["profile"]) == (unit.context.vendor.name, unit.context.config.profile)

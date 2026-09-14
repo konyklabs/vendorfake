@@ -1,23 +1,19 @@
-"""Turning a validated scenario into store state.
-
-FOR: the one function ``ToastVendor.hydrate`` calls -- at start and again on
+"""Turning a validated scenario into store state; the one function
+``ToastVendor.hydrate`` calls, at start and again on
 ``POST /__unit/state/reset``.
 
-INVARIANT: **a seeded mutation is marked as one.** Every insert carries
-``{"seed": True}`` in its journal meta, which is what stops the webhook
-dispatcher pushing an event for a record that existed before the process
-started.
+INVARIANT: a seeded mutation is marked as one -- every insert carries
+``{"seed": True}`` in its journal meta, which stops the webhook dispatcher
+pushing an event for a record that existed before the process started.
 
-SECOND INVARIANT: **seeded ids come from the document, never from the id
-stream.** The only hydrate-time values are the token expirations and creation
-instants, both volatile fields the digest ignores.
+INVARIANT: seeded ids come from the document, never the id stream; the only
+hydrate-time values are token expirations and creation instants, both
+volatile fields the digest ignores.
 
-Derived collections -- JUDGMENT: the config API's ``menuItems``,
-``menuGroups`` and ``menus`` are derived from the V3 menu at hydrate, so the
-scenario has one menu and the two APIs agree by construction. The shapes are
-the documented config ones (``model/config.py``); the derivation is this
-project's. The partners row is likewise derived from the restaurant plus the
-seed's ``partner`` block.
+JUDGMENT: the config API's ``menuItems``/``menuGroups``/``menus`` are derived
+from the V3 menu at hydrate, so the scenario has one menu and both APIs agree
+by construction; the partners row is likewise derived from the restaurant
+plus the seed's ``partner`` block.
 """
 
 from __future__ import annotations
@@ -363,17 +359,20 @@ def _insert_groups(
 
 
 def _insert_tokens(ctx: UnitContext, doc: SeedDocument, config: ToastConfig) -> None:
-    """Expirations come from the configured TTL at hydrate time."""
+    """Expirations come from the configured TTL at hydrate time unless the
+    seed document names an explicit lifetime (JUDGMENT: relative to unit
+    start, matching Square's ``expires_in_ms``)."""
     tokens = ctx.store.collection(COL.tokens)
     now = int(ctx.clock.now())
     for token in doc.tokens:
+        ttl_ms = config.access_token_ttl_ms if token.expires_in_ms is None else token.expires_in_ms
         tokens.insert(
             TokenEntity(
                 id=token.id,
                 access_token=token.access_token,
                 client_id=token.client_id or config.client_id,
                 partner_guid=config.partner_guid,
-                expires_at_ms=now + config.access_token_ttl_ms,
+                expires_at_ms=now + ttl_ms,
                 scopes=tuple(config.scopes if token.scopes is None else token.scopes),
                 createdDate=now,
             ).to_entity(),

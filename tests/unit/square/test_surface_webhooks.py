@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import re
+import time
 from collections.abc import Iterator
 from typing import Any
 
@@ -172,6 +173,30 @@ def test_a_non_boolean_enabled_is_refused_rather_than_read_as_false(h: Harness) 
     assert response.status == 400
     assert response.headers["x-unit-error"] == "invalid_value"
     assert first_error(response)["field"] == "subscription.enabled"
+
+
+def test_a_link_local_notification_url_is_refused(h: Harness) -> None:
+    """A cloud instance's metadata service lives at a link-local address; this vendor route
+    refuses it the same way the control plane's own subscription route already does."""
+    response = h.api.post(
+        "/v2/webhooks/subscriptions",
+        {
+            "subscription": {
+                "notification_url": "http://169.254.169.254/latest",
+                "event_types": [ORDER_CREATED],
+            }
+        },
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert response.headers["x-unit-error"] == "invalid_value"
+    assert first_error(response)["field"] == "subscription.notification_url"
+
+
+def test_a_loopback_notification_url_is_accepted(h: Harness) -> None:
+    """Loopback stays allowed -- that is where a test's own receiver lives."""
+    subscription = create_subscription(h, notification_url="http://127.0.0.1:9/hook")
+    assert subscription["notification_url"] == "http://127.0.0.1:9/hook"
 
 
 def test_create_is_idempotent_on_its_key(h: Harness) -> None:
@@ -532,7 +557,7 @@ def test_the_test_route_reports_the_status_code_of_the_subscriber_under_test(h: 
     response = h.api.post(f"/v2/webhooks/subscriptions/{healthy['id']}/test", {}, headers=h.auth)
 
     result = response.json()["subscription_test_result"]
-    assert result["status_code"] == 200, "reported the other subscriber's failure"
+    assert result["status_code"] == 200, f"got {result['status_code']}: reported the other subscriber's failure"
     (request,) = sink.received
     assert request.url == OTHER_HOOKS
 
@@ -572,16 +597,44 @@ def test_the_test_route_reports_the_first_attempt_not_the_eventual_outcome(h: Ha
 
 
 def test_the_test_route_reports_a_subscriber_that_never_answers(virtual: Harness, sink: MemorySink) -> None:
-    """On the virtual clock, so the whole cascade costs nothing: the route
-    reports the first refusal and the retries continue behind it, visible at
-    `GET /__unit/webhooks/deliveries` exactly as a real event's would be."""
+    """The route reports the first refusal and returns without moving the
+    virtual clock: one record, then the cascade once the clock is drained."""
     subscription = create_subscription(virtual)
     sink.respond_with = 503
     response = virtual.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=virtual.auth)
     assert response.json()["subscription_test_result"]["status_code"] == 503
+    before_drain = virtual.api.get("/__unit/webhooks/deliveries").json()["deliveries"]
+    assert [record["status"] for record in before_drain] == ["failed"]
     log = deliveries(virtual)
     assert len(log) == 12
     assert log[-1]["status"] == "exhausted"
+
+
+def test_the_test_route_answers_at_once_for_a_disabled_subscriber(h: Harness, sink: MemorySink) -> None:
+    """Nothing is queued for a disabled subscriber, so the route reports 0 without
+    holding the request lock for the delivery timeout."""
+    subscription = create_subscription(h, enabled=False)
+    started = time.monotonic()
+    response = h.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=h.auth)
+    assert time.monotonic() - started < 1.0
+    assert response.json()["subscription_test_result"]["status_code"] == 0
+    assert sink.received == []
+
+
+def test_the_test_route_does_not_wait_out_a_virtual_clock_delay(virtual: Harness, sink: MemorySink) -> None:
+    """A webhook.delay rule puts the first attempt on the virtual clock; the route
+    reports 0 at once rather than holding the unit until the wall-clock timeout,
+    and the attempt lands when the clock is drained."""
+    subscription = create_subscription(virtual)
+    virtual.api.post(
+        "/__unit/chaos/rules",
+        {"id": "slow", "scope": "webhook", "fault": "webhook.delay", "params": {"delay_ms": 60_000}},
+    )
+    started = time.monotonic()
+    response = virtual.api.post(f"/v2/webhooks/subscriptions/{subscription['id']}/test", {}, headers=virtual.auth)
+    assert time.monotonic() - started < 1.0
+    assert response.json()["subscription_test_result"]["status_code"] == 0
+    assert [record["status"] for record in deliveries(virtual)] == ["delivered"]
 
 
 def test_the_test_route_404s_for_an_unknown_subscriber(h: Harness) -> None:
@@ -590,10 +643,9 @@ def test_the_test_route_404s_for_an_unknown_subscriber(h: Harness) -> None:
     assert first_error(response)["field"] == "subscription_id"
 
 
-def test_the_test_route_is_the_only_one_that_runs_outside_the_request_lock() -> None:
-    """It blocks on the delivery worker, which nothing inside its own request
-    can advance; under the pipeline lock that would hold the whole unit for the
-    delivery timeout times the retry schedule against a dead URL."""
+def test_every_vendor_route_runs_under_the_request_lock() -> None:
+    """The request log's journal window is read under the pipeline lock and
+    assumes every vendor route holds it."""
     for h in build_harness("full"):
         routes = h.api.get("/__unit/routes").json()["routes"]
         vendor_unserialized = [
@@ -601,7 +653,7 @@ def test_the_test_route_is_the_only_one_that_runs_outside_the_request_lock() -> 
             for route in routes
             if not route["serialized"] and not route["internal"]
         ]
-        assert vendor_unserialized == ["POST /v2/webhooks/subscriptions/{subscription_id}/test"]
+        assert vendor_unserialized == []
 
 
 # ---------------------------------------------------------------------------

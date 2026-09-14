@@ -1,0 +1,432 @@
+# Chaos: rules, faults and provenance
+
+Faults are **rules, not dice**: the same seed, the same profile and the same
+rule fire the same fault on the same call, every run, which is what makes "the
+third create fails" assertable rather than flaky.
+
+## Arming a rule
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "flaky-create-order", "scope": "request", "fault": "rate_limit",
+  "match": {"route": "POST /v2/orders"}, "when": {"nth": [1, 2]},
+  "params": {"retry_after_seconds": 2}
+}'
+# the next two POST /v2/orders -> 429 with Retry-After; the third succeeds
+```
+
+or, in Python, `driver.add_chaos_rule({...})` — see
+[Driver](unit.md#driver). `GET /__unit/chaos` lists the active catalogue,
+each fault's `scope` and `provenance` included; `POST /__unit/chaos/reset`
+disarms everything. `driver.reset_chaos()` is the same call. The
+`chaos-demo` [profile](unit.md#profile) ships a preloaded set.
+
+## The grammar
+
+A rule has an `id`, a `scope` (`request` or `webhook`), a `fault` name,
+and two optional clauses:
+
+- **`match`** — which subjects the rule applies to: `route`
+  (`"POST /v2/orders"`, `*`-glob'd, e.g. `"POST /v2/orders*"`), `path`,
+  `method`, `capability`, `event_type` (webhook scope: a vendor event type,
+  glob'd — `"O:*"`), `header` (compared lower-cased), `body_contains`.
+  Every condition given is ANDed; an absent `match` applies to every
+  subject in its scope — `{"scope": "request", "fault": "server_error"}`
+  with no `match` means "fail everything".
+- **`when`** — when a *matching* subject actually fires: `nth` (fire on
+  these 1-based occurrences), `every` (fire on every Nth match, `>= 1` —
+  `% 0` is refused at submission rather than left to produce a `NaN` or a
+  500), `after` (skip this many matches first), `times` (stop firing after
+  this many), `probability` (seeded-random, so even that run is replayable
+  from `GET /__unit/info`). Conditions are ANDed; an absent `when` fires on
+  every match.
+
+Clover routes are matched with the tenant placeholder in the template,
+e.g. `"route": "POST /v3/merchants/{mId}/orders"`.
+
+## The fault catalogue
+
+[The generated fault reference](../reference/faults.md) is the exact, current
+list — every fault's scope, provenance, **phase**, parameters and description.
+Three families:
+
+**Vendor faults** (`provenance: vendor`) reproduce something the vendor
+itself documents: `rate_limit`, `server_error`, `unavailable`, `timeout`,
+`token_expiry` (one 401 without touching the stored token — the transient
+case a deactivate-on-401 handler gets wrong), `refresh_rejected` (the
+vendor's own "refresh token invalid" 401, before the handler runs, without
+rotating anything).
+
+**Delivery faults** (`webhook` scope, `provenance: vendor`):
+`webhook.duplicate`, `webhook.delay`, `webhook.out_of_order`,
+`webhook.drop_ack`, `webhook.drop`.
+
+**Transport faults** (`provenance: transport`) reproduce "the network
+returned garbage", which no vendor documents: `malformed_body` (invalid JSON,
+an HTML error page, an empty or truncated body), `body_mutation` (RFC 6901
+JSON-pointer edits to a successful response — remove a field, blank it,
+retype it), and three that are not really a *response*: `connection_reset`,
+`empty_response`, `slow_body`.
+
+Every faulted response carries `Vendorfake-Fault` and `Vendorfake-Rule`
+headers, so a test can tell a faulted answer from a real one without parsing
+the body.
+
+## Phase: does the handler commit?
+
+Provenance says where a fault's behaviour comes from; **phase** says *when*
+it fires, and the two are independent axes. Every fault publishes its
+phase (`GET /__unit/chaos`, `GET /__unit/info`, `vendorfake faults`,
+`vendorfake explain fault <name>`):
+
+- `phase: request` — fires **instead of** the handler. `rate_limit`,
+  `server_error`, `unavailable`, `timeout`, `token_expiry`,
+  `refresh_rejected`. Nothing is committed; a retry starts clean.
+- `phase: handler` — handed **to the route**, whose own handler answers the
+  way the vendor does instead of its normal reply. `authorize_denied`. Nothing
+  is committed. The mechanism headers and the request record name the fault
+  only when the route implements it; a route the fault means nothing to
+  ignores it, which is logged (`handler-phase fault not implemented by the
+  route`) and recorded as unfaulted, and the rule's budget is given back
+  (`fires` does not count it). The same holds for a request the route refuses
+  before it reaches its denial branch (a malformed authorize call), logged as
+  `handler-phase fault not reached: the route refused first`.
+- `phase: response` — fires **on the answer, after the handler ran and
+  committed**. All five transport faults. The store keeps the mutation and
+  the journal has it; with four of the five the caller never saw it succeed
+  (`slow_body` delivers the answer intact, only late). Those four take
+  `params.commit` to roll the handler's work back instead — see below.
+- `phase: delivery` — a webhook delivery, not a request: the `webhook.*`
+  faults.
+
+**A response-phase fault against a single-use rotation strands the
+credential**: `malformed_body` on Clover's `POST /oauth/v2/refresh` rotates
+the refresh token, then hands the caller an HTML 502, so the next refresh with
+the stored token is a 401 — exactly as behind a real gateway that mangled the
+response after the write. The request-log entry for such a call carries
+`discarded_mutation: true` and `committed_journal_seq` (see
+[Journal and request log](unit.md#the-journal-and-the-request-log)). Bound the
+rule with `when: {"nth": [1]}` and re-seed the token, or use a request-phase
+fault for the failure the retry ladder is meant to recover from.
+
+### `commit`: the other model of the same edge
+
+A gateway that mangles the response *after* the write is one honest model of a
+vendor; one where nothing is committed unless the response is written is
+equally plausible, and no vendor documents which of the two its own edge
+implements. So the four faults that discard or corrupt the answer —
+`malformed_body`, `body_mutation`, `connection_reset`, `empty_response` — take
+a `commit` parameter, and a consumer tests both. JUDGMENT: the whole of
+`commit: after` is this project's choice, not a documented behaviour.
+
+- `commit: "before"` (the default, and every earlier release's behaviour) —
+  the handler commits, then the answer is corrupted or dropped.
+- `commit: "after"` — the handler runs inside a snapshot the kernel always
+  restores, so the request leaves nothing behind: no entity change, no journal
+  entry, **no webhook event and no idempotency record**. The answer is then
+  faulted exactly as it would have been.
+
+```json
+{"id": "reset-refresh", "scope": "request", "fault": "connection_reset",
+ "match": {"route": "POST /oauth/v2/refresh"},
+ "params": {"commit": "after"}, "when": {"times": 1}}
+```
+
+Against Clover's single-use rotation that is the difference between a test
+that can retry and one that cannot: the first refresh dies on the wire, and
+the seeded refresh token still works on the second call. Drop the `params` and
+the second call is the documented 401 — the token was spent by a request the
+consumer saw fail.
+
+Two consequences worth stating. On an idempotent route, `after` stores no
+record, so a retry with the same key runs the handler again rather than
+replaying; that is the point, since there is no commit to replay. And
+`slow_body` refuses `commit` with a 400 naming `params.commit`, as does any
+request-phase fault carrying it: neither has a commit to withhold.
+
+`GET /__unit/requests` shows `fault_commit` next to `discarded_mutation`. Under
+`after` the row reads `fault_commit: "after"`, `discarded_mutation: false` and
+no `committed_journal_seq`, because nothing was committed.
+
+The rollback is a whole-store restore, so arm `after` from one caller at a
+time: a request running concurrently on a route the vendor does not serialize
+can have its own commit rolled back with the faulted one.
+
+## Rehearsing a declined consent
+
+The authorize routes approve automatically, because a fake has nobody to click
+the consent screen. `authorize_denied` is how a headless connect-flow test sees
+the other answer, without the consumer's code having to build a different URL:
+
+```json
+{"id": "decline-once", "scope": "request", "fault": "authorize_denied",
+ "match": {"route": "GET /oauth/v2/authorize"}, "when": {"times": 1}}
+```
+
+The first authorize call redirects with the denial and mints no code; the
+second is the ordinary approval, so one test covers the refusal *and* the
+retry. What each vendor sends back:
+
+| Vendor | Route | Denial redirect |
+| --- | --- | --- |
+| Square | `GET /oauth2/authorize` | `?error=access_denied&error_description=user_denied` plus `state` |
+| Clover | `GET /oauth/v2/authorize` | `?error=access_denied` plus `state` when the request carried one — JUDGMENT: Clover documents only the approved redirect, so this is RFC 6749 §4.1.2.1's shape |
+| Lightspeed | `GET /connect` | `?error=access_denied` plus `state` when the request carried one |
+
+Square's `?unit_prompt=deny` is the same answer reached in band, for a test
+that can edit the authorization URL; the fault is for the one that cannot.
+Toast has no consent screen and no authorize route, so nothing there matches
+the rule.
+
+## Transport faults: what each binding raises
+
+The three transport faults that act on the connection rather than the body
+have no single wire form, so each binding raises the exception a real client
+would see in its position. What to catch:
+
+| Fault | In process (`unit()`, `async_unit()`, the pytest fixtures) | Served (`served()`, `serve_in_thread()`, a container) |
+| --- | --- | --- |
+| `connection_reset` | `httpx.RemoteProtocolError`, raised without waiting | the server closes mid-body; httpx raises a `TransportError` (`RemoteProtocolError` with the pinned uvicorn and Starlette — an observation, not a promise; the repository's own served tests catch `TransportError`) |
+| `empty_response` | `httpx.ReadError`, raised without waiting | the server closes before any byte the framework lets it withhold; httpx raises a `TransportError` (`ReadError` or `RemoteProtocolError`, by server version) |
+| `slow_body` | delivered whole after the aggregate gap; `httpx.ReadTimeout` without waiting if one gap exceeds the read timeout | streamed in chunks; the client's own read timeout applies per chunk |
+
+`malformed_body` and `body_mutation` are ordinary responses with a bad body
+on both. Catch `httpx.TransportError` to cover the first two on either
+binding. A rule-authoring mistake (a pointer that is not in *this* answer, a
+mode that does not exist) is not a fault at all: it answers a 400 carrying
+`Vendorfake-Rule-Error: <rule id>` and no `Vendorfake-Fault` header, so "your
+rule did not apply" reads differently from "the vendor failed".
+
+## Rehearsing a timeout without waiting
+
+A `timeout` rule costs a test a millisecond rather than the delay it names.
+See
+[The clock and the timeout fault](unit.md#the-clock-and-the-timeout-fault).
+
+## Rehearsing a 401 deactivation
+
+`token_expiry` answers one request with the vendor's documented "expired
+token" error **without touching the stored token**, so the next call succeeds
+again — the transient case a deactivate-on-401 handler gets wrong:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "expire-on-next-read", "scope": "request", "fault": "token_expiry",
+  "match": {"route": "GET /v2/orders/{order_id}"}, "when": {"nth": [1]}
+}'
+```
+
+For a *permanent* revocation, use the vendor's own revoke endpoint instead;
+for an expiry a client's own clock would notice, advance a
+[virtual clock](unit.md#virtual) past `expires_at`.
+
+## Rehearsing a rejected refresh
+
+`refresh_rejected` answers one refresh call with the vendor's own "refresh
+token invalid" 401 — fired **before** the handler runs, so nothing is
+rotated and the stored token is untouched:
+
+```sh
+curl -s -X POST http://localhost:8080/__unit/chaos/rules -H 'Content-Type: application/json' -d '{
+  "id": "reject-one-refresh", "scope": "request", "fault": "refresh_rejected",
+  "match": {"path": "/oauth/v2/refresh"}, "when": {"times": 1}
+}'
+```
+
+Each vendor answers in its own documented shape:
+
+- **Clover** (`POST /oauth/v2/refresh`): 401 `{"message": "The refresh token
+  is invalid."}`.
+- **Square** (`POST /oauth2/token`, `grant_type: refresh_token`): 401,
+  `errors[0]` carries `category: "AUTHENTICATION_ERROR"`,
+  `code: "UNAUTHORIZED"`.
+- **Lightspeed** (`POST /api/1.0/token`, form-encoded
+  `grant_type=refresh_token`): 401 `{"error": "Unauthorized", "message":
+  ...}`.
+
+  Square's and Lightspeed's token endpoint also serves the code exchange, and
+  the fault fires on the match alone, so add `"body_contains":
+  "refresh_token"` to `match` there — a code exchange never carries that
+  string, a refresh always does — or a one-shot rule is spent on the exchange.
+- **Toast** has no refresh route at all — a client logs in again when its
+  token expires — so the rule is matched on
+  `POST /authentication/v1/authentication/login` instead, with
+  `params.detail` set to the login surface's own documented phrase
+  (`INVALID_CREDENTIALS_MESSAGE`, "The credentials in your request are not
+  valid."): 401 code `10007`.
+
+The stored token is never touched — the fault fires instead of the handler,
+so there is nothing to roll back — and the next call succeeds exactly as if
+the rule had never been armed. `GET /__unit/requests?operation_id=RefreshToken`
+shows the faulted call with `fault: "refresh_rejected"` (Clover's dedicated
+refresh route has that operation id; Square's and Lightspeed's token
+endpoints share one operation id across both grant types, so filter those by
+route or rule instead).
+
+Under `strict_rules`, only `match.route` is checked against the route table
+at arm time — a `match.path` rule (as above) is never refused as dead, even
+when the path is misspelled. A typo there shows up only as `fires: 0` at
+`GET /__unit/chaos`, not as a 400 on arming.
+
+## From an SDK: in-band triggers
+
+A consumer talking to the unit through a vendor's own SDK often cannot add a
+header or call `/__unit/chaos/rules` at all, but it can set a reference id. So
+a vendor declares which **ordinary request fields** are scanned for a magic
+prefix, and a value of `chaos:<fault>` (or `chaos:<fault>:k=v` for the fault's
+parameters) in one of them arms that fault **for that request only**:
+
+```python
+square.client.post(
+    "/v2/orders",
+    headers=square.seed.auth,
+    json={"idempotency_key": "t-1", "order": {"reference_id": "chaos:rate_limit", ...}},
+)
+# -> 429, exactly as a standing rate_limit rule would have answered
+```
+
+The rules of the mechanism:
+
+- It is reached **only under the `chaos` capability**, from the same choke
+  point that evaluates standing rules. A profile with `chaos` off ignores
+  the value entirely, so a magic string cannot become a second arming path.
+- An in-band trigger **wins over a standing rule** and touches no rule
+  counter, so an `every`/`nth` sequence is not perturbed by it. The fire is
+  still recorded in the chaos history under rule id `magic`.
+- Candidate order is a contract: declared body paths first, then query
+  parameters, then headers. Only `str` values are candidates, and a later
+  candidate's parameters overwrite an earlier one's under the same key. At
+  most one fault is armed per request — the first found.
+- `chaos:` alone names no fault and is skipped rather than rejected.
+- Body paths are read through a content-type-general body reader, so a
+  vendor's declared paths are reachable on a form-encoded request too.
+- The mechanism is `provenance: judgment`. Square's own sandbox drives
+  faults from magic values in ordinary fields
+  ([Square sandbox testing](https://developer.squareup.com/docs/devtools/sandbox/testing)),
+  which is the prior art; the other three vendors publish no equivalent, so
+  the `chaos:` prefix is this project's own, chosen so that no real value
+  would carry it.
+
+### Where each vendor declares its fields
+
+| Vendor | Body paths | Query parameter |
+|---|---|---|
+| Square | `order.reference_id`, `idempotency_key`, `subscription.name` | `state` |
+| Clover | `note`, `title`, `externalReferenceId` | `state` |
+| Toast | `externalId`, `deliveryInfo.notes` | `pageToken` |
+| Lightspeed | `url` (a webhook's) | `state` |
+
+Each is a `MagicTriggerSpec` in that vendor's `vendor.py`, returned from its
+`magic` property; none declares a header. The prefix is `chaos:` for all
+four.
+
+## Sharing one unit across tests
+
+A unit built once for a whole session is cheap, and it is where the second
+test lies to you. **A vendor with single-use or rotating state needs an
+explicit `reset()` between tests.** Clover retires a refresh token the moment
+it is used, so the second test in a session to refresh gets Clover's real
+`401` for a reason unrelated to what it tests; minted tokens, created orders
+and armed rules accumulate the same way, more quietly. Under
+`pytest-randomly` *which* test pays changes run to run, which reads as a flake
+and is not one.
+
+`POST /__unit/state/reset` — [`driver.reset()`](unit.md#driver) — re-hydrates
+the store from the seed document with no restart, putting the seeded
+single-use token back, and clears the request log and the journal with it.
+Armed chaos rules are the one thing it leaves in place. The per-test fixture
+is two calls on the way in and one on the way out:
+
+```python
+import pytest
+from vendorfake.testing import served
+
+
+@pytest.fixture(scope="session")
+def clover():
+    with served("clover", "oauth-only") as child:
+        yield child
+
+
+@pytest.fixture(autouse=True)
+def fresh(clover):
+    clover.reset()  # the seed scenario again: single-use token back, request log empty
+    clover.reset_chaos()  # no rule from a previous test, whatever order ran
+    yield
+    clover.reset_chaos()  # a rule this test leaked cannot blame the next one
+```
+
+The same two calls over HTTP, for a suite in another language or a
+container: `POST /__unit/state/reset` and `POST /__unit/chaos/reset`
+(`DELETE /__unit/requests` — `clear_requests()` — draws a line under setup
+*without* a reset). `reset()` also drops every webhook subscriber a test
+registered — subscribe *after* the reset, not in a session fixture above it.
+
+**A virtual clock is not rewound.** `reset()` re-hydrates against the
+clock as it stands, and no control-plane route sets it back, so every
+absolute expiry in the seed moves forward by whatever an earlier test
+advanced — an assertion on an exact `expires_at` passes or fails on test
+order. On a shared [virtual clock](unit.md#virtual), assert relative to
+`clock()` or give the advancing test its own unit.
+
+The [pytest plugin](../start/bindings.md#the-pytest-plugin)'s
+`vendorfake_unit` is function-scoped for exactly this reason: a fresh
+in-process unit costs milliseconds, so it builds one per test and none of the
+above applies. Reach for the shared shape only when the unit is a process or
+a container and starting it per test is what costs.
+
+## Provenance
+
+Every behaviour in this project is either something a vendor documents, or
+something this project decided because the vendor's documentation is
+silent. Provenance is the label that says which, published in three places
+rather than left as something only the source code remembers.
+
+### In the source
+
+A behaviour reproducing something a vendor publishes cites the page and is
+marked `DOCUMENTED`. Anything invented because the vendor's documentation is
+silent is marked `JUDGMENT` and explains the choice. Transport-level
+behaviour no vendor documents is labelled `provenance: transport`. Grep any
+vendor surface module for `JUDGMENT` to see every place this project decided
+something the vendor never told it.
+
+### On an error response: `status_provenance`
+
+Every shaped error carries a `status_provenance` field — `"documented"` or
+`"judgment"` — alongside `kind` and any extra `info`. By default it rides
+as the `Vendorfake-Status-Provenance` response header (and
+`Vendorfake-Error-Kind`, `Vendorfake-Error-Info`); a profile's
+`errors.sidecar` (or `VENDORFAKE_ERROR_SIDECAR`) can move it into the body
+instead, or carry it in both places:
+
+```sh
+curl -si -X POST http://localhost:8080/orders/v2/prices \
+  -H 'Authorization: Bearer unit-seeded-toast-access-token-read-only' \
+  -H "Toast-Restaurant-External-ID: $R" -d '...' | grep -iE '^(HTTP|vendorfake-)'
+# HTTP/1.1 403 Forbidden
+# vendorfake-error-kind: forbidden_scope
+# vendorfake-status-provenance: documented
+```
+
+A `documented` status is the vendor's own answer for this failure. A
+`judgment` status is this project's choice where the vendor never said. On
+Toast a missing scope answers **403**, which the vendor documents; whether a
+malformed guid answers 400 with a specific message is documented nowhere and
+is therefore `judgment`, labelled at the site in `toast/errors.py`.
+
+### On a fault: `provenance: vendor | transport`
+
+`GET /__unit/chaos` and `GET /__unit/info` publish a provenance per fault,
+and [the generated fault reference](../reference/faults.md) lists it for every
+built-in one:
+
+- `provenance: vendor` — reproduces a failure mode the vendor itself
+  documents (`rate_limit`, `timeout`, `token_expiry`, ...).
+- `provenance: transport` — reproduces something no vendor documents because
+  it isn't a vendor behaviour: an HTML error page behind a 502, a response
+  missing a documented field, a connection that drops mid-transfer.
+
+A consumer whose retry logic branches on a vendor's documented error code
+needs to know whether this fake's answer for an edge case is something the
+vendor promised or something this project guessed at reasonably.

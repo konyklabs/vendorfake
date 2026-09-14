@@ -8,13 +8,16 @@ why each one names the thing that would be there if the property broke.
 
 from __future__ import annotations
 
+import inspect
 import json
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.unit.asgi.test_adapt import call
-from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, FrameworkTripwire, create_app, registered_methods
+from vendorfake.asgi import HTTP_METHODS, OPENAPI_PATH, create_app, registered_methods
+from vendorfake.asgi.adapt import MAX_BODY_BYTES
 from vendorfake.core.transport.inprocess import in_process
 
 EXPECTED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE"})
@@ -30,6 +33,15 @@ def test_the_verb_set_is_complete(app: Any) -> None:
     """
     assert set(HTTP_METHODS) == EXPECTED_METHODS
     assert registered_methods(app) == EXPECTED_METHODS
+
+
+def test_the_catch_all_declares_no_typed_parameter(app: Any) -> None:
+    """The route takes the raw request and nothing else: a ``Depends``, ``Header``,
+    ``Body`` or ``Cookie`` parameter would let the framework validate, parse or
+    reject before the unit sees the request."""
+    catch_all = next(r for r in app.routes if getattr(r, "path", None) == "/{full_path:path}")
+    parameters = list(inspect.signature(catch_all.endpoint).parameters)
+    assert parameters == ["request"], parameters
 
 
 def test_there_is_exactly_one_catch_all_route(app: Any) -> None:
@@ -82,6 +94,46 @@ def test_a_malformed_json_body_is_400_and_never_422(app: Any) -> None:
     assert response.headers["x-unit-error"] == "invalid_json"
 
 
+def test_a_body_at_exactly_the_limit_is_accepted(app: Any) -> None:
+    """The boundary itself must not be refused: the limit is "exceeds", not
+    "reaches"."""
+    payload = b"x" * MAX_BODY_BYTES
+    response = call(app, "POST", "/v2/orders/abc", content=payload)
+    assert response.status_code == 200
+    assert response.json()["raw_len"] == MAX_BODY_BYTES
+
+
+def test_an_oversized_body_is_refused_unread_as_the_vendor_s_bad_request(app: Any) -> None:
+    """audit O4: a body over ``MAX_BODY_BYTES`` gets the vendor's own 400, and
+    the adapter never finishes reading it.
+
+    The body is a generator that counts every byte it yields, so this proves
+    the second half by construction rather than by timing: if the adapter had
+    read the whole 9 MiB before answering, ``sent[0]`` would equal it. The
+    generator has no declared length, so httpx cannot short-circuit this by
+    setting ``content-length`` itself -- the adapter's own streaming cutoff is
+    what stops the read.
+    """
+    total_bytes = MAX_BODY_BYTES + 1024 * 1024  # 9 MiB
+    chunk_bytes = 64 * 1024
+    sent = [0]
+
+    async def counting_body() -> Any:
+        remaining = total_bytes
+        while remaining > 0:
+            piece = min(chunk_bytes, remaining)
+            sent[0] += piece
+            remaining -= piece
+            yield b"x" * piece
+
+    response = call(app, "POST", "/v2/orders/abc", content=counting_body())
+    assert response.status_code == 400
+    assert response.headers["x-unit-error"] == "bad_request"
+    assert response.json()["error"]["code"] == "bad_request"
+    assert str(MAX_BODY_BYTES) in response.json()["error"]["detail"]
+    assert sent[0] < total_bytes, f"the adapter read all {sent[0]} bytes instead of stopping at the limit"
+
+
 def test_a_form_encoded_body_is_understood_over_the_transport(app: Any) -> None:
     """The shape that broke two of three earlier implementations.
 
@@ -116,7 +168,7 @@ def test_no_middleware_is_installed(app: Any) -> None:
     Every middleware is a chance to rewrite the bytes the unit produced, and
     byte-for-byte agreement between bindings is a conformance contract. The
     framework's own exception middleware is the exception, in both senses: it
-    is what routes to the tripwire handlers below.
+    is what routes to the exception handlers.
     """
     installed = [entry.cls.__name__ for entry in app.user_middleware]
     assert installed == []
@@ -173,75 +225,23 @@ def test_the_vendor_decorate_hook_survives_the_transport(app: Any) -> None:
 
     The alternative design -- setting it in middleware at the edge, which the
     fidelity audit suggested -- would give it to the HTTP binding only, so the
-    in-process and file-drop bindings would silently lack it.
+    in-process binding would silently lack it.
     """
     assert call(app, "GET", "/v2/orders/abc").headers["acme-version"] == "2024-01-01"
 
 
 # ---------------------------------------------------------------------------
-# The tripwire.
+# The exception handler.
 # ---------------------------------------------------------------------------
 
 
-def test_framework_answered_is_zero_after_ordinary_traffic(app: Any, tripwire: FrameworkTripwire) -> None:
-    """The number the whole design is trying to keep at zero.
-
-    Read over the wire rather than off the object, because over the wire is the
-    only place a parent process can read it -- and reading it the same way here
-    means the out-of-process test is asserting the same thing this one is.
-    """
-    for method, path in (
-        ("GET", "/v2/orders/abc"),
-        ("POST", "/v2/orders/abc"),
-        ("GET", "/nope"),
-        ("HEAD", "/v2/plain"),
-    ):
-        call(app, method, path)
-    assert tripwire.count == 0, tripwire.recent
-    assert call(app, "GET", "/__unit/health").json()["framework_answered"] == 0
-
-
-def test_an_exotic_verb_trips_the_wire_and_still_gets_the_vendor_s_answer(
-    app: Any, tripwire: FrameworkTripwire
-) -> None:
-    """A method outside the registered set is the one hole left, by design.
-
-    Starlette raises its 405 before the catch-all is reached. The handler
-    records that it happened and then dispatches to the unit anyway, so the
-    consumer still gets a vendor-shaped body and the counter -- not the
-    response -- is where the hole is reported. Both halves are asserted,
-    because a fix that silenced the counter would look like a pass.
-    """
+def test_an_exotic_verb_still_gets_the_vendor_s_answer(app: Any) -> None:
+    """Starlette raises its 405 before the catch-all is reached; the exception
+    handler dispatches to the unit anyway, so the consumer still gets a
+    vendor-shaped body."""
     response = call(app, "PROPFIND", "/no/such/path")
     assert response.status_code == 404
     assert response.json() == {"error": {"code": "no_route", "path": "/no/such/path"}}
-    assert tripwire.count == 1
-    assert "PROPFIND" in tripwire.recent[0]
-    assert call(app, "GET", "/__unit/health").json()["framework_answered"] == 1
-
-
-def test_a_unit_built_without_a_tripwire_reports_zero(unit: Any) -> None:
-    """The default is the true answer, not a stub.
-
-    With no framework in front of the unit, nothing could have answered ahead
-    of it, so 0 is a fact rather than a placeholder -- which matters because
-    the in-process conformance run asserts the same field.
-    """
-    assert in_process(unit).get("/__unit/health").json()["framework_answered"] == 0
-
-
-def test_the_tripwire_bounds_what_it_remembers(app: Any) -> None:
-    """A counter, plus a bounded sample. Not an unbounded log.
-
-    A long-running server that recorded every hit would leak; and after the
-    first hit the invariant is already broken, so the sample only has to be
-    big enough to say what happened.
-    """
-    wire = FrameworkTripwire(limit=2)
-    for index in range(5):
-        wire.record(f"hit {index}")
-    assert wire.count == 5
-    assert wire.recent == ["hit 0", "hit 1"]
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +304,177 @@ def test_create_app_is_a_factory(unit: Any) -> None:
     first = create_app(unit)
     second = create_app(unit)
     assert first is not second
+
+
+# ---------------------------------------------------------------------------
+# The response observer: the served-side validator's one seam.
+# ---------------------------------------------------------------------------
+
+
+def test_an_observer_sees_the_request_and_the_answer_and_cannot_change_them(unit: Any) -> None:
+    """It is handed the very ``UnitRequest`` the unit answered and the
+    ``UnitResponse`` it gave, before either is converted back to HTTP -- which is
+    what lets a schema check over a socket be the same check as in process."""
+    seen: list[tuple[Any, Any]] = []
+    app = create_app(unit, observer=lambda request, response: seen.append((request, response)))
+    response = call(app, "POST", "/v2/orders/abc?q=1", content=b'{"note":"hi"}')
+    assert response.status_code == 200
+    assert len(seen) == 1
+    request, answered = seen[0]
+    assert (request.method, request.path, dict(request.query)) == ("POST", "/v2/orders/abc", {"q": "1"})
+    assert request.raw_body == b'{"note":"hi"}'
+    assert answered.status == 200
+    # Untouched: the observer read, and the consumer got what the unit produced.
+    assert response.json()["order_id"] == "abc"
+
+
+def test_an_observer_that_refuses_turns_the_answer_into_the_vendor_s_500(unit: Any) -> None:
+    """A violation a consumer can see. Not a log line and not a framework 500:
+    the point of serving with ``--validate`` is that a fake which drifts from the
+    vendor's document fails the test driving it, over the wire, in the vendor's
+    own error shape."""
+
+    def refuse(request: Any, response: Any) -> None:
+        raise AssertionError("GET /v2/orders/{order_id} answered 200 with a body that fails")
+
+    app = create_app(unit, observer=refuse)
+    response = call(app, "GET", "/v2/orders/abc")
+    assert response.status_code == 500
+    assert response.headers["x-unit-error"] == "internal"
+    body = response.json()
+    assert body["error"]["code"] == "internal"
+    assert "a body that fails" in body["error"]["detail"]
+
+
+def test_a_silent_observer_changes_no_byte_of_the_answer(unit: Any, app: Any) -> None:
+    """The observer is a witness: with one that says nothing, the wire answer is
+    the same bytes as with none, headers included but for the request id."""
+    plain = call(app, "GET", "/v2/orders/abc")
+    observed = call(create_app(unit, observer=lambda request, response: None), "GET", "/v2/orders/abc")
+    assert (observed.status_code, observed.content) == (plain.status_code, plain.content)
+    assert {k: v for k, v in observed.headers.items() if k != "x-unit-request-id"} == {
+        k: v for k, v in plain.headers.items() if k != "x-unit-request-id"
+    }
+
+
+# ---------------------------------------------------------------------------
+# One listener per surface, and the control token on the document the adapter serves (konyklabs/roadmap#134).
+# ---------------------------------------------------------------------------
+
+CONTROL_TOKEN = "asgi-control-token-under-test"
+
+
+def test_the_vendor_surface_answers_every_control_path_with_the_vendor_s_404(unit: Any) -> None:
+    """The same answer as any path the vendor does not serve, the served document included."""
+    vendor_app = create_app(unit, surface="vendor")
+    unmatched = call(vendor_app, "GET", "/no/such/path")
+    for path in ("/__unit/info", OPENAPI_PATH, "/__unit/nope"):
+        response = call(vendor_app, "GET", path)
+        assert response.status_code == unmatched.status_code == 404
+        assert response.headers["x-unit-error"] == "not_found"
+        assert "vendorfake-near-miss" in response.headers
+        assert response.json() == {"error": {"code": "no_route", "path": path}}
+    assert call(vendor_app, "GET", "/v2/stable").status_code == 200
+
+
+def test_the_control_surface_answers_a_vendor_path_with_a_404_naming_the_vendor_port(unit: Any) -> None:
+    control_app = create_app(unit, surface="control", vendor_port=18080)
+    refused = call(control_app, "POST", "/v2/orders/abc", json={"a": 1})
+    assert refused.status_code == 404
+    assert refused.headers["content-type"] == "application/json"
+    assert refused.json() == {"message": "POST /v2/orders/abc is the vendor surface; it is served on port 18080"}
+    assert call(control_app, "GET", "/__unit/health").status_code == 200
+    assert call(control_app, "GET", OPENAPI_PATH).json()["openapi"].startswith("3.")
+
+
+def test_a_control_surface_without_the_vendor_port_is_refused_at_construction(unit: Any) -> None:
+    with pytest.raises(ValueError, match="vendor_port"):
+        create_app(unit, surface="control")
+
+
+def test_the_served_document_is_refused_without_the_control_token() -> None:
+    """The adapter serves ``/__unit/openapi.json`` itself, so it applies the kernel's check before it does."""
+    from tests.fakes import make_unit, route
+    from vendorfake.core.control.plane import control_plane_routes
+    from vendorfake.core.kernel.reply import json_
+
+    built: Any = make_unit(
+        [route("GET", "/v2/stable", lambda args: json_({"stable": True}))],
+        control_routes=control_plane_routes,
+        control_token=CONTROL_TOKEN,
+    )
+    try:
+        for app in (create_app(built), create_app(built, surface="control", vendor_port=18080)):
+            refused = call(app, "GET", OPENAPI_PATH)
+            assert refused.status_code == 401
+            assert refused.headers["x-unit-error"] == "unauthorized"
+            assert CONTROL_TOKEN not in refused.text
+            assert all(CONTROL_TOKEN not in value for value in refused.headers.values())
+            wrong = call(app, "GET", OPENAPI_PATH, headers={"vendorfake-control-token": "not-it"})
+            assert wrong.status_code == 401
+            allowed = call(app, "GET", OPENAPI_PATH, headers={"vendorfake-control-token": CONTROL_TOKEN})
+            assert allowed.status_code == 200
+            assert "openapi" in allowed.json()
+    finally:
+        built.stop()
+
+
+def raw_call(app: Any, method: str, raw_path: str, **kwargs: Any) -> httpx.Response:
+    """``call`` with the path sent byte for byte: against a base URL, httpx would read ``//x`` as a host."""
+    return call(app, method, httpx.URL("http://unit.test").copy_with(raw_path=raw_path.encode("ascii")), **kwargs)
+
+
+@pytest.mark.parametrize("raw_path", ["/%5F%5Funit/openapi.json", "/__unit%2Fopenapi.json"])
+def test_a_percent_encoded_document_path_is_not_the_document_on_the_vendor_surface(unit: Any, raw_path: str) -> None:
+    """The fast path compares the raw path the surface check reads; the decoded one would name the document."""
+    response = raw_call(create_app(unit, surface="vendor"), "GET", raw_path)
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+
+
+def test_the_literal_document_path_is_still_the_document(unit: Any) -> None:
+    response = call(create_app(unit), "GET", OPENAPI_PATH)
+    assert response.status_code == 200
+    assert response.json()["openapi"].startswith("3.")
+
+
+@pytest.mark.parametrize(
+    ("method", "raw_path"),
+    [
+        ("GET", "//__unit/info"),
+        ("GET", "///__unit/info"),
+        ("GET", "/__unit//info"),
+        ("POST", "//__unit/state/reset"),
+    ],
+)
+def test_the_vendor_surface_refuses_what_the_router_reads_as_the_control_plane(
+    unit: Any, method: str, raw_path: str
+) -> None:
+    """The router drops empty segments, so each of these reaches a control route unless the surface check does too."""
+    unit.context.store.collection("orders").insert({"id": "ord_probe"})
+    before = unit.context.store.entity_digest()
+    response = raw_call(create_app(unit, surface="vendor"), method, raw_path, json={} if method == "POST" else None)
+    assert response.status_code == 404
+    assert response.headers["x-unit-error"] == "not_found"
+    assert response.json() == {"error": {"code": "no_route", "path": raw_path}}
+    assert unit.context.store.entity_digest() == before
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_404_on_the_vendor_surface(unit: Any) -> None:
+    """Starlette answers an unregistered verb itself; its handler must still split the surfaces, or a 405's
+    ``allowed`` list would enumerate control routes verb by verb."""
+    response = call(create_app(unit, surface="vendor"), "PROPFIND", "/__unit/state/reset")
+    assert response.status_code == 404
+    assert response.json() == {"error": {"code": "no_route", "path": "/__unit/state/reset"}}
+
+
+def test_a_verb_the_framework_refuses_gets_the_vendor_surface_404_on_the_control_surface(unit: Any) -> None:
+    response = call(create_app(unit, surface="control", vendor_port=18080), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 404
+    assert response.json() == {"message": "PROPFIND /v2/orders/abc is the vendor surface; it is served on port 18080"}
+
+
+def test_a_verb_the_framework_refuses_is_still_the_kernel_s_405_on_both_surfaces(unit: Any) -> None:
+    response = call(create_app(unit), "PROPFIND", "/v2/orders/abc")
+    assert response.status_code == 405
+    assert response.json()["error"]["info"]["allowed"] == ["GET", "POST"]

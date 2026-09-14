@@ -9,8 +9,11 @@ import pytest
 from vendorfake.core.chaos.engine import ChaosDecision
 from vendorfake.core.chaos.faults import (
     AUTH_PHASE_FAULTS,
+    COMMIT_FAULTS,
     FAULT_PARAM_KEYS,
+    HANDLER_PHASE_FAULTS,
     apply_request_fault,
+    commit_mode,
 )
 from vendorfake.core.chaos.rules import BUILTIN_FAULTS
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
@@ -62,6 +65,30 @@ def test_token_expiry_does_nothing_in_the_pre_phase_and_fires_in_the_post_auth_o
 
 def test_the_phase_split_is_data_and_not_a_hard_coded_comparison() -> None:
     assert set(AUTH_PHASE_FAULTS) == {"token_expiry"}
+
+
+def test_refresh_rejected_raises_unauthorized_on_the_refresh_token_field_in_the_pre_phase() -> None:
+    with pytest.raises(UnitError) as caught:
+        _apply("refresh_rejected")
+    assert caught.value.kind is UnitErrorKind.UNAUTHORIZED
+    assert caught.value.field == "refresh_token"
+    assert caught.value.detail == "The refresh token is invalid."
+    assert caught.value.info is not None
+    assert caught.value.info["chaos_rule"] == "r1"
+
+
+def test_refresh_rejected_does_nothing_in_the_post_auth_phase() -> None:
+    _apply("refresh_rejected", "post_auth")
+
+
+def test_refresh_rejected_detail_is_overridden_by_params() -> None:
+    with pytest.raises(UnitError) as caught:
+        _apply("refresh_rejected", detail="The credentials in your request are not valid.")
+    assert caught.value.detail == "The credentials in your request are not valid."
+
+
+def test_refresh_rejected_param_keys_are_exactly_detail() -> None:
+    assert FAULT_PARAM_KEYS["refresh_rejected"] == ("detail",)
 
 
 def test_retry_after_seconds_is_coerced_from_a_string() -> None:
@@ -197,6 +224,27 @@ def test_a_webhook_scope_fault_named_by_a_request_rule_does_nothing_loudly() -> 
     assert warned == ["unknown request-scope fault ignored"]
 
 
+def test_authorize_denied_is_a_handler_phase_fault_the_request_phases_leave_alone() -> None:
+    """The route answers it, so ``apply_request_fault`` neither raises nor
+    warns in either phase -- an "unknown fault" warning here would be wrong."""
+    assert "authorize_denied" in HANDLER_PHASE_FAULTS
+    assert FAULT_PARAM_KEYS["authorize_denied"] == ()
+    warned: list[str] = []
+
+    class Recording(SilentLogger):
+        def warn(self, msg, fields=None):  # type: ignore[no-untyped-def]
+            warned.append(msg)
+
+    for phase in ("pre", "post_auth"):
+        apply_request_fault(
+            _decision("authorize_denied"),
+            phase,  # type: ignore[arg-type]
+            clock=Clock("real"),
+            log=Recording(),
+        )
+    assert warned == []
+
+
 def test_the_parameter_key_table_covers_every_catalogued_fault() -> None:
     assert set(FAULT_PARAM_KEYS) == {spec.name for spec in BUILTIN_FAULTS}
 
@@ -215,3 +263,45 @@ def test_every_declared_parameter_appears_in_the_catalogue_prose() -> None:
     for name, keys in FAULT_PARAM_KEYS.items():
         for key in keys:
             assert key in prose[name], f"{name}.{key} is implemented but undocumented"
+
+
+# ---------------------------------------------------------------------------
+# params.commit
+# ---------------------------------------------------------------------------
+
+
+def test_commit_is_declared_on_exactly_the_four_faults_that_discard_the_answer() -> None:
+    """`slow_body` delivers the handler's answer intact, so there is nothing
+    for `commit: after` to withhold and the key is not offered on it."""
+    assert {"malformed_body", "body_mutation", "connection_reset", "empty_response"} == COMMIT_FAULTS
+    carrying = {name for name, keys in FAULT_PARAM_KEYS.items() if "commit" in keys}
+    assert carrying == COMMIT_FAULTS
+
+
+def test_commit_defaults_to_before_when_the_param_is_absent() -> None:
+    assert commit_mode(_decision("connection_reset")) == "before"
+    assert commit_mode(_decision("rate_limit")) == "before"
+
+
+def test_commit_is_read_verbatim_when_it_names_a_mode() -> None:
+    assert commit_mode(_decision("malformed_body", commit="after")) == "after"
+    assert commit_mode(_decision("malformed_body", commit="before")) == "before"
+
+
+def test_an_unknown_commit_mode_is_refused_by_name() -> None:
+    with pytest.raises(UnitError) as caught:
+        commit_mode(_decision("body_mutation", commit="sometimes"))
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert caught.value.field == "params.commit"
+    assert caught.value.rule_id == "r1"
+    assert "sometimes" in caught.value.detail
+
+
+def test_commit_on_a_fault_that_cannot_honour_it_is_refused() -> None:
+    """`slow_body` and every request-phase fault: accepting the key silently
+    would read as a rollback the kernel never performs."""
+    for fault in ("slow_body", "rate_limit", "authorize_denied"):
+        with pytest.raises(UnitError) as caught:
+            commit_mode(_decision(fault, commit="after"))
+        assert caught.value.field == "params.commit", fault
+        assert caught.value.kind is UnitErrorKind.INVALID_VALUE, fault

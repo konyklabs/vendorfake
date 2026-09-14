@@ -8,6 +8,8 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 from vendorfake.toast.model.dates import business_date, parse_business_date, parse_rest_date, rest_date, webhook_date
 
 NOON_15_JAN_2025_UTC_MS = 1736951400000  # 2025-01-15T14:30:00.000Z
+FIRST_INSTANT_MS = -62135596800000  # 0001-01-01T00:00:00.000Z, datetime's MINYEAR: a ms earlier overflows
+YEAR_999_MS = -30641760000000  # 0999-01-01T00:00:00.000Z, the last three-digit year
 
 
 def test_the_rest_spelling_is_the_documented_one() -> None:
@@ -37,6 +39,26 @@ def test_every_documented_query_spelling_parses_to_the_same_instant(text: str) -
 
 def test_a_parsed_instant_round_trips_through_the_rest_spelling() -> None:
     assert parse_rest_date(rest_date(NOON_15_JAN_2025_UTC_MS + 123), field="x") == NOON_15_JAN_2025_UTC_MS + 123
+
+
+@pytest.mark.parametrize(
+    ("epoch_ms", "rest", "webhook"),
+    [
+        (FIRST_INSTANT_MS, "0001-01-01T00:00:00.000+0000", "0001-01-01T00:00:00.000Z"),
+        (YEAR_999_MS, "0999-01-01T00:00:00.000+0000", "0999-01-01T00:00:00.000Z"),
+    ],
+)
+def test_a_year_below_1000_keeps_four_digits(epoch_ms: int, rest: str, webhook: str) -> None:
+    """Both spellings are built arithmetically, so a year below 1000 keeps its
+    padding: glibc's ``%Y`` does not pad it and answered
+    ``1-01-01T00:00:00.000+0000``, which fails Toast's ``date-time`` and this
+    module's own parser (konyklabs/roadmap#141). Red on glibc only -- BSD libc
+    pads anyway, so on a laptop this pins the behaviour instead of reproducing
+    the defect, and the job that runs it is the one on main.
+    """
+    assert rest_date(epoch_ms) == rest
+    assert webhook_date(epoch_ms) == webhook
+    assert parse_rest_date(rest_date(epoch_ms), field="x") == epoch_ms
 
 
 @pytest.mark.parametrize(

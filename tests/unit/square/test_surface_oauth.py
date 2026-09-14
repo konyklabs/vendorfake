@@ -1214,3 +1214,75 @@ def test_clock_start_makes_a_refresh_s_documented_access_token_lifetime_reproduc
             seen.append(refreshed.json()["expires_at"])
 
     assert seen == [expected, expected]
+
+
+# ---------------------------------------------------------------------------
+# The authorize_denied fault: the same denial the in-band prompt produces.
+# ---------------------------------------------------------------------------
+
+DENY_RULE: dict[str, Any] = {
+    "id": "decline-once",
+    "scope": "request",
+    "fault": "authorize_denied",
+    "match": {"route": "GET /oauth2/authorize"},
+    "when": {"times": 1},
+}
+
+
+def test_an_armed_denial_redirects_with_the_documented_denial_and_mints_no_code(h: Harness) -> None:
+    """DOCUMENTED -- a denial redirects with
+    ``error=access_denied&error_description=user_denied``.
+    https://developer.squareup.com/docs/oauth-api/receive-and-manage-tokens
+
+    The fault reaches the handler rather than rewriting its answer, so no code
+    is stored: a rewritten redirect would still have minted one.
+    """
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    codes = h.unit.context.store.collection(COL.codes)
+    before = len(codes.all())
+
+    denied = h.authorize(state="xyz")
+    assert denied.status == 302
+    assert denied.headers["vendorfake-fault"] == "authorize_denied"
+    assert denied.headers["vendorfake-rule"] == "decline-once"
+    query = query_of(denied.headers["location"])
+    assert query["error"] == ["access_denied"]
+    assert query["error_description"] == ["user_denied"]
+    assert query["state"] == ["xyz"]
+    assert "code" not in query
+    assert len(codes.all()) == before
+
+
+def test_the_second_authorize_approves_and_its_code_obtains_a_token(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    assert "error" in query_of(h.authorize(state="xyz").headers["location"])
+
+    approved = h.authorize(state="xyz")
+    assert approved.status == 302
+    assert "vendorfake-fault" not in approved.headers
+    code = query_of(approved.headers["location"])["code"][0]
+    obtained = h.token(grant_type="authorization_code", code=code, client_secret=APPLICATION_SECRET)
+    assert obtained.status == 200, obtained.text
+    assert obtained.json()["access_token"]
+
+
+def test_the_in_band_prompt_still_denies_once_the_rule_is_spent(h: Harness) -> None:
+    """Two levers, one answer. ``unit_prompt=deny`` is for a test that can edit
+    the authorization URL; the fault is for the one that cannot."""
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    h.authorize(state="xyz")
+    prompted = h.authorize(state="xyz", unit_prompt="deny")
+    assert prompted.status == 302
+    assert "vendorfake-fault" not in prompted.headers
+    query = query_of(prompted.headers["location"])
+    assert query["error"] == ["access_denied"]
+    assert query["error_description"] == ["user_denied"]
+    assert query["state"] == ["xyz"]
+
+
+def test_the_request_log_names_the_fault_on_the_declined_call_only(h: Harness) -> None:
+    assert h.api.post("/__unit/chaos/rules", DENY_RULE).status == 200
+    h.authorize(state="xyz")
+    h.authorize(state="xyz")
+    records = h.api.get("/__unit/requests").json()["requests"]
+    assert [(r["fault"], r["rule_id"]) for r in records if r.get("fault")] == [("authorize_denied", "decline-once")]

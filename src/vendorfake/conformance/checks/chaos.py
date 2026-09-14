@@ -34,6 +34,7 @@ __all__ = [
     "identical_rules_and_traffic_agree",
     "in_band_trigger_respects_the_capability_gate",
     "one_shot_chaos_does_not_leak",
+    "refresh_rejected_is_the_vendors_own_401_and_commits_nothing",
 ]
 
 _PROBE_FAULT = "rate_limit"
@@ -381,4 +382,105 @@ def every_matching_rule_counts_its_match(env: CheckEnv) -> str:
         f"{route.key}: two requests claimed by the upper rule (matches 2, fires 2); the lower rule "
         f"counted both (matches 2, fires 0); with the upper rule removed, two more requests answered "
         f"{later} and the lower rule stands at matches 4, fires 0"
+    )
+
+
+# ---------------------------------------------------------------------------
+# C37 -- refresh_rejected is the vendor's own 401 and commits nothing.
+# ---------------------------------------------------------------------------
+
+_REFRESH_REJECTED_RULE = "c37-refresh-rejected"
+
+
+@check(
+    id="C37",
+    name="chaos: refresh_rejected is the vendor's own 401 and commits nothing",
+    asserts=(
+        "A one-shot refresh_rejected rule answers 401 with x-unit-error=unauthorized and the "
+        "vendorfake-fault/vendorfake-rule headers naming it, leaves the state digest untouched, "
+        "records the faulted call as such at GET /__unit/requests, and does not fire again once its "
+        "budget is spent."
+    ),
+    requires=Requires(surface_route=True, chaos=True),
+)
+def refresh_rejected_is_the_vendors_own_401_and_commits_nothing(env: CheckEnv) -> str:
+    route = env.first_vendor_route()
+    digest_before = env.state()["digest"]
+    _install_rule(
+        env,
+        {
+            "id": _REFRESH_REJECTED_RULE,
+            "scope": "request",
+            "fault": "refresh_rejected",
+            "match": {"route": route.key},
+            "when": {"times": 1},
+        },
+    )
+
+    first = env.client.call(route.method, route.probe_path, json_body={})
+    require(
+        first.status == 401,
+        f"{route.key} answered {first.status} under an armed refresh_rejected rule, expected 401. "
+        f"core/chaos/faults.py::apply_request_fault must raise UnitErrorKind.UNAUTHORIZED for "
+        f"refresh_rejected in the pre phase, before the handler runs.",
+    )
+    require(
+        first.error_kind == "unauthorized",
+        f"{route.key} answered 401 with x-unit-error={first.error_kind!r} under refresh_rejected, "
+        f"expected 'unauthorized'. The fault must raise UnitErrorKind.UNAUTHORIZED, not some other "
+        f"kind that happens to shape to 401.",
+    )
+    require(
+        first.header("vendorfake-fault") == "refresh_rejected",
+        f"{route.key}'s 401 under an armed refresh_rejected rule carries "
+        f"vendorfake-fault={first.header('vendorfake-fault')!r}, expected 'refresh_rejected'. "
+        f"kernel/unit.py::_shape stamps this header from the raised UnitError.fault on every "
+        f"faulted response; a missing or wrong value means the fault name never reached the error.",
+    )
+    require(
+        first.header("vendorfake-rule") == _REFRESH_REJECTED_RULE,
+        f"{route.key}'s 401 under an armed refresh_rejected rule carries "
+        f"vendorfake-rule={first.header('vendorfake-rule')!r}, expected {_REFRESH_REJECTED_RULE!r}. "
+        f"The UnitError's rule_id must be the id of the rule that armed it.",
+    )
+
+    digest_after = env.state()["digest"]
+    require(
+        digest_after == digest_before,
+        f"the state digest moved from {digest_before!r} to {digest_after!r} across a refresh_rejected "
+        f"call. This fault fires instead of the handler, before auth, precisely so nothing is "
+        f"committed -- a moved digest means the handler ran anyway.",
+    )
+
+    recorded = env.get_json(f"{CONTROL_PREFIX}requests?limit=1")["requests"]
+    require(
+        bool(recorded),
+        f"GET /__unit/requests?limit=1 returned no records right after a call to {route.key}.",
+    )
+    newest = recorded[0]
+    require(
+        newest.get("fault") == "refresh_rejected" and newest.get("rule_id") == _REFRESH_REJECTED_RULE,
+        f"the newest record at GET /__unit/requests carries fault={newest.get('fault')!r}, "
+        f"rule_id={newest.get('rule_id')!r}, expected fault='refresh_rejected' and "
+        f"rule_id={_REFRESH_REJECTED_RULE!r}. The request log must attribute a faulted call to the "
+        f"rule and fault that produced it.",
+    )
+
+    second = env.client.call(route.method, route.probe_path, json_body={})
+    require(
+        second.header("vendorfake-fault") is None,
+        f"{route.key} still answered with vendorfake-fault={second.header('vendorfake-fault')!r} on "
+        f"a second call after when.times=1 was spent, expected no header at all.",
+    )
+    fires = _fires(env, _REFRESH_REJECTED_RULE)
+    require(
+        fires == 1,
+        f"rule {_REFRESH_REJECTED_RULE!r} reports fires={fires} after one matching call within its budget, expected 1.",
+    )
+    env.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
+    return (
+        f"{route.key}: refresh_rejected answered 401/unauthorized with vendorfake-fault/rule headers "
+        f"set; the state digest was unchanged; the request log recorded fault={newest.get('fault')!r} "
+        f"rule_id={newest.get('rule_id')!r}; a second call was not faulted and the rule reports "
+        f"fires=1"
     )
