@@ -352,6 +352,13 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.7.0](https://github.com/konyklabs/vendorfake/compare/v0.6.0...v0.7.0) (2026-09-14)
+
+
+### Features
+
+* **serve:** a per-vendor profile — VENDORFAKE_PROFILE_&lt;VENDOR&gt; and serve --profile vendor=profile pairs (konyklabs/roadmap[#134](https://github.com/konyklabs/vendorfake/issues/134)) ([#64](https://github.com/konyklabs/vendorfake/issues/64)) ([3da9dc2](https://github.com/konyklabs/vendorfake/commit/3da9dc224653c327a1b6563dab834e0f085651ee))
+
 ## [0.6.0](https://github.com/konyklabs/vendorfake/compare/v0.5.0...v0.6.0) (2026-09-14)
 
 
