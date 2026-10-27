@@ -64,7 +64,7 @@ first call needs.
 The rest is discoverable, not memorised:
 
 ```sh
-vendorfake routes --vendor square           # every route, with summaries
+vendorfake routes --vendor square           # every route: method, path, operation id, capability
 vendorfake info --vendor square             # capabilities, auth, signing scheme, fault catalogue
 vendorfake openapi --vendor square          # an OpenAPI 3.1 document
 ```
