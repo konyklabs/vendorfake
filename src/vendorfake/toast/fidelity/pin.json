@@ -1,5 +1,5 @@
 {
-  "extract_sha256": "7eeea937818b05b8fd8e60763ff401c084c190c340e1a23448f737c4c84d164f",
+  "extract_sha256": "6ff2db200d2d761b17255cab61fcc94a570edabcdc377d74252ce746c572c0ea",
   "modeled": [
     "GET /config/v2/alternatePaymentTypes",
     "GET /config/v2/alternatePaymentTypes/{guid}",
@@ -63,25 +63,25 @@
       "version": "1.0.0"
     },
     {
-      "bytes": 139343,
-      "fetched": "2026-09-02",
-      "sha256": "bbe43be505f41e2570cf367802c4ce16c4956d6ce69a76b36838d0c97bc5f2e8",
+      "bytes": 139899,
+      "fetched": "2026-10-27",
+      "sha256": "a232692e4a21af1afa591492dedb06d44ccf1fd063a9b090d0e7e343ad39b22a",
       "url": "https://doc.toasttab.com/toast-api-specifications/toast-config-api.yaml",
       "version": "2.5.0"
     },
     {
-      "bytes": 125364,
-      "fetched": "2026-09-02",
-      "sha256": "698ed1484acf9781414e39e40d7ada51be67ef7abec6bc02e1c61c266ac463e8",
+      "bytes": 126844,
+      "fetched": "2026-10-27",
+      "sha256": "5261173b84d79aa85fdb7e6eb5572d5daf925fae8858ef3b1236cd78a2c5592c",
       "url": "https://doc.toasttab.com/toast-api-specifications/toast-menus-api-v3.yaml",
-      "version": "3.4.1"
+      "version": "3.6.0"
     },
     {
-      "bytes": 139328,
-      "fetched": "2026-09-02",
-      "sha256": "5532bedffe039e7374ed3578f4fb0fd612c27f8c5af62ae8232cab1d96261812",
+      "bytes": 140691,
+      "fetched": "2026-10-27",
+      "sha256": "9c34f3aeb6c266427803e4a1c092642e616928cd32ee45525ca0056a37dbacb0",
       "url": "https://doc.toasttab.com/toast-api-specifications/toast-orders-api.yaml",
-      "version": "2.9.5"
+      "version": "2.14.1"
     },
     {
       "bytes": 18828,
