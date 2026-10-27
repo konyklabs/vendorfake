@@ -86,6 +86,9 @@ Everything past the first request lives in the docs site under `docs/`:
 - **[Testing](docs/testing.md)** and **[Contract](docs/api-contract.md)** —
   the tiers this repository's own suite runs, and the public API contract.
 - **[Changelog](docs/changelog.md)**.
+- **[In another organisation](docs/start/another-organisation.md)** — copied
+  this repository into another GitHub organisation? What travels unchanged,
+  the four workflow files to delete or replace, and the names to retarget.
 
 Read the pages directly on GitHub, or render the site locally from a
 checkout:
