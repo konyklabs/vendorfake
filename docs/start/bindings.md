@@ -63,6 +63,7 @@ under test is the ordinary shape, not a workaround.
 `async_unit()` is the `async with` form, for a fixture that is `async def`:
 
 ```python
+import pytest
 import pytest_asyncio
 from vendorfake.testing import async_unit
 
@@ -73,6 +74,7 @@ async def clover():
         yield started
 
 
+@pytest.mark.asyncio
 async def test_items_are_readable(clover):
     answered = await clover.async_client.get(clover.seed.path("/items"), headers=clover.seed.auth)
     assert answered.status_code == 200
@@ -84,8 +86,9 @@ adds is the exit: the async client's `aclose()` is awaited. The synchronous
 the loop; nothing leaks either way, because this transport owns no socket, no
 connection pool and no thread.
 
-All of this works under `pytest-asyncio` (strict or auto) and under `anyio`'s
-plugin, without vendorfake depending on either. Nothing here needs
+All of this works under `pytest-asyncio` (strict or auto; strict mode needs
+the `@pytest.mark.asyncio` the test carries) and under `anyio`'s plugin,
+without vendorfake depending on either. Nothing here needs
 `vendorfake.asgi`, which is internal.
 
 ### Rehearsing a client timeout in a millisecond

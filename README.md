@@ -53,7 +53,7 @@ use](docs/start/bindings.md).
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.7.0"}  # x-release-please-version
 ```
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or

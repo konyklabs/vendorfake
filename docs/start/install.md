@@ -53,7 +53,7 @@ docker run --rm -p 127.0.0.1:8081:8080 -e VENDORFAKE_VENDOR=clover -e VENDORFAKE
 docker run --rm -p 127.0.0.1:8080:8080 vendorfake serve --vendor square
 
 curl -s http://localhost:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.5.0"}
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.7.0"}  # x-release-please-version
 ```
 
 `VENDORFAKE_VENDOR` (and `serve --vendor`) also takes a comma-separated list —
