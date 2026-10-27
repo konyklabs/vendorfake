@@ -1,7 +1,10 @@
 """The order wire vocabulary: what the orders surface parses, and how a stored
 order, check, selection, payment and applied discount are projected.
 
-Field sets are the orders specification's (toast-orders-api.yaml v2.9.5).
+Field sets are the orders specification's: built against toast-orders-api.yaml
+v2.9.5 and checked against v2.14.1 (the fidelity pin). The two readOnly fields
+2.14.x added, ``Order.calculatedGuestCount`` and ``Selection.guestCountWeight``,
+are omitted on purpose -- the unit never computes them (JUDGMENT).
 Units on the wire: money is decimal dollars (``model/money.py``), instants
 are ``...+0000`` strings (``model/dates.py``), ``businessDate`` is an integer
 ``yyyyMMdd``, ``quantity`` is a double; the store keeps cents, epoch ms, and

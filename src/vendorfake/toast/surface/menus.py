@@ -1,6 +1,8 @@
 """The Menus API V3 surface: the published menu and its metadata.
 
-DOCUMENTED (toast-menus-api-v3.yaml v3.4.1, apiMenusV3.html):
+DOCUMENTED (toast-menus-api-v3.yaml v3.6.0 -- built against v3.4.1; 3.6.0 added
+``MenuGroup.combos`` and ``ModifierOption.shouldChargePrice``, both optional
+and not modelled -- apiMenusV3.html):
 ``GET /menus/v3/menus`` (the whole document) and
 ``GET /menus/v3/metadata`` (``{restaurantGuid, lastUpdated}``); both require
 ``Toast-Restaurant-External-ID`` and 404 (``NO_PUBLISHED_DATA``) when nothing
