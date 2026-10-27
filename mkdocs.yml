@@ -65,6 +65,7 @@ nav:
       - Install: start/install.md
       - Sixty-second quickstart: start/quickstart.md
       - Which binding to use: start/bindings.md
+      - In another organisation: start/another-organisation.md
   - Concepts:
       - Unit: concepts/unit.md
       - Seed: concepts/seed.md

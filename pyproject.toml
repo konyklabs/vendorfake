@@ -5,7 +5,7 @@ description = "Fakes of third-party vendor APIs, checked against the vendors' pu
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Oleg Konyk" }]
 keywords = ["testing", "fake", "mock", "webhooks", "integration-testing"]
 classifiers = [
@@ -124,7 +124,7 @@ build-backend = "hatchling.build"
 packages = ["src/vendorfake"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src/", "tests/", "tools/", "docs/", "README.md", "LICENSE"]
+include = ["src/", "tests/", "tools/", "docs/", "README.md", "LICENSE", "NOTICE"]
 
 # ---------------------------------------------------------------------------
 # ruff

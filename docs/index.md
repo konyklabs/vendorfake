@@ -78,6 +78,9 @@ under [Start here](start/install.md).
 - **[Contract](api-contract.md)** — what is public, what is internal, and
   the deprecation policy.
 - **[Changelog](changelog.md)**.
+- **[In another organisation](start/another-organisation.md)** — copied this
+  repository into another GitHub organisation? What travels unchanged, the
+  four workflow files to delete or replace, and the names to retarget.
 
 Writing tests against an installed vendorfake with a coding agent?
 `vendorfake explain <kind> <name>` answers one question at a time, and

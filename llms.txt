@@ -37,6 +37,10 @@ documentation. Four vendors ship today: Square (Connect v2), Clover
   the four bindings (in-process sync, in-process async, served, container),
   the `vendorfake` pytest marker and its three fixtures, docker compose, CI,
   and TLS termination.
+- [Using this repository in another organisation](https://github.com/konyklabs/vendorfake/blob/main/docs/start/another-organisation.md):
+  for a fork or import into another GitHub organisation -- what travels
+  unchanged, the four workflow files that call the upstream organisation and
+  what to do with each, names to retarget, and the licence's NOTICE.
 - [Changelog](https://github.com/konyklabs/vendorfake/blob/main/CHANGELOG.md):
   what changed, release by release.
 
