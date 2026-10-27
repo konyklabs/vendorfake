@@ -1,11 +1,11 @@
 {
-  "extract_sha256": "0ccc626714f76b9d08210c91a4d073a7a82938ebada8617a3a777fe6f972015d",
+  "extract_sha256": "e454fa305c5c45d8c31d5b7cacd6ed87c715f4f6080cf8fd10f3b1292d42f7b9",
   "schema": 1,
   "sources": [
     {
-      "bytes": 3279392,
-      "fetched": "2026-09-02",
-      "sha256": "a0d0db22c202f68282fd359772461697b3f635df03d3b19b11bb60add7f8ff7c",
+      "bytes": 3273134,
+      "fetched": "2026-10-27",
+      "sha256": "8f65460732e19d7445f7a34d8a9df09163db45273df5176a1cc794890ef591fb",
       "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json",
       "version": "2.0"
     }

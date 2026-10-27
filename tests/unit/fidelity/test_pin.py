@@ -13,6 +13,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from tests.unit.fidelity.test_extract import MODELED, URL, blob, synthetic
@@ -300,3 +301,116 @@ def test_refresh_refuses_a_declared_error_schema_the_upstream_lacks(tmp_path: Pa
     with pytest.raises(ValueError, match="NoSuchSchema"):
         refresh(tmp_path, declaration, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02")
     assert not (tmp_path / EXTRACT_FILE).exists()
+
+
+# -- a source that cannot be fetched: a verdict, never a traceback -----------
+
+
+OTHER = "https://example.test/moved.yaml"
+GONE_AT = "https://example.test/404"
+
+
+def failing_fetcher(document: dict[str, Any], failing: dict[str, Exception]) -> Any:
+    """Serves ``document`` for every URL except those in ``failing``, which raise."""
+    data = blob(document)
+    calls: list[str] = []
+
+    def fetcher(url: str) -> bytes:
+        calls.append(url)
+        if url in failing:
+            raise failing[url]
+        return data
+
+    fetcher.calls = calls  # type: ignore[attr-defined]
+    return fetcher
+
+
+def not_found(url: str, *, final: str) -> httpx.HTTPStatusError:
+    """What ``raise_for_status`` raises after a redirect from ``url`` landed on a 404 at ``final``."""
+    response = httpx.Response(404, request=httpx.Request("GET", final))
+    return httpx.HTTPStatusError("404 Not Found", request=response.request, response=response)
+
+
+def snapshot(directory: Path) -> tuple[bytes, bytes]:
+    return (directory / EXTRACT_FILE).read_bytes(), (directory / PIN_FILE).read_bytes()
+
+
+TWO_SOURCES = replace(
+    DECLARATION, sources=(SpecSource(kind="openapi3", url=OTHER), SpecSource(kind="openapi3", url=URL))
+)
+
+
+@pytest.mark.parametrize("check", [True, False], ids=["check", "write"])
+def test_a_404_on_one_source_is_gone_the_others_are_still_reported_and_nothing_is_written(
+    pinned: Path, check: bool
+) -> None:
+    before = snapshot(pinned)
+    fetcher = failing_fetcher(synthetic(), {OTHER: not_found(OTHER, final=GONE_AT)})
+    result = refresh(pinned, TWO_SOURCES, MODELED, fetcher=fetcher, fetched="2026-10-27", check=check)
+    # The failing source came first, and the one after it was still fetched.
+    assert fetcher.calls == [OTHER, URL]
+    assert [failure.url for failure in result.gone] == [OTHER] and result.unreachable == ()
+    assert f"upstream {OTHER}: GONE (HTTP 404 at {GONE_AT}; never pinned)" in result.diff_summary
+    assert f"upstream {URL}: unchanged (sha256 " in result.diff_summary
+    assert "not cut -- 1 source(s) could not be fetched" in result.diff_summary
+    assert result.changed_extract is False
+    assert snapshot(pinned) == before
+
+
+def test_a_gone_pinned_source_names_the_last_pin_it_had(pinned: Path) -> None:
+    before = snapshot(pinned)
+    pin = read_pin(pinned / PIN_FILE).sources[0]
+    response = httpx.Response(410, request=httpx.Request("GET", URL))
+    gone = httpx.HTTPStatusError("410 Gone", request=response.request, response=response)
+    result = refresh(pinned, DECLARATION, MODELED, fetcher=failing_fetcher(synthetic(), {URL: gone}), fetched="x")
+    assert [failure.url for failure in result.gone] == [URL]
+    # Same URL after redirects: no "at <final>" clause.
+    assert (
+        f"upstream {URL}: GONE (HTTP 410; pinned sha256 {pin.sha256[:12]}, fetched {pin.fetched})"
+        in result.diff_summary
+    )
+    assert "not written:" in result.diff_summary
+    assert snapshot(pinned) == before
+
+
+def test_a_connection_error_is_unreachable_and_writes_nothing(pinned: Path) -> None:
+    before = snapshot(pinned)
+    fetcher = failing_fetcher(synthetic(), {OTHER: httpx.ConnectError("[Errno 61] Connection refused")})
+    result = refresh(pinned, TWO_SOURCES, MODELED, fetcher=fetcher, fetched="2026-10-27")
+    assert fetcher.calls == [OTHER, URL]
+    assert [failure.url for failure in result.unreachable] == [OTHER] and result.gone == ()
+    assert f"upstream {OTHER}: UNREACHABLE (ConnectError: [Errno 61] Connection refused; never pinned)" in (
+        result.diff_summary
+    )
+    assert f"upstream {URL}: unchanged" in result.diff_summary
+    assert snapshot(pinned) == before
+
+
+@pytest.mark.parametrize("status", [500, 503, 403, 429])
+def test_a_5xx_or_a_non_404_4xx_is_unreachable_not_gone(pinned: Path, status: int) -> None:
+    response = httpx.Response(status, request=httpx.Request("GET", URL))
+    error = httpx.HTTPStatusError(str(status), request=response.request, response=response)
+    result = refresh(
+        pinned, DECLARATION, MODELED, fetcher=failing_fetcher(synthetic(), {URL: error}), fetched="x", check=True
+    )
+    assert [failure.state for failure in result.failures] == ["UNREACHABLE"]
+    assert f"upstream {URL}: UNREACHABLE (HTTP {status};" in result.diff_summary
+
+
+def test_a_timeout_and_an_os_error_are_unreachable(pinned: Path) -> None:
+    failing = {OTHER: httpx.ReadTimeout("timed out"), URL: ConnectionResetError("reset")}
+    result = refresh(
+        pinned, TWO_SOURCES, MODELED, fetcher=failing_fetcher(synthetic(), failing), fetched="x", check=True
+    )
+    assert [failure.url for failure in result.unreachable] == [OTHER, URL]
+    assert f"upstream {OTHER}: UNREACHABLE (ReadTimeout: timed out;" in result.diff_summary
+    assert f"upstream {URL}: UNREACHABLE (ConnectionResetError: reset;" in result.diff_summary
+
+
+def test_a_changed_source_beside_a_gone_one_is_still_reported_as_changed(pinned: Path) -> None:
+    document = synthetic()
+    document["info"]["description"] = "prose, edited"
+    fetcher = failing_fetcher(document, {OTHER: not_found(OTHER, final=GONE_AT)})
+    result = refresh(pinned, TWO_SOURCES, MODELED, fetcher=fetcher, fetched="2026-10-27", check=True)
+    assert result.changed_upstream is True and len(result.gone) == 1
+    assert f"upstream {URL}: changed sha256 " in result.diff_summary
