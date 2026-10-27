@@ -6,36 +6,13 @@
     "url": "https://x-series-api.lightspeedhq.com/docs/webhooks",
     "fetched": "2026-09-04",
     "provenance": "documented",
-    "note": "Three documented facts, all asserted: the delivery is a POST of application/x-www-form-urlencoded whose required field is `payload`, \"a JSON-encoded object with entity details\", with domain_prefix and environment optional beside it; the header format is exactly \"X-Signature: signature=897hRT893qkA783M093ha903f,algorithm=HMAC-SHA256\", comma-separated key=value pairs in one header value. What the page does NOT settle is what is hashed -- \"generate a signature by hashing the webhook request body\" over a form body with JSON inside a field has two readings -- nor the encoding, since its sample value is neither hex nor base64. This unit signs the raw form bytes and encodes hex; both are JUDGMENT and both are published at GET /__unit/info under signer.payload_provenance and signer.encoding_provenance, which this case reads rather than asserting a signature value."
+    "note": "Three documented facts, all asserted: the delivery is a POST of application/x-www-form-urlencoded whose required field is `payload`, \"a JSON-encoded object with entity details\", with domain_prefix and environment optional beside it; the header format is exactly \"X-Signature: signature=897hRT893qkA783M093ha903f,algorithm=HMAC-SHA256\", comma-separated key=value pairs in one header value. What the page does NOT settle is what is hashed -- \"generate a signature by hashing the webhook request body\" over a form body with JSON inside a field has two readings -- nor the encoding, since its sample value is neither hex nor base64. This unit signs the raw form bytes and encodes hex; both are JUDGMENT and both are published at GET /__unit/info under signer.payload_provenance and signer.encoding_provenance. This case asserts the header's documented shape on the delivery itself, never the unit's own description of it, and no signature value."
   },
   "routes": [
     "PUT /api/2026-07/registers/{register_id}/actions/close"
   ],
   "profile": "full",
   "steps": [
-    {
-      "name": "the unit publishes the documented header and format",
-      "request": {
-        "method": "GET",
-        "path": "/__unit/info"
-      },
-      "expect": {
-        "status": 200,
-        "body": {
-          "signer": {
-            "header": "X-Signature",
-            "format": "signature=<hex>,algorithm=HMAC-SHA256 (comma-separated key=value pairs, one header)",
-            "bindings": {
-              "body_bound": true,
-              "secret_bound": true,
-              "signature_headers": [
-                "x-signature"
-              ]
-            }
-          }
-        }
-      }
-    },
     {
       "name": "produce a delivery",
       "request": {
