@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import quote
 
-from jsonschema.exceptions import best_match
+from jsonschema.exceptions import ValidationError, relevance
 from openapi_schema_validator import OAS30ReadValidator, OAS30WriteValidator, oas30_format_checker
 from referencing import Registry
 from referencing.jsonschema import DRAFT4
@@ -144,7 +144,7 @@ class LedgerRow:
     excused: int = 0
     internal: int = 0
     undeclared: int = 0
-    #: A 4xx/5xx the document does not declare for the route, validated against the declaration's ``error_schema``.
+    #: A 4xx/5xx the document does not declare for the route, shape-checked against the declaration's ``error_schema`` or ``error_envelope`` and counted ``validated`` as well. An undeclared status below 400 has no schema to check, so it is never counted here: it is a violation.
     undeclared_status: int = 0
     unmatched: int = 0
     skipped_non_json: int = 0
@@ -202,7 +202,7 @@ class Ledger:
 class ResponseValidator:
     """The check itself, over one ``UnitRequest`` and the ``UnitResponse`` the unit gave for it -- nothing else, so the same instance serves the in-process client and a socket binding that hands it over as a :data:`~vendorfake.core.kernel.types.ResponseObserver`.
 
-    ``strict_undeclared`` is the switch between the two uses: a vendor's own test suite wants an undeclared route to fail the build, and the fidelity report wants to count it instead. ``validate_requests`` adds the second half: a request the unit *accepted* whose body the vendor's own schema rejects.
+    ``strict_undeclared`` is the switch between the two uses: a vendor's own test suite wants an undeclared route to fail the build, and the fidelity report wants to count it instead. The switch is about undeclared ROUTES only: a status with no schema to check its body against -- an undeclared 2xx or 3xx, or an undeclared error with neither ``error_schema`` nor ``error_envelope`` -- is a violation in both modes, because counting it would let an unchecked body end the report green. ``validate_requests`` adds the second half: a request the unit *accepted* whose body the vendor's own schema rejects.
     """
 
     __slots__ = (
@@ -241,7 +241,7 @@ class ResponseValidator:
         self._validators: dict[tuple[str, int], Any] = {}
         #: Whether the schema for (operation, status) came through the envelope fallback rather than a declared status.
         self._via_envelope: dict[tuple[str, int], bool] = {}
-        #: (route, status) pairs the document never declares, answered through ``error_schema``.
+        #: (route, status) pairs the document never declares, answered through ``error_schema`` or the envelope.
         self._undeclared_status: set[tuple[str, int]] = set()
         #: One per unit route: a ``requestBody`` schema does not vary with the status.
         self._request_validators: dict[str, Any] = {}
@@ -343,26 +343,60 @@ class ResponseValidator:
         """The schema errors, split into the ones a declared deviation absorbs and the ones that remain."""
         errors: list[str] = []
         absorbed: list[str] = []
-        declaration = self._surface.declaration
         for raw_error in validator.iter_errors(instance):
-            # A nullable reference is cut as anyOf [ref, enum: [null]]; report the branch that came closest.
-            error = best_match(raw_error.context) if raw_error.context else raw_error
-            pointer = _instance_pointer(error.absolute_path)
-            excused_by = next(
-                (
-                    deviation
-                    for deviation in declaration.deviations
-                    if deviation.matches(
-                        keyword=str(error.validator), pointer=pointer, instance=error.instance, route_key=key
-                    )
-                ),
-                None,
-            )
-            if excused_by is not None:
-                absorbed.append(excused_by.label)
-                continue
-            errors.append(f"{pointer}: {error.message}")
+            remaining, excused = self._judge(raw_error, key)
+            errors.extend(remaining)
+            absorbed.extend(excused)
         return errors, absorbed
+
+    def _judge(self, error: ValidationError, key: str) -> tuple[list[str], list[str]]:
+        """One error, as ``(remaining, absorbed)``: the messages no deviation excuses, and the labels of the ones a deviation does. A composite is judged by its leaves, never by one representative of them.
+
+        A nullable reference is cut as ``anyOf [ref, enum: [null]]``; for a value that is not null the null branch is never the real error, so the reference's own errors are judged instead, each exactly as if the reference stood alone. Any other ``anyOf``/``oneOf`` is absorbed only when every leaf of one branch is (for ``oneOf``, of exactly one branch), since that is the branch the deviations make pass; a deviation that excuses one leaf leaves the composite failing while its sibling stands. A composite that still fails reports the remaining leaves of the branch ``best_match`` would have picked."""
+        if error.validator in ("anyOf", "oneOf") and error.context:
+            branches: dict[int, list[ValidationError]] = {}
+            for child in error.context:
+                branches.setdefault(int(child.relative_schema_path[0]), []).append(child)
+            judged: dict[int, tuple[list[str], list[str]]] = {}
+            for index, children in branches.items():
+                remaining: list[str] = []
+                absorbed: list[str] = []
+                for child in children:
+                    child_remaining, child_absorbed = self._judge(child, key)
+                    remaining.extend(child_remaining)
+                    absorbed.extend(child_absorbed)
+                judged[index] = (remaining, absorbed)
+            only = _non_null_branch(error)
+            if only is not None:
+                # Whatever the reference's own errors come to, they are the answer; a remaining one fails the whole.
+                remaining, absorbed = judged.get(only, ([], []))
+                return (remaining, []) if remaining else ([], absorbed)
+            passing = [index for index, (remaining, _) in sorted(judged.items()) if not remaining]
+            if passing and (error.validator == "anyOf" or len(passing) == 1):
+                return [], judged[passing[0]][1]
+            if passing:
+                # oneOf allows exactly one: excusing two branches into passing is still a failure, never a silent pass.
+                return [
+                    f"{_instance_pointer(error.absolute_path)}: the declared deviations make it valid under "
+                    f"{len(passing)} oneOf branches, and oneOf allows exactly one"
+                ], []
+            # best_match's own first choice, before it descends: the descent stays inside that child's branch.
+            closest = int(max(error.context, key=relevance).relative_schema_path[0])
+            return judged[closest][0], []
+        pointer = _instance_pointer(error.absolute_path)
+        excused_by = next(
+            (
+                deviation
+                for deviation in self._surface.declaration.deviations
+                if deviation.matches(
+                    keyword=str(error.validator), pointer=pointer, instance=error.instance, route_key=key
+                )
+            ),
+            None,
+        )
+        if excused_by is not None:
+            return [], [excused_by.label]
+        return [f"{pointer}: {error.message}"], []
 
     def _validate(self, key: str, operation: Operation, response: UnitResponse) -> None:
         if not response.body or not _is_json(response.headers):
@@ -381,6 +415,7 @@ class ResponseValidator:
             ) from None
         validator = self._validator_for(key, operation, response.status)
         if validator is None:
+            # No schema anywhere for this status, declared or borrowed: a violation in either mode, since nothing checked the body.
             raise FidelityViolation(
                 key,
                 operation_key=operation.key,
@@ -446,6 +481,9 @@ class ResponseValidator:
             pointer = f"/components/schemas/{error_schema}"
             schema = self._surface.extract.schemas[error_schema]
         elif schema is not None:
+            if self._via_envelope[cache_key]:
+                # The envelope checks an error body's shape; it does not make the status one the document declares.
+                self._undeclared_status.add(cache_key)
             pointer = _schema_pointer(self._surface.extract.document, operation, schema)
             if pointer is None:
                 raise RuntimeError(f"{operation.key}: the schema for status {status} is not in the extract document")
@@ -522,6 +560,19 @@ class ValidatingClient(InProcessClient):
 
 
 # -- helpers ------------------------------------------------------------------
+
+
+def _non_null_branch(error: ValidationError) -> int | None:
+    """For an ``anyOf`` of exactly two branches, one of them ``{"enum": [null]}`` (the cut form of a nullable reference), the index of the other -- provided the value is not null, so the null branch cannot be the one that matters. ``None`` for any other composite."""
+    branches = error.validator_value
+    if error.validator != "anyOf" or error.instance is None or not isinstance(branches, list) or len(branches) != 2:
+        return None
+    null_branch = {"enum": [None]}
+    if branches[1] == null_branch and branches[0] != null_branch:
+        return 0
+    if branches[0] == null_branch and branches[1] != null_branch:
+        return 1
+    return None
 
 
 def _is_json_media(value: str) -> bool:

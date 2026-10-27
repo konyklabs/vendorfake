@@ -8,6 +8,7 @@ whatever the test scripts, so each schema error can be produced on demand.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -367,7 +368,8 @@ def test_envelope_fallback_validates_a_400(world: World) -> None:
     world.script.body = {"errors": [{"category": "INVALID_REQUEST_ERROR", "code": "MISSING_REQUIRED_PARAMETER"}]}
     res = world.client.post("/v2/orders", body={})
     assert res.status == 400
-    assert world.ledger.row("POST /v2/orders") == LedgerRow("POST /v2/orders", validated=1)
+    # CreateOrder declares only 200: the envelope checks the shape, and the status is still one it never declares.
+    assert world.ledger.row("POST /v2/orders") == LedgerRow("POST /v2/orders", validated=1, undeclared_status=1)
 
 
 def test_envelope_fallback_catches_a_bad_error_body(world: World) -> None:
@@ -742,6 +744,200 @@ def test_an_undeclared_error_status_is_checked_against_the_error_schema_and_coun
     script.body = ["not", "an", "object"]
     with pytest.raises(FidelityViolation):
         client.get("/v2/orders/ord_1")
+
+
+# -- the envelope is for error statuses only (konyklabs/roadmap#170 F1) ------
+
+VALID_ERRORS = {"errors": [{"category": "INVALID_REQUEST_ERROR", "code": "MISSING_REQUIRED_PARAMETER"}]}
+
+
+def test_an_undeclared_201_with_a_valid_body_is_a_violation_not_validated_through_the_envelope(world: World) -> None:
+    """CreateOrder declares only 200. A 201 is a success the document never describes; the envelope is a fallback
+    for error bodies, so it must not lend the 200's schema to it."""
+    exc = _violation(world, "/v2/orders", GOOD_ORDER, method="POST", status=201)
+    assert exc.errors == ("no schema for status 201",)
+    assert world.ledger.rows() == ()
+
+
+def test_an_undeclared_201_is_still_a_violation_when_not_strict(lenient: World) -> None:
+    """``strict_undeclared`` is about undeclared routes. A status with no schema leaves the body unchecked, and
+    counting it would let the lenient fidelity report end green over a body nothing validated."""
+    exc = _violation(lenient, "/v2/orders", GOOD_ORDER, method="POST", status=201)
+    assert exc.errors == ("no schema for status 201",)
+    assert lenient.ledger.rows() == ()
+
+
+def test_an_undeclared_204_carrying_a_json_body_is_a_violation(world: World) -> None:
+    exc = _violation(world, "/v2/orders", GOOD_ORDER, method="POST", status=204)
+    assert exc.errors == ("no schema for status 204",)
+    assert world.ledger.rows() == ()
+
+
+def test_an_undeclared_204_carrying_a_json_body_is_still_a_violation_when_not_strict(lenient: World) -> None:
+    exc = _violation(lenient, "/v2/orders", GOOD_ORDER, method="POST", status=204)
+    assert exc.errors == ("no schema for status 204",)
+    assert lenient.ledger.rows() == ()
+
+
+def test_an_undeclared_201_is_a_violation_when_not_strict_under_an_error_schema_and_no_envelope() -> None:
+    """The shape of a vendor with ``error_schema`` and no envelope: an undeclared success has nothing to borrow,
+    and the lenient client the fidelity report and ``serve --validate`` build must refuse it, not count it."""
+    script = Script(status=201, body=GOOD_ORDER)
+    unit = make_unit([route("POST", "/v2/orders", script.answer)])
+    try:
+        ledger = Ledger()
+        extract = {
+            **EXTRACT,
+            "components": {"schemas": {**EXTRACT["components"]["schemas"], "Err": {"type": "object"}}},
+        }
+        declaration = replace(DECLARATION, error_envelope=None, error_member=None, error_schema="Err")
+        client = ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger, strict_undeclared=False)
+        with pytest.raises(FidelityViolation, match="no schema for status 201"):
+            client.post("/v2/orders", body={})
+        assert ledger.rows() == ()
+    finally:
+        unit.stop()
+
+
+def test_an_undeclared_418_with_a_valid_error_body_is_validated_through_the_envelope_and_counted_undeclared(
+    world: World,
+) -> None:
+    """An ERROR status may still borrow the envelope for its shape; borrowing it does not make 418 declared."""
+    world.script.body = VALID_ERRORS
+    world.script.status = 418
+    assert world.client.post("/v2/orders", body={}).status == 418
+    assert world.ledger.row("POST /v2/orders") == LedgerRow("POST /v2/orders", validated=1, undeclared_status=1)
+    assert "1 undeclared status" in world.ledger.summary()
+
+
+def test_an_undeclared_418_whose_body_breaks_the_envelope_is_still_a_violation(world: World) -> None:
+    exc = _violation(world, "/v2/orders", {"errors": [{"category": "X"}]}, method="POST", status=418)
+    assert exc.errors == ("/errors/0: 'code' is a required property",)
+
+
+# -- composites are judged by their leaves (konyklabs/roadmap#170 F12) --------
+
+
+def _nullable_world(*deviations: Deviation) -> World:
+    """``CreateOrderResponse.order`` as the cutter writes ``{$ref: Order, nullable: true}``: an anyOf of the
+    reference and ``{enum: [null]}``. A private copy of the extract, so nothing leaks into other tests."""
+    extract = copy.deepcopy(EXTRACT)
+    extract["components"]["schemas"]["CreateOrderResponse"]["properties"]["order"] = {
+        "anyOf": [{"$ref": "#/components/schemas/Order"}, {"enum": [None]}]
+    }
+    script = Script()
+    unit = make_unit([route("POST", "/v2/orders", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    declaration = replace(DECLARATION, deviations=deviations)
+    return World(unit, script, ledger, ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger))
+
+
+def test_a_nullable_reference_reports_the_references_own_error_not_the_null_branch() -> None:
+    world = _nullable_world()
+    try:
+        exc = _violation(world, "/v2/orders", {"order": {"version": 1}}, method="POST")
+        assert exc.errors == ("/order: 'id' is a required property", "/order: 'state' is a required property")
+        assert not any("is not one of [None]" in line for line in exc.errors)
+    finally:
+        world.unit.stop()
+
+
+def test_a_deviation_on_a_leaf_under_a_nullable_reference_applies() -> None:
+    seven = Deviation(
+        pointer="/order/version",
+        keyword="type",
+        value="seven",
+        reason="the vendor's guide spells the version out",
+        url="https://example.invalid/prose",
+    )
+    world = _nullable_world(seven)
+    try:
+        world.script.body = {"order": {**GOOD_ORDER["order"], "version": "seven"}}
+        world.client.post("/v2/orders", body={})
+        assert world.ledger.row("POST /v2/orders") == LedgerRow("POST /v2/orders", validated=1, deviated=1)
+        assert world.ledger.absorbed() == ((seven.label, 1),)
+    finally:
+        world.unit.stop()
+
+
+def test_a_composite_with_one_of_two_leaves_excused_is_not_absorbed() -> None:
+    """Excusing one leaf must not carry its sibling: the reference still fails on the other one, so the whole
+    response fails and nothing is recorded as absorbed."""
+    seven = Deviation(
+        pointer="/order/version",
+        keyword="type",
+        value="seven",
+        reason="the vendor's guide spells the version out",
+        url="https://example.invalid/prose",
+    )
+    world = _nullable_world(seven)
+    try:
+        exc = _violation(
+            world, "/v2/orders", {"order": {**GOOD_ORDER["order"], "version": "seven", "state": "BOGUS"}}, method="POST"
+        )
+        assert len(exc.errors) == 1
+        assert exc.errors[0].startswith("/order/state: 'BOGUS' is not one of")
+        assert world.ledger.rows() == ()
+        assert world.ledger.absorbed() == ()
+    finally:
+        world.unit.stop()
+
+
+def test_a_general_anyof_is_absorbed_only_when_every_leaf_of_one_branch_is() -> None:
+    """Not a nullable reference: two real branches. The reference branch fails on two leaves; excusing one of them
+    leaves the anyOf failing, and only excusing both makes it pass."""
+    extract = copy.deepcopy(EXTRACT)
+    extract["components"]["schemas"]["CreateOrderResponse"]["properties"]["order"] = {
+        "anyOf": [{"$ref": "#/components/schemas/Order"}, {"type": "string"}]
+    }
+    seven = Deviation(
+        pointer="/order/version", keyword="type", value="seven", reason="prose", url="https://example.invalid/a"
+    )
+    bogus = Deviation(
+        pointer="/order/state", keyword="enum", value="BOGUS", reason="prose", url="https://example.invalid/b"
+    )
+    body = {"order": {**GOOD_ORDER["order"], "version": "seven", "state": "BOGUS"}}
+    for deviations, absorbed in (((seven,), False), ((seven, bogus), True)):
+        script = Script(body=body)
+        unit = make_unit([route("POST", "/v2/orders", script.answer)], control_routes=control_plane_routes)
+        ledger = Ledger()
+        declaration = replace(DECLARATION, deviations=deviations)
+        client = ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger)
+        try:
+            if absorbed:
+                client.post("/v2/orders", body={})
+                assert ledger.row("POST /v2/orders") == LedgerRow("POST /v2/orders", validated=1, deviated=2)
+            else:
+                with pytest.raises(FidelityViolation):
+                    client.post("/v2/orders", body={})
+                assert ledger.rows() == ()
+                assert ledger.absorbed() == ()
+        finally:
+            unit.stop()
+
+
+def test_a_oneof_whose_deviations_excuse_two_branches_is_still_a_violation() -> None:
+    """oneOf passes under exactly one branch. Deviations that make two branches pass do not absorb it; they leave
+    a oneOf the vendor's schema would reject, and the composite must not vanish from the errors."""
+    extract = copy.deepcopy(EXTRACT)
+    extract["components"]["schemas"]["CreateOrderResponse"]["properties"]["order"] = {
+        "oneOf": [{"type": "string", "enum": ["OPEN"]}, {"type": "string", "enum": ["COMPLETED"]}]
+    }
+    draft = Deviation(pointer="/order", keyword="enum", value="DRAFT", reason="prose", url="https://example.invalid/a")
+    script = Script(body={"order": "DRAFT"})
+    unit = make_unit([route("POST", "/v2/orders", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    declaration = replace(DECLARATION, deviations=(draft,))
+    client = ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger)
+    try:
+        with pytest.raises(FidelityViolation) as caught:
+            client.post("/v2/orders", body={})
+        assert caught.value.errors == (
+            "/order: the declared deviations make it valid under 2 oneOf branches, and oneOf allows exactly one",
+        )
+        assert ledger.rows() == ()
+    finally:
+        unit.stop()
 
 
 def test_validators_are_cached_per_unit_route_not_per_operation() -> None:

@@ -351,9 +351,12 @@ class Operation:
         return route_key(self.method, self.spec_path)
 
     def response_schema(self, status: int, *, error_envelope: str | None = None) -> Mapping[str, Any] | None:
-        """The JSON schema for ``status``: exact, then the OAS 3 range key (``4XX``), then ``default``, then the envelope status. ``None`` when there is no schema anywhere; the caller decides whether that is a violation."""
+        """The JSON schema for ``status``: exact, then the OAS 3 range key (``4XX``), then ``default``, then -- for an error status (400 and up) only -- the envelope status. ``None`` when there is no schema anywhere; the caller decides whether that is a violation.
+
+        The envelope is a fallback for error bodies and nothing else: a 201 the operation does not declare is not described by its 200, so it gets no schema here rather than borrowing one."""
         responses = self.raw.get("responses", {})
-        for candidate in (str(status), f"{status // 100}XX", "default", error_envelope):
+        envelope = error_envelope if status >= 400 else None
+        for candidate in (str(status), f"{status // 100}XX", "default", envelope):
             if candidate is None:
                 continue
             response = responses.get(candidate)

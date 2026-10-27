@@ -122,6 +122,17 @@ def test_response_schema_precedence_is_exact_then_default_then_envelope() -> Non
     assert get.request_schema() is None
 
 
+def test_the_envelope_is_never_the_schema_for_a_status_below_400() -> None:
+    """konyklabs/roadmap#170 F1: the envelope describes error bodies. A 201, a 204 or a 302 the operation does not
+    declare has no schema, so the validator's "no schema for status" path decides it instead of the 200's schema
+    quietly accepting a success the vendor never documents."""
+    get = EXTRACT.operation("GET", "/v1/things/{x}")
+    assert isinstance(get, Operation)
+    for status in (201, 204, 302, 399):
+        assert get.response_schema(status, error_envelope="200") is None
+    assert get.response_schema(400, error_envelope="200") == {"$ref": "#/components/schemas/Thing"}
+
+
 def test_an_extract_must_be_openapi_3() -> None:
     with pytest.raises(ValueError, match="OpenAPI 3"):
         Extract({"swagger": "2.0", "paths": {}})

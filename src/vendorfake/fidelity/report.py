@@ -275,7 +275,8 @@ def format_matrix(
             if row.undeclared_status:
                 lines.append(
                     f"undeclared status: {row.key} answered {row.undeclared_status} response(s) with a status the "
-                    f"document does not declare for it (shape checked against error_schema; the status is the unit's judgment)"
+                    f"document does not declare for it (shape checked against the declaration's error_schema or "
+                    f"error_envelope; the status is the unit's judgment)"
                 )
     for override in surface.declaration.overrides:
         lines.append(
