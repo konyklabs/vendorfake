@@ -20,7 +20,13 @@ a usage error -- no target, an unresolvable one, an unknown case id, an
 unreachable base URL, a manifest that is not one, a target with no signer, a
 ``fetch`` with no pin or no network and no cache. A moved upstream under ``fetch`` is
 ``0`` with an ``UPSTREAM MOVED`` line on stderr: a vendor release never fails
-a test run, and ``pin --check`` is what fails on it.
+a test run, and ``pin --check`` is what fails on it. ``3`` is the named skip
+(an extract that is unavailable, below). ``pin``, with or without
+``--check``, has two codes of its own for a source it could not fetch (see
+:mod:`vendorfake.fidelity.pin`'s third invariant): ``5`` when a source is
+``GONE`` and ``4`` when one is ``UNREACHABLE`` and none is gone -- neither
+shares a number with the usage error (``2``) or the named skip (``3``).
+Either way nothing is written.
 """
 
 from __future__ import annotations
@@ -73,7 +79,12 @@ def _parser() -> argparse.ArgumentParser:
 
     pin = sub.add_parser("pin", help="re-fetch the upstream document, re-cut the extract, and rewrite the pin")
     with_target(pin)
-    pin.add_argument("--check", action="store_true", help="write nothing; exit 1 if upstream or the extract changed")
+    pin.add_argument(
+        "--check",
+        action="store_true",
+        help="write nothing; exit 1 if upstream or the extract changed, 5 if a source is gone (404/410), "
+        "4 if one is unreachable",
+    )
     pin.add_argument(
         "--offline",
         action="store_true",
@@ -275,6 +286,23 @@ def _pin(target: FidelityTarget, *, check: bool, refresh: RefreshFn | None) -> i
     changed = bool(result.changed_upstream or result.changed_extract)
     if result.diff_summary:
         print(result.diff_summary)
+    # A source that could not be fetched outranks any change: nothing was cut,
+    # so there is no diff to review, and nothing was written (pin.py's third invariant).
+    gone = tuple(getattr(result, "gone", ()))
+    unreachable = tuple(getattr(result, "unreachable", ()))
+    unwritten = "" if check else "; the pin was not rewritten"
+    if gone:
+        print(
+            f"pin: GONE -- {len(gone)} source(s) no longer served; "
+            f"the pinned extract is the last known document{unwritten}"
+        )
+        return 5
+    if unreachable:
+        print(
+            f"pin: UNREACHABLE -- {len(unreachable)} source(s) could not be reached; "
+            f"nothing was compared for them{unwritten}"
+        )
+        return 4
     if check:
         print("pin: up to date" if not changed else "pin: CHANGED -- run `vendorfake-fidelity pin` and review the diff")
         return 1 if changed else 0

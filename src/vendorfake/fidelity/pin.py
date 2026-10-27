@@ -17,6 +17,17 @@ The ``fetched`` date a caller passes applies only to sources whose bytes
 differ from the pinned ones; a source with the same sha256 keeps the date it
 was first pinned on, because that is still the date *these bytes* were
 obtained. Without this, every check run on a new day would read as drift.
+
+THIRD INVARIANT: **a source that cannot be fetched is a verdict, never a
+traceback, and never a pin.** Every declared source is fetched, whatever the
+one before it did, and each gets its ``upstream <url>:`` line. One that
+answered 404 or 410 (after redirects) is ``GONE`` -- the document the fake was
+checked against is no longer published, and the pinned extract is the last
+known copy of it. One that could not be reached at all (connection refused,
+DNS, TLS, a timeout, a 5xx -- and, by JUDGMENT, any other 4xx such as 401, 403
+or 429, which says nothing about whether the document still exists) is
+``UNREACHABLE``. Either one means nothing is cut and nothing is written, in
+check mode or not: a pin must never record an error page's bytes.
 """
 
 from __future__ import annotations
@@ -34,11 +45,14 @@ from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
 from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource, route_key
 
 __all__ = [
+    "GONE",
     "PIN_SCHEMA",
+    "UNREACHABLE",
     "Fetcher",
     "Pin",
     "PinnedSource",
     "RefreshResult",
+    "SourceFailure",
     "fetch",
     "read_pin",
     "refresh",
@@ -153,6 +167,32 @@ def fetch(source: SpecSource, *, fetcher: Fetcher | None = None) -> bytes:
     return response.content
 
 
+GONE = "GONE"
+UNREACHABLE = "UNREACHABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFailure:
+    """One declared source that could not be fetched, and why (the third invariant)."""
+
+    url: str
+    #: :data:`GONE` (404/410) or :data:`UNREACHABLE` (everything else).
+    state: str
+    #: For a terminal: the status and final URL, or the transport error.
+    detail: str
+
+
+def _failure(url: str, exc: Exception) -> SourceFailure:
+    """Classify a fetch error. Only ``httpx`` and ``OSError`` failures reach here."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        final = str(exc.response.url)
+        where = f" at {final}" if final and final != url else ""
+        state = GONE if status in (404, 410) else UNREACHABLE
+        return SourceFailure(url, state, f"HTTP {status}{where}")
+    return SourceFailure(url, UNREACHABLE, f"{type(exc).__name__}: {exc}")
+
+
 @dataclass(frozen=True, slots=True)
 class RefreshResult:
     """What one refresh found. ``diff_summary`` is for a terminal; the booleans are for an exit code."""
@@ -160,10 +200,20 @@ class RefreshResult:
     changed_upstream: bool
     changed_extract: bool
     diff_summary: str
+    #: Declared sources that could not be fetched; when non-empty nothing was cut or written.
+    failures: tuple[SourceFailure, ...] = ()
 
     @property
     def changed(self) -> bool:
         return self.changed_upstream or self.changed_extract
+
+    @property
+    def gone(self) -> tuple[SourceFailure, ...]:
+        return tuple(failure for failure in self.failures if failure.state == GONE)
+
+    @property
+    def unreachable(self) -> tuple[SourceFailure, ...]:
+        return tuple(failure for failure in self.failures if failure.state == UNREACHABLE)
 
 
 def refresh(
@@ -190,6 +240,10 @@ def refresh(
     (``cache_dir``, else the resolution in :mod:`vendorfake.fidelity.cache`)
     and never under the package; the pin then also carries ``modeled`` so the
     cut can be reproduced from the pin alone.
+
+    A source that cannot be fetched (the third invariant) is reported in
+    ``failures`` with a line of its own; the cut is skipped and nothing is
+    written, ``check`` or not.
     """
     from vendorfake.fidelity.cache import DRIFT_FILE, cache_path
 
@@ -199,7 +253,18 @@ def refresh(
     old_pin = read_pin(pin_path) if pin_path.exists() else None
     old_text = extract_path.read_text(encoding="utf-8") if extract_path.exists() else None
 
-    blobs = [(source, fetch(source, fetcher=fetcher)) for source in declaration.sources]
+    blobs: list[tuple[SpecSource, bytes]] = []
+    failures: list[SourceFailure] = []
+    for source in declaration.sources:
+        # Every source is fetched whatever the one before it did (the third
+        # invariant); _failure tells a status error from a transport one.
+        try:
+            blobs.append((source, fetch(source, fetcher=fetcher)))
+        except (httpx.HTTPError, OSError) as exc:
+            failures.append(_failure(source.url, exc))
+    if failures:
+        return _unfetched(declaration, blobs, failures, old_pin, check=check)
+
     document = cut_extract(
         blobs,
         modeled,
@@ -273,6 +338,64 @@ def refresh(
         changed_upstream=changed_upstream,
         changed_extract=changed_extract,
         diff_summary="\n".join(lines),
+    )
+
+
+def _unfetched(
+    declaration: FidelityDeclaration,
+    blobs: Sequence[tuple[SpecSource, bytes]],
+    failures: Sequence[SourceFailure],
+    old_pin: Pin | None,
+    *,
+    check: bool,
+) -> RefreshResult:
+    """The report when at least one source failed: a line per source, no cut, nothing written.
+
+    A source that did fetch is compared by its bytes alone -- its version
+    string lives inside the document and needs the cut, which is skipped,
+    because a cut missing one of a vendor's documents would report every
+    operation that document carried as removed.
+    """
+    fetched = {source.url: data for source, data in blobs}
+    failed = {failure.url: failure for failure in failures}
+    lines: list[str] = []
+    changed_upstream = False
+    for source in declaration.sources:
+        pinned = old_pin.source(source.url) if old_pin is not None else None
+        failure = failed.get(source.url)
+        if failure is not None:
+            last = f"pinned sha256 {pinned.sha256[:12]}, fetched {pinned.fetched}" if pinned else "never pinned"
+            lines.append(f"upstream {source.url}: {failure.state} ({failure.detail}; {last})")
+            continue
+        data = fetched[source.url]
+        digest = sha256_hex(data)
+        if pinned is not None and pinned.sha256 == digest:
+            lines.append(f"upstream {source.url}: unchanged (sha256 {digest[:12]}, fetched {pinned.fetched})")
+            continue
+        changed_upstream = True
+        if pinned is None:
+            lines.append(f"upstream {source.url}: new pin (sha256 {digest[:12]}, {len(data)} bytes)")
+        else:
+            lines.append(
+                f"upstream {source.url}: changed sha256 {pinned.sha256[:12]} -> {digest[:12]}, "
+                f"{pinned.bytes} -> {len(data)} bytes"
+            )
+    if old_pin is not None:
+        declared = {source.url for source in declaration.sources}
+        for row in old_pin.sources:
+            if row.url not in declared:
+                changed_upstream = True
+                lines.append(f"upstream {row.url}: no longer declared")
+    lines.append(f"{EXTRACT_FILE}: not cut -- {len(failures)} source(s) could not be fetched")
+    if check:
+        lines.append("check mode: nothing written")
+    else:
+        lines.append(f"not written: {PIN_FILE} and {EXTRACT_FILE} keep the last documents that were fetched")
+    return RefreshResult(
+        changed_upstream=changed_upstream,
+        changed_extract=False,
+        diff_summary="\n".join(lines),
+        failures=tuple(failures),
     )
 
 

@@ -11235,10 +11235,10 @@
     "schema": 1,
     "sources": [
       {
-        "bytes": 3279392,
-        "fetched": "2026-09-02",
+        "bytes": 3273134,
+        "fetched": "2026-10-27",
         "label": "api",
-        "sha256": "a0d0db22c202f68282fd359772461697b3f635df03d3b19b11bb60add7f8ff7c",
+        "sha256": "8f65460732e19d7445f7a34d8a9df09163db45273df5176a1cc794890ef591fb",
         "url": "https://raw.githubusercontent.com/square/connect-api-specification/master/api.json",
         "version": "2.0"
       }

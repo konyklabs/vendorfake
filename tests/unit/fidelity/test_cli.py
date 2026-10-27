@@ -235,6 +235,8 @@ class _Refresh:
     changed_extract: bool = False
     diff_summary: str = ""
     calls: list[dict[str, Any]] | None = None
+    gone: tuple[Any, ...] = ()
+    unreachable: tuple[Any, ...] = ()
 
     def __call__(self, anchor_dir: Path, declaration: Any, modeled: Any, **kwargs: Any) -> _Refresh:
         assert self.calls is not None
@@ -272,6 +274,59 @@ def test_pin_check_exits_one_on_any_change_and_zero_otherwise(anchor: Any, capsy
     printed = capsys.readouterr().out
     assert "upstream sha256 moved" in printed and "pin: CHANGED" in printed
     assert changed.calls[0]["check"] is True
+
+
+@pytest.mark.parametrize("check", [True, False], ids=["check", "write"])
+def test_pin_exits_five_on_a_gone_source_and_four_on_an_unreachable_one(
+    anchor: Any, capsys: pytest.CaptureFixture[str], check: bool
+) -> None:
+    """GONE outranks UNREACHABLE, which outranks CHANGED; neither is ever ``pin: written``."""
+    anchor([])
+    flags = ["--check"] if check else []
+    gone = _Refresh(changed_upstream=True, gone=("a",), unreachable=("b",), diff_summary="upstream a: GONE", calls=[])
+    assert main(["pin", "--target", HERE, *flags], refresh=gone) == 5
+    printed = capsys.readouterr().out
+    assert "upstream a: GONE" in printed
+    assert "pin: GONE -- 1 source(s) no longer served; the pinned extract is the last known document" in printed
+    assert ("pin was not rewritten" in printed) is (not check)
+    assert "pin: written" not in printed and "pin: CHANGED" not in printed
+    unreachable = _Refresh(changed_upstream=True, unreachable=("b",), calls=[])
+    assert main(["pin", "--target", HERE, *flags], refresh=unreachable) == 4
+    printed = capsys.readouterr().out
+    assert "pin: UNREACHABLE -- 1 source(s) could not be reached" in printed
+    assert "pin: written" not in printed and "pin: CHANGED" not in printed
+
+
+def test_pin_check_through_the_real_refresh_reports_a_404_as_gone_and_writes_nothing(
+    anchor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The traceback the weekly drift job printed (vendorfake#68) is a verdict line and exit 2."""
+    import httpx
+
+    from vendorfake.fidelity import pin as pin_module
+
+    anchor_dir = tmp_path / anchor([])
+    before = {
+        name: (anchor_dir / name).read_bytes() for name in ("extract.json", "pin.json") if (anchor_dir / name).exists()
+    }
+
+    def fetcher(url: str) -> bytes:
+        response = httpx.Response(404, request=httpx.Request("GET", "https://example.test/404"))
+        raise httpx.HTTPStatusError("404 Not Found", request=response.request, response=response)
+
+    real = pin_module.refresh
+
+    def refresh(*args: Any, **kwargs: Any) -> Any:
+        return real(*args, fetcher=fetcher, **kwargs)
+
+    assert main(["pin", "--target", HERE, "--check"], refresh=refresh) == 5
+    printed = capsys.readouterr().out
+    assert ": GONE (HTTP 404 at https://example.test/404;" in printed
+    assert "pin: GONE -- " in printed
+    after = {
+        name: (anchor_dir / name).read_bytes() for name in ("extract.json", "pin.json") if (anchor_dir / name).exists()
+    }
+    assert after == before
 
 
 def test_pin_offline_never_fetches_and_exits_on_inconsistency(

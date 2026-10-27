@@ -95,6 +95,21 @@ agree with each other and with the declaration. Whether *upstream* has moved
 is a scheduled question, never a pull request's -- `pin` without `--offline`
 re-fetches, re-cuts and rewrites both files, and the diff is the review.
 
+The scheduled `pin --check` (no `--offline`) gives every declared source one
+`upstream <url>:` line, fetching all of them whatever the first one did, and
+ends on one verdict. **`unchanged`** / **`CHANGED`** (exit `0` / `1`) mean the
+document is still published and either matches the pin or has moved -- review
+the diff, re-pin, and the fake is checked against what the vendor publishes
+today. **`GONE`** (exit `5`) means the server answered 404 or 410, after
+redirects, naming the final URL: the document the fake was checked against is
+no longer published, so the committed extract is the last known copy of a
+contract the vendor has withdrawn, and the fidelity claim is about a past
+version until the declaration moves to a current one. **`UNREACHABLE`** (exit
+`4`) means the source could not be fetched at all -- refused, DNS, TLS, a
+timeout, a 5xx, or any other 4xx -- which says nothing about drift either way;
+re-run it. On `GONE` or `UNREACHABLE` nothing is cut and nothing is written,
+with or without `--check`: a pin never records an error page's bytes.
+
 **Toast's extract is fetched, never committed.** Toast's API terms do not
 permit a copy of its specification files in a public repository, so
 `toast/fidelity/` ships `declaration.json` (the seven published files it
