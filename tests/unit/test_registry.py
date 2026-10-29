@@ -455,14 +455,15 @@ def test_a_vendor_without_roles_still_resolves_its_own_capability_names(tmp_path
 
 
 def test_capabilities_refuses_a_role_the_vendor_declares_unsupported_with_its_reason(tmp_path: Path) -> None:
+    vendor = unsupported_roles_vendor(tmp_path)
     with pytest.raises(ValueError) as caught:
-        create_unit(vendor=unsupported_roles_vendor(tmp_path), capabilities=["orders"])
+        create_unit(vendor=vendor, capabilities=["orders"])
     message = str(caught.value)
     assert "'acme'" in message
     assert "'orders'" in message
     assert UNSUPPORTED_ROLE_REASON in message
     with pytest.raises(ValueError):
-        create_unit(vendor=unsupported_roles_vendor(tmp_path / "both"), capabilities=["auth", "orders"])
+        create_unit(vendor=vendor, capabilities=["auth", "orders"])
 
 
 def test_capabilities_still_resolves_a_supported_role_on_the_same_vendor(tmp_path: Path) -> None:
