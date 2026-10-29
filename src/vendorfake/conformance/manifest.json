@@ -34,7 +34,7 @@
     "C31": "control plane: the error catalogue reads the same twice",
     "C32": "control plane: the error catalogue does not move when the clock does",
     "C33": "control plane: an unmatched request is named and recorded",
-    "C34": "discovery: every vendor maps all four capability roles to a declared capability",
+    "C34": "discovery: every capability role maps to a declared capability or is declared unsupported with a reason",
     "C35": "discovery: the profile-name contract holds for the profile this unit was built on",
     "C36": "state: a seed overlay is applied, and may not invent a collection",
     "C37": "chaos: refresh_rejected is the vendor's own 401 and commits nothing"

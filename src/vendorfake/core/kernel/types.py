@@ -817,8 +817,8 @@ class EventMapper(Protocol):
 class VendorDefinition(Protocol):
     """Everything one vendor supplies; the core supplies everything else. A protocol rather than a base class, so a
     vendor builds whatever object it likes. Every member is required: a vendor with nothing to do writes an empty
-    method, which cannot be confused with "this vendor forgot". The one optional thing, a seed object, is
-    :class:`SeedingVendor` instead."""
+    method, which cannot be confused with "this vendor forgot". Two things are optional: a seed object, which is
+    :class:`SeedingVendor` instead, and ``not_supported_roles``, read with ``getattr`` (see :attr:`roles`)."""
 
     @property
     def name(self) -> str:
@@ -837,11 +837,11 @@ class VendorDefinition(Protocol):
     def capabilities(self) -> Sequence[CapabilityDecl]: ...
 
     @property
-    def roles(self) -> Mapping[str, str]:
+    def roles(self) -> Mapping[str, str | None]:
         """The neutral role vocabulary -- ``auth``, ``orders``, ``webhooks``, ``chaos`` -- mapped to this vendor's own
         capability names, so ``capabilities=["auth"]`` travels across vendors that name their login surface
-        differently. A conformance clause checks that all four are present and every value names a declared
-        capability. ``webhooks`` and ``chaos`` map to themselves, being the core's gated vocabulary."""
+        differently. ``None`` only for a role the optional ``not_supported_roles`` (role -> reason) names; C34 checks
+        both maps. ``webhooks`` and ``chaos`` map to themselves, being the core's gated vocabulary (D-010)."""
         ...
 
     @property
