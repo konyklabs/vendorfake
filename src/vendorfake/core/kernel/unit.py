@@ -449,7 +449,7 @@ class Unit:
 
         # A vendor gating on a core capability it never declared would have
         # that behaviour silently off: a startup failure, naming every problem.
-        assert_capability_declarations(vendor.capabilities, vendor.not_supported)
+        assert_capability_declarations(vendor.capabilities, vendor.not_supported, roles=getattr(vendor, "roles", {}))
         _assert_error_shaper_describes(vendor)
 
         self._clock = Clock(config.clock.mode, config.clock.start)

@@ -140,10 +140,11 @@ def control_plane_routes(binding: ControlBinding) -> tuple[Route, ...]:
                             "name": ctx.vendor.name,
                             "display_name": ctx.vendor.display_name,
                             "api_version": ctx.vendor.api_version,
-                            # `getattr`: a vendor built before `VendorDefinition.roles`
-                            # existed must not turn every GET /__unit/info into an
-                            # AttributeError; `{}` lets conformance C34 report the real gap.
+                            # `getattr`, both: a vendor built before either member existed must
+                            # not turn every GET /__unit/info into an AttributeError; `{}` lets
+                            # conformance C34 report the real gap.
                             "roles": dict(getattr(ctx.vendor, "roles", {})),
+                            "not_supported_roles": dict(getattr(ctx.vendor, "not_supported_roles", {})),
                             # C35 is a promise about which profile *names* a vendor ships, so
                             # this needs the roster, glob'd rather than imported from
                             # vendorfake.registry (tools/boundary.toml forbids that import).

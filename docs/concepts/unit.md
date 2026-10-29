@@ -82,7 +82,10 @@ answer and never raises.
 A **profile** decides which capabilities a unit serves, and carries the seed
 document, retry policy and every other resolved setting a unit starts with.
 Every vendor ships the same six names, and a name means the same *shape* of
-thing whichever vendor answers it (conformance clauses C34/C35).
+thing whichever vendor answers it (conformance clauses C34/C35). A vendor that
+declares role `auth` or `orders` unsupported (below) does not ship
+`oauth-only` or `orders-only` respectively; C35 reports the name as excused by
+declaration.
 [The generated profile reference](../reference/profiles.md) has the exact
 capability set each vendor's copy ships with.
 
@@ -160,6 +163,12 @@ A **role** is the vendor-neutral vocabulary above capability names: `auth`,
 own capabilities and published at `GET /__unit/info` under `vendor.roles`. A
 test written once (`capabilities=["auth"]`) means the same request whichever
 vendor it runs against, without knowing that Square calls it `oauth`.
+
+A vendor may declare a role **unsupported**, with a reason: `vendor.roles`
+maps it to `null` and `vendor.not_supported_roles` carries the why, both at
+`GET /__unit/info`. `capabilities=["orders"]` on such a vendor raises
+`ValueError` with that reason rather than picking a profile that has no
+orders.
 
 ### Toggling
 

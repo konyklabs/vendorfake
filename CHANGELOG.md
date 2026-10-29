@@ -26,6 +26,22 @@ fidelity leg and review round that came with it.
   `subscribe(url, ["IM:*"], key)` works. `I:*` does not match `IM:`; subscribe to
   both. The internal `KEY_*` constants in `vendorfake.clover.events` are gone
   (konyklabs/roadmap#175).
+* **conformance:** a vendor may declare a capability role unsupported, with a
+  reason (D-010, konyklabs/roadmap#139). `VendorDefinition.not_supported_roles`
+  (role -> reason) is optional and read with `getattr`, so no third-party
+  vendor breaks; `roles` may map a role to `None` only when it is named there.
+  `GET /__unit/info` publishes `vendor.not_supported_roles` beside
+  `vendor.roles` (additive). C34 keeps its id, is renamed in `manifest.json`
+  ("...or is declared unsupported with a reason"), accepts a documented
+  absence, still refuses a missing or undeclared mapping and never stringifies
+  `None`. C35 requires `oauth-only`/`orders-only` only when the vendor supports
+  `auth`/`orders`, reporting the rest as excused by declaration -- this narrows
+  D-007's shared profile-name contract -- and refuses an excused name that is
+  shipped anyway. `create_unit(capabilities=[<role>])` (and every binding
+  through `resolve_capabilities`) refuses an unsupported role with its reason.
+  Unit construction refuses a core-gated role mapped to `None` that is not also
+  in `not_supported`. Mutant M59 pins the no-reason case. Every shipped vendor
+  is unchanged.
 * **lightspeed:** a fourth vendor -- **Lightspeed Retail X-Series, API
   2026-07** (konyklabs/roadmap#94). Thirty-seven routes on one retailer: the
   token endpoint (`POST /api/1.0/token`) with both documented grants, a
@@ -167,6 +183,18 @@ fidelity leg and review round that came with it.
   implement it is declaring "JSON" exactly as before. Without it a vendor
   could set a content type through `DeliveryHeaderProvider` and then send
   bytes contradicting it, which is the one shape a fake must not ship.
+
+### Behaviour changes
+
+* **fidelity:** `pin --check` and `pin --offline` judge the **cut** -- the modelled
+  operations, the schemas they reach and their annotations -- not the source bytes.
+  A byte-only upstream move now reads `upstream moved, cut unchanged` and exits `0`
+  (`6` under the new `--fail-on-move`, which the weekly drift job passes), where it
+  used to exit `1`; a moved cut is still `CHANGED` / `INCONSISTENT`, exit `1`, naming
+  the operations. A non-vendored `pin.json` records `cut_sha256` and one digest per
+  operation (digests, not copies); Toast is re-pinned (orders 2.14.2). The cache's
+  `DRIFT` note is gone: the cached extract's own source rows say where it came from
+  (`vendorfake.fidelity.cache.DRIFT_FILE` and `drift_rows` are removed). (konyklabs/roadmap#178)
 
 ---
 

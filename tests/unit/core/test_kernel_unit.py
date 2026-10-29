@@ -1278,3 +1278,22 @@ def test_commit_on_slow_body_or_on_a_request_phase_fault_is_refused_the_same_way
         assert res.json()["error"]["field"] == "params.commit", fault
         assert calls == [], fault
         unit.stop()
+
+
+def test_construction_refuses_a_null_core_gated_role_that_not_supported_does_not_excuse() -> None:
+    with pytest.raises(UnitError) as caught:
+        make_unit(
+            vendor=FakeVendor(roles={"auth": "orders", "orders": "orders", "webhooks": "webhooks", "chaos": None})
+        )
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+    assert "'chaos'" in str(caught.value.detail)
+
+
+def test_construction_accepts_a_null_role_that_not_supported_excuses() -> None:
+    unit = make_unit(
+        vendor=FakeVendor(
+            roles={"auth": "orders", "orders": "orders", "webhooks": None, "chaos": "chaos"},
+            not_supported_roles={"webhooks": "no delivery"},
+        )
+    )
+    unit.stop()

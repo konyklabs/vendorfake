@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 import yaml
 
-from vendorfake.fidelity.extract import cut_extract, render_json
+from vendorfake.fidelity.extract import cut_digests, cut_extract, render_json
 from vendorfake.fidelity.types import Annotation, Extract, SpecSource
 
 URL = "https://example.test/spec.json"
@@ -298,6 +298,44 @@ def test_the_types_module_reads_the_cut_back(cut: dict[str, Any]) -> None:
     assert operation.response_schema(200) == {"$ref": "#/components/schemas/RetrieveWidgetResponse"}
     assert extract.metadata["stubbed"] == ["Missing"]
     assert extract.operation("PUT", "/v1/widgets/{id}") is None
+
+
+def test_the_cut_digest_ignores_info_source_rows_and_the_stripped_ledger(cut: dict[str, Any]) -> None:
+    edited = synthetic()
+    edited["info"]["version"] = "2.4.0"
+    edited["info"]["description"] = "edited"
+    edited["paths"]["/v1/widgets"]["post"]["externalDocs"] = {"url": "https://example.test/x"}
+    other = cut_extract([(SOURCE, blob(edited))], MODELED, fetched="2026-12-25")
+    assert (
+        hashlib.sha256(render_json(cut).encode()).hexdigest() != hashlib.sha256(render_json(other).encode()).hexdigest()
+    )
+    assert "externalDocs" in other["x-vendorfake"]["stripped"]
+    assert "externalDocs" not in cut["x-vendorfake"]["stripped"]
+    assert cut_digests(cut) == cut_digests(other)
+
+
+def test_a_schema_change_moves_the_cut_and_names_only_the_operations_reaching_it(cut: dict[str, Any]) -> None:
+    whole, a_ops = cut_digests(cut)
+    assert set(a_ops) == set(cut["x-vendorfake"]["modeled"])
+    audited = synthetic()
+    audited["components"]["schemas"]["Audit"]["properties"]["at"] = {"type": "string"}
+    c_whole, c_ops = cut_digests(cut_extract([(SOURCE, blob(audited))], MODELED, fetched="2026-09-02"))
+    assert c_whole != whole
+    assert {k for k in a_ops if a_ops[k] != c_ops[k]} == {"GET /v1/widgets/{widget_id}"}
+    money = synthetic()
+    money["components"]["schemas"]["Money"]["properties"]["amount"]["type"] = "string"
+    m_whole, m_ops = cut_digests(cut_extract([(SOURCE, blob(money))], MODELED, fetched="2026-09-02"))
+    assert m_whole != whole
+    assert {k for k in a_ops if a_ops[k] != m_ops[k]} == {"GET /v1/widgets/{widget_id}", "POST /v1/widgets"}
+
+
+def test_a_change_outside_every_operation_moves_only_the_whole_digest(cut: dict[str, Any]) -> None:
+    whole, a_ops = cut_digests(cut)
+    document = synthetic()
+    document["openapi"] = "3.0.1"
+    b_whole, b_ops = cut_digests(cut_extract([(SOURCE, blob(document))], MODELED, fetched="2026-09-02"))
+    assert b_whole != whole
+    assert b_ops == a_ops
 
 
 def test_base_path_is_stripped_for_lookup_and_added_back_in_the_extract() -> None:

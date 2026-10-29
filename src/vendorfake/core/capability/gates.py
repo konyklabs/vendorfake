@@ -99,6 +99,7 @@ class CapabilityDeclarationReport:
     unreasoned: tuple[str, ...] = ()
     wrong_kind: tuple[str, ...] = ()
     missing_prerequisite: tuple[str, ...] = ()
+    unexcused_roles: tuple[str, ...] = ()
     problems: tuple[str, ...] = ()
 
     @property
@@ -109,6 +110,8 @@ class CapabilityDeclarationReport:
 def check_capability_declarations(
     declared: Iterable[CapabilityDecl],
     not_supported: Mapping[str, str],
+    *,
+    roles: Mapping[str, str | None] | None = None,
 ) -> CapabilityDeclarationReport:
     """Reconcile a vendor's declarations against what the core gates on. Pure:
     returns a report and raises nothing, so both the startup assertion and
@@ -122,6 +125,7 @@ def check_capability_declarations(
     unreasoned: list[str] = []
     wrong_kind: list[str] = []
     missing_prerequisite: list[str] = []
+    unexcused_roles: list[str] = []
     problems: list[str] = []
 
     for name, gate in gates.items():
@@ -162,6 +166,14 @@ def check_capability_declarations(
             unreasoned.append(name)
             problems.append(f"not_supported[{name!r}] has no reason; an expected absence is recorded with its why.")
 
+    for role, target in (roles or {}).items():
+        if target is None and role in gates and role not in not_supported:
+            unexcused_roles.append(role)
+            problems.append(
+                f"roles maps {role!r} to None but not_supported does not list {role!r}; the two maps disagree "
+                f"about a core-gated capability. List it in not_supported with a reason, or map the role."
+            )
+
     return CapabilityDeclarationReport(
         undeclared=tuple(undeclared),
         contradictory=tuple(contradictory),
@@ -169,6 +181,7 @@ def check_capability_declarations(
         unreasoned=tuple(unreasoned),
         wrong_kind=tuple(wrong_kind),
         missing_prerequisite=tuple(missing_prerequisite),
+        unexcused_roles=tuple(unexcused_roles),
         problems=tuple(problems),
     )
 
@@ -176,11 +189,13 @@ def check_capability_declarations(
 def assert_capability_declarations(
     declared: Iterable[CapabilityDecl],
     not_supported: Mapping[str, str],
+    *,
+    roles: Mapping[str, str | None] | None = None,
 ) -> None:
     """Raise ``invalid_value`` when the declarations are incomplete. Called
     from unit construction, so an incomplete vendor is a startup failure
     naming every problem at once."""
-    report = check_capability_declarations(declared, not_supported)
+    report = check_capability_declarations(declared, not_supported, roles=roles)
     if report.ok:
         return
     raise UnitError(

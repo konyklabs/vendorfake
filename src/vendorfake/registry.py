@@ -214,8 +214,9 @@ def _translate_capability_names(definition: VendorDefinition, requested: Sequenc
     """A role name becomes this vendor's own capability name; anything else passes
     through as already being one. ``roles`` is read with :func:`getattr`, an older
     third-party vendor not having the property. A vendor that maps no roles raises
-    ``ValueError`` rather than passing ``"auth"`` through as a capability name."""
-    roles: Mapping[str, str] = getattr(definition, "roles", {})
+    ``ValueError`` rather than passing ``"auth"`` through as a capability name; so
+    does a role mapped to ``None``, carrying the ``not_supported_roles`` reason."""
+    roles: Mapping[str, str | None] = getattr(definition, "roles", {})
     if not roles:
         asked = [name for name in requested if name in ROLE_NAMES]
         if asked:
@@ -228,7 +229,15 @@ def _translate_capability_names(definition: VendorDefinition, requested: Sequenc
                 "shipped vendors, and CHANGELOG.md's Breaking changes for 0.2), or ask for this "
                 "vendor's own capability names instead."
             )
-    return tuple(roles.get(name, name) for name in requested)
+    unsupported = [name for name in requested if name in roles and roles[name] is None]
+    if unsupported:
+        reasons: Mapping[str, str] = getattr(definition, "not_supported_roles", {})
+        raise ValueError(
+            f"Vendor {definition.name!r} does not support "
+            + "; ".join(f"role {name!r} ({reasons.get(name) or 'no reason declared'})" for name in unsupported)
+            + ". Ask for a role it supports, or for one of its own capability names."
+        )
+    return tuple(roles.get(name) or name for name in requested)
 
 
 def _narrowest_profile_for(definition: VendorDefinition, translated: Sequence[str]) -> str | None:
