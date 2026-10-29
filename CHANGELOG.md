@@ -373,6 +373,27 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
 
+## [0.8.0](https://github.com/konyklabs/vendorfake/compare/v0.7.0...v0.8.0) (2026-10-29)
+
+
+### Features
+
+* **clover:** modifier update route and IM webhook events (konyklabs/roadmap[#175](https://github.com/konyklabs/vendorfake/issues/175)) ([0a6663b](https://github.com/konyklabs/vendorfake/commit/0a6663b24ffffae95eadad18f9ad31aa9079ff5c))
+* **square:** ListChannels, GET /v2/channels on a seeded channels collection (konyklabs/roadmap[#176](https://github.com/konyklabs/vendorfake/issues/176)) ([2ac390d](https://github.com/konyklabs/vendorfake/commit/2ac390d1dea4c6cd784d12dc81ee9c2c3dfbaed5))
+
+
+### Bug Fixes
+
+* **fidelity:** a vanished or unreachable spec source is a verdict, not a traceback; Square re-pin (konyklabs/roadmap[#170](https://github.com/konyklabs/vendorfake/issues/170)) ([83ebc43](https://github.com/konyklabs/vendorfake/commit/83ebc43a2443ac2b4798754b201590e60a27e654))
+* **fidelity:** an undeclared success status is a violation, never validated through the error envelope; composite errors judged by their leaves (konyklabs/roadmap[#170](https://github.com/konyklabs/vendorfake/issues/170)) ([de14606](https://github.com/konyklabs/vendorfake/commit/de14606f298bd91081e589e6e23e70679c07dce6))
+* **toast:** re-pin fidelity to the vendor's current documents — menus 3.6.0, orders 2.14.1, config 2.5.0 (konyklabs/roadmap[#142](https://github.com/konyklabs/vendorfake/issues/142)) ([776ce2b](https://github.com/konyklabs/vendorfake/commit/776ce2b12c997330f8930a3d0d41c7a2793415aa))
+
+
+### Documentation
+
+* **start:** a guide to using this repository in another GitHub organisation, and the NOTICE file (konyklabs/roadmap[#170](https://github.com/konyklabs/vendorfake/issues/170)) ([e0c29c7](https://github.com/konyklabs/vendorfake/commit/e0c29c7aa2068c6143c27a50149a0350bf7a12f7))
+* **start:** start pages true as written — pinned health JSON, strict-mode async example, PR tiers (konyklabs/roadmap[#170](https://github.com/konyklabs/vendorfake/issues/170)) ([42bf530](https://github.com/konyklabs/vendorfake/commit/42bf530d7be211db94080ca441dc6f4f33f25620))
+
 ## [0.7.0](https://github.com/konyklabs/vendorfake/compare/v0.6.0...v0.7.0) (2026-09-14)
 
 
