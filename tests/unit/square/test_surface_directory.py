@@ -17,14 +17,18 @@ from typing import Any
 
 import pytest
 
-from tests.unit.square.harness import APPLICATION_SECRET, Harness, first_error
+from tests.unit.square.harness import APPLICATION_SECRET, LEDGER, SURFACE, Harness, first_error
 from tests.unit.square.harness import harness as build_harness
+from vendorfake.fidelity.validate import FidelityViolation
 from vendorfake.square.seed.constants import (
     COLD_BREW_ITEM_ID,
     COLD_BREW_LARGE_VARIATION_ID,
     COLD_BREW_SMALL_VARIATION_ID,
     DEFAULT_SEED_PATH,
+    SEED_CHANNEL_ID,
+    SEED_KIOSK_CHANNEL_ID,
     SEED_KIOSK_LOCATION_ID,
+    SEED_LOCATION_CHANNEL_ID,
     SEED_LOCATION_ID,
     SEED_MERCHANT_ID,
     SEED_OPEN_ORDER_ID,
@@ -70,10 +74,50 @@ def collated(tmp_path: Path) -> Iterator[Harness]:
     yield from build_harness("orders-only", env={"VENDORFAKE_SEED": str(path)})
 
 
+@pytest.fixture
+def many_channels(tmp_path: Path) -> Iterator[Harness]:
+    """The shipped scenario plus 150 channels, enough to overrun one page."""
+    document: dict[str, Any] = json.loads(DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
+    for i in range(150):
+        document["channels"].append(
+            {
+                "id": f"CH_{i:09d}",
+                "name": f"Channel {i}",
+                "reference": {"type": "LOCATION", "id": SEED_LOCATION_ID},
+                "status": "ACTIVE",
+            }
+        )
+    path = tmp_path / "many-channels.seed.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    yield from build_harness("orders-only", env={"VENDORFAKE_SEED": str(path)})
+
+
+@pytest.fixture
+def off_enum(tmp_path: Path) -> Iterator[Harness]:
+    """The shipped scenario with one channel whose reference type the document does not list."""
+    document: dict[str, Any] = json.loads(DEFAULT_SEED_PATH.read_text(encoding="utf-8"))
+    document["channels"] = [
+        {"id": "CH_NOTATYPE1", "name": "Off enum", "reference": {"type": "NOT_A_TYPE", "id": "X"}, "status": "ACTIVE"}
+    ]
+    path = tmp_path / "off-enum.seed.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    yield from build_harness("orders-only", env={"VENDORFAKE_SEED": str(path)})
+
+
 def catalog(h: Harness, **query: str) -> dict[str, Any]:
     response = h.api.call(method="GET", path="/v2/catalog/list", query=query, headers=h.auth)
     assert response.status == 200, response.text
     return dict(response.json())
+
+
+def channels(h: Harness, **query: str) -> dict[str, Any]:
+    response = h.api.call(method="GET", path="/v2/channels", query=query, headers=h.auth)
+    assert response.status == 200, response.text
+    return dict(response.json())
+
+
+def channel_ids(body: dict[str, Any]) -> list[str]:
+    return [channel["id"] for channel in body["channels"]]
 
 
 # ---------------------------------------------------------------------------
@@ -117,15 +161,135 @@ def test_each_route_declares_the_scope_square_documents_for_it() -> None:
 
     Declared on the route and checked by the kernel, never by the handler --
     which is why a scope is asserted as route data here and enforced once,
-    below, for both.
+    below, for both. CHANNELS_READ is named by ListChannels' security block
+    in the API document and by no permissions page.
     """
     routes = {route.path: tuple(route.scopes) for route in directory_routes()}
     assert routes == {
         "/v2/merchants": ("MERCHANT_PROFILE_READ",),
         "/v2/merchants/{merchant_id}": ("MERCHANT_PROFILE_READ",),
         "/v2/locations": ("MERCHANT_PROFILE_READ",),
+        "/v2/channels": ("CHANNELS_READ",),
         "/v2/catalog/list": ("ITEMS_READ",),
     }
+
+
+# ---------------------------------------------------------------------------
+# ListChannels
+# ---------------------------------------------------------------------------
+
+
+def test_list_channels_answers_every_seeded_channel_in_code_point_order(h: Harness) -> None:
+    """https://developer.squareup.com/reference/square/channels-api/list-channels"""
+    before = LEDGER.row("GET /v2/channels").validated
+    body = channels(h)
+    assert channel_ids(body) == [SEED_KIOSK_CHANNEL_ID, SEED_LOCATION_CHANNEL_ID, SEED_CHANNEL_ID]
+    assert "cursor" not in body
+    assert all(channel["merchant_id"] == SEED_MERCHANT_ID for channel in body["channels"])
+    assert all(channel["version"] == 1 for channel in body["channels"])
+    example = next(channel for channel in body["channels"] if channel["id"] == SEED_CHANNEL_ID)
+    assert example == {
+        "id": "CH_9C03D0B59",
+        "merchant_id": SEED_MERCHANT_ID,
+        "name": "Contoso Fulfillment Application",
+        "version": 1,
+        "reference": {"id": "OA_9C03D0444", "type": "OAUTH_APPLICATION"},
+        "status": "ACTIVE",
+        "created_at": "2022-10-25T16:27:00Z",
+        "updated_at": "2022-10-25T16:48:00Z",
+    }
+    assert LEDGER.row("GET /v2/channels").validated == before + 1
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_ids"),
+    [
+        ({"reference_type": "LOCATION"}, [SEED_KIOSK_CHANNEL_ID, SEED_LOCATION_CHANNEL_ID]),
+        ({"reference_type": "OAUTH_APPLICATION"}, [SEED_CHANNEL_ID]),
+        ({"reference_id": SEED_LOCATION_ID}, [SEED_LOCATION_CHANNEL_ID]),
+        ({"status": "INACTIVE"}, [SEED_KIOSK_CHANNEL_ID]),
+        ({"status": "ACTIVE"}, [SEED_LOCATION_CHANNEL_ID, SEED_CHANNEL_ID]),
+        ({"reference_type": "LOCATION", "status": "ACTIVE"}, [SEED_LOCATION_CHANNEL_ID]),
+        ({"reference_type": "OAUTH_APPLICATION", "reference_id": SEED_LOCATION_ID}, []),
+        ({"status": ""}, [SEED_KIOSK_CHANNEL_ID, SEED_LOCATION_CHANNEL_ID, SEED_CHANNEL_ID]),
+    ],
+)
+def test_the_channel_filters_and_together(h: Harness, query: dict[str, str], expected_ids: list[str]) -> None:
+    """Every supplied filter must match; a blank value counts as absent.
+    https://developer.squareup.com/reference/square/channels-api/list-channels"""
+    assert channel_ids(channels(h, **query)) == expected_ids
+
+
+def test_an_undocumented_reference_type_or_status_answers_an_empty_page(h: Harness) -> None:
+    """JUDGMENT: a value outside the document's enum matches nothing and is not
+    refused, the same as ListCatalog's unknown type."""
+    assert channels(h, reference_type="NOT_A_TYPE")["channels"] == []
+    assert channels(h, status="PAUSED")["channels"] == []
+
+
+def test_every_seeded_channel_is_found_by_exactly_one_documented_reference_type(h: Harness) -> None:
+    """The vocabulary is read from the extract, never copied into this suite."""
+    found: list[str] = []
+    for reference_type in SURFACE.extract.schemas["ReferenceType"]["enum"]:
+        found.extend(channel_ids(channels(h, reference_type=reference_type)))
+    assert sorted(found) == sorted([SEED_KIOSK_CHANNEL_ID, SEED_LOCATION_CHANNEL_ID, SEED_CHANNEL_ID])
+    assert len(found) == len(set(found))
+
+
+def test_a_reference_type_outside_the_documents_enum_fails_validation(off_enum: Harness) -> None:
+    """This is what proves the enum is enforced from the document: the unit
+    serves what it was seeded with, and the validator refuses it."""
+    with pytest.raises(FidelityViolation, match="reference/type"):
+        off_enum.api.get("/v2/channels", headers=off_enum.auth)
+
+
+def test_a_channel_cursor_walks_one_row_per_page_and_stops(h: Harness) -> None:
+    """https://developer.squareup.com/docs/build-basics/common-api-patterns/pagination"""
+    first = channels(h, limit="1")
+    assert channel_ids(first) == [SEED_KIOSK_CHANNEL_ID]
+    second = channels(h, limit="1", cursor=first["cursor"])
+    assert channel_ids(second) == [SEED_LOCATION_CHANNEL_ID]
+    third = channels(h, limit="1", cursor=second["cursor"])
+    assert channel_ids(third) == [SEED_CHANNEL_ID]
+    assert "cursor" not in third
+
+
+def test_a_channel_cursor_from_a_different_filter_is_refused(h: Harness) -> None:
+    """ "include the cursor along with the same original request body"
+    https://developer.squareup.com/docs/build-basics/common-api-patterns/pagination"""
+    cursor = channels(h, status="ACTIVE", limit="1")["cursor"]
+    response = h.api.call(
+        method="GET",
+        path="/v2/channels",
+        query={"reference_type": "LOCATION", "cursor": cursor},
+        headers=h.auth,
+    )
+    assert response.status == 400
+    assert response.headers["x-unit-error"] == "invalid_cursor"
+
+
+def test_the_channels_page_defaults_to_and_is_capped_at_100(many_channels: Harness) -> None:
+    """DOCUMENTED default 100; JUDGMENT, the same 100 as the maximum.
+    https://developer.squareup.com/reference/square/channels-api/list-channels"""
+    default = channels(many_channels)
+    assert len(default["channels"]) == 100
+    assert "cursor" in default
+    capped = channels(many_channels, limit="1000")
+    assert len(capped["channels"]) == 100
+    assert "cursor" in capped
+
+
+def test_a_malformed_channels_limit_is_refused(h: Harness) -> None:
+    """The same refusal as ListCatalog's: a mistyped page size is not silently the default."""
+    for bad in ("abc", "0", "-1", "1.5"):
+        response = h.api.call(method="GET", path="/v2/channels", query={"limit": bad}, headers=h.auth)
+        assert response.status == 400, bad
+        assert response.headers["x-unit-error"] == "invalid_value"
+        assert first_error(response)["field"] == "limit"
+
+
+def test_the_read_only_token_reads_channels(h: Harness) -> None:
+    assert h.api.get("/v2/channels", headers=h.read_auth).status == 200
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +469,7 @@ def test_a_token_without_the_scope_gets_403_and_not_404() -> None:
         assert minted.status == 200, minted.text
         narrow = {"authorization": f"Bearer {minted.json()['access_token']}"}
 
-        for path in ("/v2/locations", "/v2/catalog/list"):
+        for path in ("/v2/locations", "/v2/channels", "/v2/catalog/list"):
             response = h.api.get(path, headers=narrow)
             assert response.status == 403, path
             assert response.headers["x-unit-error"] == "forbidden_scope"
@@ -318,7 +482,7 @@ def test_the_surface_is_gone_when_the_capability_is_off_and_says_so() -> None:
     """Not a 404: a consumer must be able to tell "this unit does not serve
     reference data" from "you typed the path wrong"."""
     for h in build_harness("oauth-only"):
-        for path in ("/v2/locations", "/v2/catalog/list"):
+        for path in ("/v2/locations", "/v2/channels", "/v2/catalog/list"):
             response = h.api.get(path, headers=h.auth)
             assert response.status == 501
             assert response.headers["x-unit-error"] == "capability_disabled"

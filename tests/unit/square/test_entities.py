@@ -6,6 +6,7 @@ from vendorfake.square.entities import (
     COL,
     AuthorizationCodeEntity,
     CatalogObjectEntity,
+    ChannelEntity,
     LocationEntity,
     MerchantEntity,
     Money,
@@ -20,6 +21,7 @@ def test_the_collection_names() -> None:
     assert COL.names() == (
         "merchants",
         "locations",
+        "channels",
         "catalog_objects",
         "orders",
         "payments",
@@ -108,6 +110,11 @@ def test_the_other_entities_round_trip() -> None:
     location = LocationEntity(id="L1", merchant_id="M1", name="Main", business_name="Bakery")
     assert LocationEntity.from_entity(location.to_entity()) == location
     assert "address" not in location.to_entity()
+
+    channel = ChannelEntity(id="CH_1", merchant_id="M1", reference={"type": "LOCATION", "id": "L1"})
+    assert ChannelEntity.from_entity(channel.to_entity()) == channel
+    assert "name" not in channel.to_entity()
+    assert "status" not in channel.to_entity()
 
     variation = CatalogObjectEntity(
         id="V1",

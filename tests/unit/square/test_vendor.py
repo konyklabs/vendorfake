@@ -266,6 +266,7 @@ def test_the_shipped_surfaces_are_wired_and_cached() -> None:
         ("GET", "/v2/merchants"),
         ("GET", "/v2/merchants/{merchant_id}"),
         ("GET", "/v2/locations"),
+        ("GET", "/v2/channels"),
         ("GET", "/v2/catalog/list"),
         ("GET", "/v2/catalog/object/{object_id}"),
         ("POST", "/v2/catalog/search"),

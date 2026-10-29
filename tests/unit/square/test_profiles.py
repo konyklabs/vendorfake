@@ -204,6 +204,7 @@ def test_no_profile_writes_a_colon_path_template() -> None:
         assert not re.search(r'"route": "[A-Z]+ [^"]*:', text), name
 
 
+# Re-pinned for konyklabs/roadmap#176: three seeded channels and CHANNELS_READ on both seeded tokens.
 # Re-pinned for konyklabs/roadmap#15: the scenario gained a second loyalty
 # account so the loyalty search survives the conformance page walk.
 SEED_DIGEST = "cc24f1b22acbf9eb81b26cfe1e4abdf532d5b94d0372882b9146d0aa39b0fc32"

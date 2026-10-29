@@ -14,6 +14,7 @@ import pytest
 from tests.unit.square.harness import APPLICATION_ID, APPLICATION_SECRET, Harness, first_error
 from tests.unit.square.harness import harness as build_harness
 from vendorfake.square.seed.constants import SEED_ACCESS_TOKEN, SEED_MERCHANT_ID
+from vendorfake.square.vendor import SQUARE_SCOPES, create_square_vendor
 
 DAY_MS = 24 * 60 * 60 * 1000
 
@@ -116,3 +117,9 @@ def test_the_client_secret_is_read_from_the_profile_not_from_the_default() -> No
             headers={"authorization": f"Client {APPLICATION_SECRET}"},
         )
         assert stale.status == 401
+
+
+def test_the_scope_vocabulary_is_exactly_what_the_routes_require() -> None:
+    """A scope no route checks is a name a consumer could be told to request
+    for nothing; a route scope missing here is one the authorize page refuses."""
+    assert set(SQUARE_SCOPES) == {scope for route in create_square_vendor().routes for scope in route.scopes}
