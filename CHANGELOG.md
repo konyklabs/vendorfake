@@ -419,6 +419,17 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   commit pin reports the previous release's version (#101, item 15).
   `docs/pytest-plugin.md` — narrowing the marker fixtures' `Seed` under a
   type checker (#101, item 16).
+* **vendorfake:** `examples/compose-consumer` — a consumer's Dockerfile that
+  installs `vendorfake[serve]` from the release's source archive on GitHub
+  behind one `ARG VENDORFAKE_REF` (no checkout, registry or token), and a
+  compose file with one Clover service on `no-faults`, the health check and
+  a loopback port. `tools/verify_compose_example.sh` builds it and asserts
+  `/__unit/health` names the vendor, the profile and the pinned version;
+  a `skippable_step` of the full self-test and a step of the `image` CI
+  job. The Dockerfile's ARG is the one pin (compose passes the arg only
+  when the shell sets it); it rides release-please's extra-files and
+  `tests/unit/test_docs_pins.py` holds it to `__version__`
+  (konyklabs/roadmap#180).
 
 ## [0.8.0](https://github.com/konyklabs/vendorfake/compare/v0.7.0...v0.8.0) (2026-10-29)
 
