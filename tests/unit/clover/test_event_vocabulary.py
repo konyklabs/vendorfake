@@ -45,4 +45,5 @@ def test_the_seed_page_row_names_every_key() -> None:
     start = text.index("### Clover")
     end = text.index("\n### ", start + 1)
     (row,) = [line for line in text[start:end].splitlines() if line.startswith("| Event types |")]
-    assert re.findall(r"`([A-Z]+):`", row) == list(ALL_EVENT_KEYS), f"{page}: the Clover 'Event types' row: {row}"
+    keys = row.split(" × ", 1)[0]  # the key list; the prose after it names `IM:` again
+    assert re.findall(r"`([A-Z]+):`", keys) == list(ALL_EVENT_KEYS), f"{page}: the Clover 'Event types' row: {row}"

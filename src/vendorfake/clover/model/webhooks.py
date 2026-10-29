@@ -9,14 +9,17 @@ configured), so the register/verify shapes below are this project's stand-in.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from vendorfake.clover.entities import COL
 from vendorfake.core.util.json import compact
 
 __all__ = [
     "ALL_EVENT_KEYS",
+    "EVENT_KEYS",
     "EventWire",
     "PayloadWire",
     "RegisterSubscriptionRequest",
@@ -30,9 +33,18 @@ _WIRE = ConfigDict(extra="forbid", frozen=True, strict=True)
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 """Lax on the way in, per the package convention on ``model/oauth.py``."""
 
-ALL_EVENT_KEYS: tuple[str, ...] = ("O", "I", "C", "P")
-"""Documented keys this unit emits, in documented order; ``E``/``M`` exist but
-nothing here mutates them, so subscribing to them is refused."""
+EVENT_KEYS: Mapping[str, str] = {
+    COL.orders: "O",
+    COL.items: "I",
+    COL.customers: "C",
+    COL.payments: "P",
+    COL.modifiers: "IM",
+}
+"""Store collection -> documented ``objectId`` key; every other key list derives from this."""
+
+ALL_EVENT_KEYS: tuple[str, ...] = tuple(EVENT_KEYS.values())
+"""The keys this unit emits, JUDGMENT order (the page lists A, C, CA, E, I, IC, IG, IM, O, M, P, SH);
+subscribing to a key nothing here mutates (``E``, ``M``, ``IG``, ...) is refused."""
 
 
 class EventWire(BaseModel):
@@ -81,7 +93,7 @@ class RegisterSubscriptionRequest(BaseModel):
         unknown = [key for key in keys if key not in ALL_EVENT_KEYS]
         if unknown:
             raise ValueError(f"unknown event key(s) {unknown}; this unit emits {list(ALL_EVENT_KEYS)}")
-        # Documented order, deduplicated.
+        # ALL_EVENT_KEYS order, deduplicated.
         return tuple(key for key in ALL_EVENT_KEYS if key in keys)
 
 
