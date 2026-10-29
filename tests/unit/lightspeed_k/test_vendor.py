@@ -1,8 +1,6 @@
-"""The vendor definition: identity, roles, and the unsupported webhooks role (D-010, D-016)."""
+"""The vendor definition: identity, roles, and the declared webhooks role (D-010, D-016)."""
 
 from __future__ import annotations
-
-import pytest
 
 from tests.unit.lightspeed_k.harness import Harness
 from vendorfake import create_unit
@@ -33,47 +31,54 @@ def test_identity() -> None:
     assert definition.name == "lightspeed-k"
     assert definition.display_name == "Lightspeed Restaurant K-Series (V1 authentication, unofficial)"
     assert definition.api_version is None
-    assert definition.signer is None
-    assert definition.events is None
+    assert definition.signer is not None
+    assert definition.events is not None
     assert definition.magic is None
     assert dict(definition.machines) == {}
     assert isinstance(create_lightspeed_k_vendor(), LightspeedKVendor)
 
 
-def test_roles_cover_the_vocabulary_and_webhooks_is_unsupported_in_both_maps() -> None:
+def test_roles_cover_the_vocabulary_and_every_role_is_declared() -> None:
     declared = {row.name for row in LIGHTSPEED_K_CAPABILITIES}
     assert set(LIGHTSPEED_K_ROLES) == set(ROLE_NAMES)
-    assert LIGHTSPEED_K_ROLES["webhooks"] is None
+    assert LIGHTSPEED_K_ROLES["webhooks"] == "webhooks"
     assert {value for value in LIGHTSPEED_K_ROLES.values() if value is not None} <= declared
     assert LIGHTSPEED_K_ROLES["orders"] == "order_and_pay"
-    assert set(LIGHTSPEED_K_NOT_SUPPORTED_ROLES) == {"webhooks"}
-    assert set(LIGHTSPEED_K_NOT_SUPPORTED) == {"webhooks", "webhooks.chaos"}
+    assert dict(LIGHTSPEED_K_NOT_SUPPORTED_ROLES) == {}
+    assert dict(LIGHTSPEED_K_NOT_SUPPORTED) == {}
+    assert {"webhooks", "webhooks.chaos"} <= declared
     assert VENDOR.not_supported_roles == LIGHTSPEED_K_NOT_SUPPORTED_ROLES  # type: ignore[attr-defined]
-    assert not declared & set(LIGHTSPEED_K_NOT_SUPPORTED)
 
 
-def test_asking_for_the_webhooks_role_names_the_reason() -> None:
-    with pytest.raises(ValueError, match="slice 2"):
-        create_unit(vendor="lightspeed-k", capabilities=["webhooks"])
+def test_asking_for_the_webhooks_role_builds_a_unit() -> None:
+    built = create_unit(vendor="lightspeed-k", capabilities=["webhooks"])
+    try:
+        assert built.context.capabilities.is_enabled("webhooks")
+    finally:
+        built.stop()
 
 
 def test_info_publishes_roles_reasons_and_the_statement(h: Harness) -> None:
     body = h.api.get("/__unit/info").json()
     vendor = body["vendor"]
-    assert vendor["roles"]["webhooks"] is None
-    assert "slice 2" in vendor["not_supported_roles"]["webhooks"]
-    assert set(body["not_supported"]) == {"webhooks", "webhooks.chaos"}
+    assert vendor["roles"]["webhooks"] == "webhooks"
+    assert body["not_supported"] == {}
     assert "not affiliated" in body["auth"]["statement"]
 
 
-def test_every_route_is_under_oauth_or_order_and_pay() -> None:
+def test_every_route_is_under_oauth_order_and_pay_or_webhooks() -> None:
     paths = [route.path for route in VENDOR.routes]
-    assert len(paths) == 5
-    assert all(path.startswith(("/oauth/", "/o/op/")) for path in paths)
+    assert len(paths) == 10
+    assert all(path.startswith(("/oauth/", "/o/op/", "/o/wh/")) for path in paths)
     assert [route.operation_id for route in VENDOR.routes] == [
         "OauthAuthorize",
         "OauthToken",
         "apeLookupBusinesses",
         "apeLoadMenus",
         "apeGetMenuByIdV2",
+        "apePlaceToGoOrder",
+        "apeCreateWebhookOo",
+        "apeUpdateWebhookOo",
+        "apeGetWebhookOo",
+        "apeDeleteWebhookEndpoint",
     ]

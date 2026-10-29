@@ -37,6 +37,8 @@ TOKEN = "/oauth/token"
 AUTHORIZE = "/oauth/authorize"
 BUSINESSES = "/o/op/data/businesses"
 MENUS = "/o/op/1/menu/list"
+TO_GO = "/o/op/1/order/toGo"
+WEBHOOK = "/o/wh/1/webhook"
 LOCATION = str(SEED_BUSINESS_LOCATION_ID)
 
 FIDELITY_UNAVAILABLE_REASON: str | None = None
@@ -85,6 +87,18 @@ class Harness:
         kwargs.setdefault("headers", self.auth)
         return self.api.post(path, body, **kwargs)
 
+    def put(self, path: str, body: Any = None, **kwargs: Any) -> InProcessResponse:
+        kwargs.setdefault("headers", self.auth)
+        return self.api.put(path, body, **kwargs)
+
+    def delete(self, path: str, **kwargs: Any) -> InProcessResponse:
+        kwargs.setdefault("headers", self.auth)
+        return self.api.delete(path, **kwargs)
+
+    def drain(self) -> list[dict[str, Any]]:
+        self.api.post("/__unit/webhooks/drain", {})
+        return list(self.api.get("/__unit/webhooks/deliveries").json()["deliveries"])
+
     def authorize(self, **overrides: str | None) -> InProcessResponse:
         query: dict[str, str | None] = {
             "response_type": "code",
@@ -111,6 +125,10 @@ class Harness:
 
     def menus(self, location: str = LOCATION, **kwargs: Any) -> InProcessResponse:
         return self.get(MENUS, query={"businessLocationId": location}, **kwargs)
+
+
+def webhook_path(endpoint_id: str) -> str:
+    return f"{WEBHOOK}/{endpoint_id}"
 
 
 def redirect_query(res: InProcessResponse) -> dict[str, str]:

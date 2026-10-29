@@ -53,12 +53,22 @@ def test_orders_only_has_no_token_endpoint_and_the_seeded_bearer_reads(
         assert h.get(BUSINESSES).status == 200
 
 
-def test_no_chaos_equals_full_and_no_faults_drops_chaos() -> None:
-    assert _capabilities("no-chaos") == _capabilities("full") == {"auth", "order_and_pay", "chaos"}
-    assert _capabilities("no-faults") == {"auth", "order_and_pay"}
+def test_full_no_chaos_and_no_faults_differ_only_in_the_fault_capabilities() -> None:
+    assert _capabilities("full") == {"auth", "order_and_pay", "webhooks", "chaos", "webhooks.chaos"}
+    assert _capabilities("no-chaos") == {"auth", "order_and_pay", "webhooks", "chaos"}
+    assert _capabilities("no-faults") == {"auth", "order_and_pay", "webhooks"}
+    assert _capabilities("chaos-demo") == _capabilities("full")
 
 
-def test_chaos_demo_runs_on_a_virtual_clock_with_two_rules() -> None:
+@pytest.mark.parametrize("name", REQUIRED)
+def test_no_summary_says_webhooks_are_missing(name: str) -> None:
+    summary = _profile(name)["summary"].lower()
+    assert "no webhooks" not in summary and "slice" not in summary and "declares no webhooks" not in summary
+
+
+def test_chaos_demo_runs_on_a_virtual_clock_with_three_rules() -> None:
     document = _profile("chaos-demo")
     assert document["clock"]["mode"] == "virtual"
-    assert [rule["fault"] for rule in document["chaos"]["rules"]] == ["token_expiry", "unavailable"]
+    rules = document["chaos"]["rules"]
+    assert [rule["fault"] for rule in rules] == ["token_expiry", "unavailable", "webhook.duplicate"]
+    assert rules[2]["match"] == {"event_type": "order:SUCCESS:*"}
