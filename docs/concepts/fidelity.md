@@ -68,6 +68,12 @@ follows the observed API (Square's `VERSION_MISMATCH`, named on the
 optimistic-concurrency page and absent from the `ErrorCode` enumeration).
 Each deviation names its page.
 
+**The schema dialect follows the extract's `openapi` field**: an OpenAPI 3.0
+document is validated as JSON Schema draft-04 with OAS 3.0's separate read and
+write validators, a 3.1 document as JSON Schema 2020-12 with one validator for
+both directions. **A body the document declares only under `*/*` is validated
+as JSON**, and `application/json` wins where both are declared.
+
 **The request half is a flag, and it is off.** `ValidatingClient(...,
 validate_requests=True)` also checks the body a call *sent*, against the
 operation's own `requestBody` schema, whenever the unit answered 2xx: a

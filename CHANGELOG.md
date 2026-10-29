@@ -7,6 +7,14 @@ fidelity leg and review round that came with it.
 
 ### Features
 
+* **fidelity:** the schema dialect follows the extract: an OpenAPI 3.1
+  document is validated as JSON Schema 2020-12 (`const`, type lists with
+  `null`, one validator for requests and responses), a 3.0 one as before. A
+  response or request body declared only under `*/*` is looked up as JSON,
+  with `application/json` preferred where both are declared. `target_for` and
+  so `serve --validate` resolve a vendor through the registry rather than
+  spelling `vendorfake.<name>`, so a hyphenated identifier finds its module's
+  fidelity leg (konyklabs/roadmap#179).
 * **clover:** `POST /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}`
   (`UpdateModifier`, `INVENTORY_W`), a sparse modifier update answering the GET's
   shape: `id`/`modifierGroup` in the body are ignored, a `null` resets a field to
