@@ -130,13 +130,83 @@ def test_get_item_and_its_404(h: Harness) -> None:
 def test_inventory_routes_need_their_own_permissions(h: Harness) -> None:
     """A token with only ORDERS_R reaches no inventory route, and the refusal
     is the documented conflated 401 -- byte-identical to a bad token."""
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_OAT
+
     auth = h.restricted_token("ORDERS_R")
     bad = h.api.get(h.path("/items"), headers={"authorization": "Bearer never-minted"})
     for method, suffix, body in (
         ("GET", "/items", None),
         ("POST", "/items", {"name": "x", "price": 1}),
         ("POST", f"/items/{ITEM_BEER}", {"available": False}),
+        ("POST", f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_OAT}", {"available": False}),
     ):
         response = h.api.call(method=method, path=h.path(suffix), body=body, headers=auth)
         assert response.status == 401, suffix
         assert response.json()["message"] == bad.json()["message"] == "401 Unauthorized"
+    read_only = h.api.post(
+        h.path(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_OAT}"), {"available": False}, headers=h.read_auth
+    )
+    assert read_only.status == 401
+    assert read_only.json()["message"] == "401 Unauthorized"
+
+
+def test_update_modifier_is_post_sparse_answers_the_get_shape_and_journals_update_modifier(h: Harness) -> None:
+    """`id` and `modifierGroup` in the body are ignored, not refused; the
+    answer is the GET's shape, and the write journals as UpdateModifier."""
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_SOY
+
+    before = h.journal_len()
+    suffix = f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}"
+    response = h.post(suffix, {"available": True, "id": "OTHERMOD00001", "modifierGroup": {"id": "OTHERGROUP001"}})
+    assert response.status == 200, response.text
+    body = response.json()
+    assert body == {
+        "id": MOD_SOY,
+        "name": "Soy milk",
+        "price": 50,
+        "available": True,
+        "modifierGroup": {"id": MOD_GROUP_MILK},
+    }
+    assert h.get(suffix).json() == body
+    entries = h.api.get("/__unit/journal").json()["entries"][before:]
+    assert [(e["collection"], e["op"], e["meta"]["operation_id"]) for e in entries] == [
+        ("modifiers", "update", "UpdateModifier")
+    ]
+
+
+def test_update_modifier_null_resets_the_default_and_the_group_is_untouched(h: Harness) -> None:
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_OAT, MOD_SOY
+
+    suffix = f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}"
+    first = h.post(suffix, {"price": 200, "alternateName": "Soja"})
+    assert first.status == 200, first.text
+    assert first.json()["price"] == 200
+    assert first.json()["alternateName"] == "Soja"
+    reset = h.post(suffix, {"price": None, "available": None, "alternateName": None})
+    assert reset.status == 200, reset.text
+    body = reset.json()
+    assert body["price"] == 0
+    assert body["available"] is True
+    assert "alternateName" not in body
+    assert body["modifierGroup"] == {"id": MOD_GROUP_MILK}
+    listed = [e["id"] for e in h.get(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers").json()["elements"]]
+    assert MOD_OAT in listed and MOD_SOY in listed
+
+
+def test_update_modifier_refusals_journal_nothing(h: Harness) -> None:
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_SOY
+
+    before = h.journal_len()
+    suffix = f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}"
+    for body, field in (({"name": None}, "name"), ({"name": ""}, "name"), ({"price": -1}, "price")):
+        refused = h.post(suffix, body)
+        assert refused.status == 400, body
+        assert refused.json()["unit_error"]["field"] == field, body
+    assert h.post(suffix, {"price": 7.5}).status == 400
+    no_group = h.post(f"/modifier_groups/NOSUCHGROUP01/modifiers/{MOD_SOY}", {"available": True})
+    assert no_group.status == 404
+    assert no_group.json()["unit_error"]["field"] == "modGroupId"
+    no_modifier = h.post(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/NOSUCHMOD0001", {"available": True})
+    assert no_modifier.status == 404
+    assert no_modifier.json()["unit_error"]["field"] == "modId"
+    assert h.journal_len() == before

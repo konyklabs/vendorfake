@@ -274,10 +274,7 @@
       "name": "Quickstart receiver",
       "notification_url": "https://example.test/webhooks/clover",
       "event_types": [
-        "O:*",
-        "I:*",
-        "C:*",
-        "P:*"
+        "*"
       ],
       "signature_key": "unit-seeded-clover-webhook-auth-code",
       "enabled": false

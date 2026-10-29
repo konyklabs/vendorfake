@@ -79,8 +79,9 @@ def test_every_surface_is_live_and_the_webhook_seams_are_wired() -> None:
         "GET /__clover/webhooks/subscriptions",
         "POST /__clover/webhooks/verify",
     ]
-    assert len(keys) == 30
-    assert len(set(keys)) == 30
+    assert len(keys) == 31
+    assert len(set(keys)) == 31
+    assert "POST /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}" in keys
     # Every merchant-scoped route authenticates and names a permission.
     for route in vendor.routes:
         if route.path.startswith("/v3/"):

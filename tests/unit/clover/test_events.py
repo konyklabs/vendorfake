@@ -128,7 +128,7 @@ def test_ts_is_an_integer_of_milliseconds_not_a_float_and_not_seconds(h: Harness
 
 @pytest.mark.parametrize(
     ("collection", "key"),
-    [("orders", "O"), ("items", "I"), ("customers", "C"), ("payments", "P")],
+    [("orders", "O"), ("items", "I"), ("customers", "C"), ("payments", "P"), ("modifiers", "IM")],
 )
 def test_each_agreed_collection_maps_to_its_documented_key(
     h: Harness, sink: MemorySink, collection: str, key: str
@@ -140,6 +140,21 @@ def test_each_agreed_collection_maps_to_its_documented_key(
         {"objectId": f"{key}:ENT0000000001", "type": "CREATE", "ts": body["merchants"][MERCHANT_ID][0]["ts"]}
     ]
     assert EVENT_KEYS[collection] == key
+
+
+def test_a_modifier_update_and_delete_are_im_events_keyed_to_the_unit_s_merchant(h: Harness, sink: MemorySink) -> None:
+    """A modifier carries no `merchant_id`, so the event falls back to the
+    unit's one merchant."""
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_SOY
+
+    subscribe(h)
+    assert h.post(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}", {"available": True}).status == 200
+    h.unit.context.store.collection(COL.modifiers).delete(MOD_SOY, {"operation_id": "HardDelete"})
+    assert [
+        (event["objectId"], event["type"])
+        for body in delivered_bodies(h, sink)
+        for event in body["merchants"][MERCHANT_ID]
+    ] == [(f"IM:{MOD_SOY}", "UPDATE"), (f"IM:{MOD_SOY}", "DELETE")]
 
 
 def test_insert_update_and_delete_map_to_the_three_documented_types(h: Harness, sink: MemorySink) -> None:
@@ -255,16 +270,16 @@ def test_a_mutation_in_a_unit_with_no_merchant_is_not_delivered_and_is_logged(si
 
 
 def test_the_mapper_keys_on_the_collection_names_the_orders_branch_uses() -> None:
-    """Four literals, on purpose: EVENT_KEYS is derived from COL, so this is
-    the assertion that keeps COL's spelling of the four collections honest --
+    """Five literals, on purpose: EVENT_KEYS is derived from COL, so this is
+    the assertion that keeps COL's spelling of the five collections honest --
     a rename there would otherwise move the mapper along with it and present
     as nothing at all."""
-    assert EVENT_KEYS == {"orders": "O", "items": "I", "customers": "C", "payments": "P"}
-    assert list(EVENT_KEYS) == ["orders", "items", "customers", "payments"]
+    assert EVENT_KEYS == {"orders": "O", "items": "I", "customers": "C", "payments": "P", "modifiers": "IM"}
+    assert list(EVENT_KEYS) == ["orders", "items", "customers", "payments", "modifiers"]
 
 
 def test_the_advertised_event_types_are_the_key_type_product() -> None:
-    assert len(CLOVER_EVENT_TYPES) == 12
+    assert len(CLOVER_EVENT_TYPES) == 15
     assert CLOVER_EVENT_TYPES[:3] == ("O:CREATE", "O:UPDATE", "O:DELETE")
     assert {t.split(":")[0] for t in CLOVER_EVENT_TYPES} == set(EVENT_KEYS.values())
 

@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from vendorfake.clover.entities import COL
-from vendorfake.clover.model.webhooks import EventWire, PayloadWire
+from vendorfake.clover.model.webhooks import ALL_EVENT_KEYS, EVENT_KEYS, EventWire, PayloadWire
 from vendorfake.clover.surface.common import CloverDeps
 from vendorfake.core.kernel.types import EventMeta, JournalEntry, MappedEvent, UnitContext
 
@@ -23,28 +23,11 @@ __all__ = [
     "CLOVER_EVENT_TYPES",
     "DELETE_OPERATION_IDS",
     "EVENT_KEYS",
-    "KEY_CUSTOMERS",
-    "KEY_INVENTORY",
-    "KEY_ORDERS",
-    "KEY_PAYMENTS",
     "VERIFICATION_EVENT_TYPE",
     "CloverEventMapper",
     "event_type",
     "verification_event_id",
 ]
-
-KEY_ORDERS = "O"
-KEY_INVENTORY = "I"
-KEY_CUSTOMERS = "C"
-KEY_PAYMENTS = "P"
-
-EVENT_KEYS: Mapping[str, str] = {
-    COL.orders: KEY_ORDERS,
-    COL.items: KEY_INVENTORY,
-    COL.customers: KEY_CUSTOMERS,
-    COL.payments: KEY_PAYMENTS,
-}
-"""Store collection -> documented ``objectId`` prefix."""
 
 CHANGE_TYPES: tuple[str, ...] = ("CREATE", "UPDATE", "DELETE")
 """The documented ``type`` vocabulary, in the order the page lists it."""
@@ -70,11 +53,9 @@ def verification_event_id(subscription_id: str) -> str:
 
 
 CLOVER_EVENT_TYPES: tuple[str, ...] = tuple(
-    event_type(key, change)
-    for key in (KEY_ORDERS, KEY_INVENTORY, KEY_CUSTOMERS, KEY_PAYMENTS)
-    for change in CHANGE_TYPES
+    event_type(key, change) for key in ALL_EVENT_KEYS for change in CHANGE_TYPES
 )
-"""Every event type this unit can emit: four keys times three changes."""
+"""Every event type this unit can emit: every key times every change."""
 
 
 class CloverEventMapper:

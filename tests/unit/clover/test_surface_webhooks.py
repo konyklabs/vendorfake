@@ -150,7 +150,7 @@ def test_registering_a_callback_answers_pending_and_posts_the_verification_code_
     because the code is documented as sent only after validation."""
     registered = register(h)
     assert registered["verified"] is False
-    assert registered["eventKeys"] == ["O", "I", "C", "P"]
+    assert registered["eventKeys"] == ["O", "I", "C", "P", "IM"]
     assert registered["url"] == HOOKS
     assert "authCode" not in registered, registered
     assert "verificationCode" not in registered, registered
@@ -425,6 +425,24 @@ def test_a_callback_subscribed_to_one_key_receives_only_that_key(h: Harness, sin
     assert received == [(HOOKS, "I:ITM0000000001"), (OTHER_HOOKS, "O:ORD0000000001")]
 
 
+def test_an_inventory_subscriber_does_not_receive_modifier_events(h: Harness, sink: MemorySink) -> None:
+    """`I` and `IM` are separate keys: an `I` subscriber gets no modifier
+    event, and only an `IM` subscriber does."""
+    from tests.unit.clover.harness import MOD_GROUP_MILK, MOD_SOY
+
+    register_and_verify(h, sink, HOOKS, eventKeys=["I"])
+    register_and_verify(h, sink, OTHER_HOOKS, eventKeys=["IM"])
+    updated = h.api.post(
+        h.path(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}"), {"available": True}, headers=h.auth
+    )
+    assert updated.status == 200, updated.text
+    h.api.post("/__unit/webhooks/drain", {})
+    received = sorted(
+        (r.url, json.loads(bytes(r.body).decode())["merchants"][MERCHANT_ID][0]["objectId"]) for r in sink.received
+    )
+    assert received == [(OTHER_HOOKS, f"IM:{MOD_SOY}")]
+
+
 def test_the_default_is_every_key(h: Harness, sink: MemorySink) -> None:
     register_and_verify(h, sink)
     create_order(h)
@@ -468,7 +486,7 @@ def test_a_profile_declared_subscriber_is_delivered_to_with_its_auth_code(sink: 
         h.drop_seeded_subscriber()
         (row,) = h.api.get("/__clover/webhooks/subscriptions").json()["subscriptions"]
         assert row["verified"] is True
-        assert row["eventKeys"] == ["O", "I", "C", "P"]
+        assert row["eventKeys"] == ["O", "I", "C", "P", "IM"]
         assert row["authCode"] == "seeded-auth-code"
         create_order(h)
         h.api.post("/__unit/webhooks/drain", {})

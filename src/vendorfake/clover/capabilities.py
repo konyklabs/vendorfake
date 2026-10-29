@@ -81,8 +81,9 @@ CLOVER_NOT_MODELED: Mapping[str, str] = {
         "calculator only. Tax exemption rules, VAT-inclusive pricing and flat taxAmount rates are not modelled."
     ),
     "modifier-management": (
-        "Modifier groups and modifiers are read-only reference data from the seed; line-item "
-        "modifications are priced but groups cannot be created or edited."
+        "Modifier groups are read-only reference data from the seed. A modifier can be updated "
+        "(name, alternateName, available, price) but not created, deleted or moved to another "
+        "group; line-item modifications are priced from the stored modifier."
     ),
     "token-migration": (
         "POST /oauth/token/migrate_v2 and the legacy v1 (non-expiring token) flow are not modelled; "

@@ -14,6 +14,8 @@ from tests.unit.clover.harness import (
     ITEM_BEER,
     ITEM_ESPRESSO,
     MERCHANT_ID,
+    MOD_GROUP_MILK,
+    MOD_SOY,
     Harness,
     harness,
 )
@@ -545,17 +547,25 @@ def test_another_merchants_path_is_401_for_this_token(h: Harness) -> None:
     """JUDGMENT: the mismatch answers the documented conflated 401 -- the
     same bytes as a bad token -- and the sidecar says why."""
     order = h.create_order()
+    modifier = f"/v3/merchants/OTHERMERCH001/modifier_groups/{MOD_GROUP_MILK}/modifiers"
+    before = h.journal_len()
     for method, path, body in (
         ("GET", "/v3/merchants/OTHERMERCH001/orders", None),
         ("POST", "/v3/merchants/OTHERMERCH001/orders", {"total": 1}),
         ("GET", f"/v3/merchants/OTHERMERCH001/orders/{order['id']}", None),
         ("GET", "/v3/merchants/OTHERMERCH001", None),
         ("GET", "/v3/merchants/OTHERMERCH001/items", None),
+        ("POST", f"/v3/merchants/OTHERMERCH001/items/{ITEM_BEER}", {"available": False}),
+        ("GET", modifier, None),
+        ("GET", f"{modifier}/{MOD_SOY}", None),
+        ("POST", f"{modifier}/{MOD_SOY}", {"available": True}),
     ):
         response = h.api.call(method=method, path=path, body=body, headers=h.auth)
         assert response.status == 401, (method, path)
         assert response.json()["message"] == "401 Unauthorized"
         assert response.json()["unit_error"]["reason"] == "merchant_mismatch"
+    assert h.journal_len() == before
+    assert h.get(f"/modifier_groups/{MOD_GROUP_MILK}/modifiers/{MOD_SOY}").json()["available"] is False
 
 
 def test_a_magic_value_in_a_documented_order_field_reaches_the_chaos_engine(h: Harness) -> None:

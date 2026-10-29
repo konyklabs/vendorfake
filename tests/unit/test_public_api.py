@@ -195,6 +195,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "REFRESH_TOKEN",
         "REGISTER_WEBHOOK_CALLBACK",
         "UPDATE_ITEM",
+        "UPDATE_MODIFIER",
         "UPDATE_ORDER",
         "VERIFY_WEBHOOK_CALLBACK",
     ),

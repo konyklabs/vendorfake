@@ -39,6 +39,7 @@ __all__ = [
     "REFRESH_TOKEN",
     "REGISTER_WEBHOOK_CALLBACK",
     "UPDATE_ITEM",
+    "UPDATE_MODIFIER",
     "UPDATE_ORDER",
     "VERIFY_WEBHOOK_CALLBACK",
 ]
@@ -71,5 +72,6 @@ LIST_WEBHOOK_CALLBACKS = "/__clover/webhooks/subscriptions"
 REFRESH_TOKEN = "/oauth/v2/refresh"
 REGISTER_WEBHOOK_CALLBACK = "/__clover/webhooks/subscriptions"
 UPDATE_ITEM = "/v3/merchants/{mId}/items/{itemId}"
+UPDATE_MODIFIER = "/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}"
 UPDATE_ORDER = "/v3/merchants/{mId}/orders/{orderId}"
 VERIFY_WEBHOOK_CALLBACK = "/__clover/webhooks/verify"
