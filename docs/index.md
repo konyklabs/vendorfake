@@ -31,7 +31,7 @@ signs it. Where the public documentation is silent and a behaviour had to be
 decided, the wire says so — see
 [Provenance labels](concepts/chaos.md#provenance).
 
-## Four vendors, modelled properly
+## Five vendors, modelled properly
 
 | Vendor | What the fake covers |
 |---|---|

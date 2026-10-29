@@ -6,7 +6,7 @@ Serve the Square unit (defaults to the `full` profile on port 8080):
 vendorfake serve --vendor square      # or: VENDORFAKE_VENDOR=square vendorfake serve
 ```
 
-Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
+Every command names a vendor (`--vendor square|clover|toast|lightspeed|lightspeed-k`, or
 `VENDORFAKE_VENDOR`); with none installed the unit refuses and lists what it
 found — it never guesses.
 
@@ -51,10 +51,11 @@ curl -s -X POST http://localhost:8080/v2/orders/$ORDER_ID/pay \
 Both transitions fired real deliveries at any subscriber registered for
 `order.created` / `order.updated`, signed the way Square signs them and
 retried on Square's documented schedule if nothing was listening. Every route
-the four vendors serve is in the route reference
+the five vendors serve is in the route reference
 ([Square](../reference/routes-square.md), [Clover](../reference/routes-clover.md),
 [Toast](../reference/routes-toast.md),
-[Lightspeed](../reference/routes-lightspeed.md)); `vendorfake explain <route>`
+[Lightspeed X-Series](../reference/routes-lightspeed.md),
+[Lightspeed K-Series](../reference/routes-lightspeed-k.md)); `vendorfake explain <route>`
 describes one in place;
 [Unit → Driver](../concepts/unit.md#driver) covers webhook subscriptions and
 deliveries. The credentials in

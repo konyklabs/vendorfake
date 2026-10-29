@@ -4,14 +4,14 @@ Every profile ships the same scenario, so a fresh [unit](unit.md) needs no
 setup: a merchant or restaurant, locations, a small catalog, seeded orders,
 tenders, application credentials, and bearer tokens — obviously fake, and
 readable on sight. [The tables below](#the-shipped-scenario) hold the concrete
-values for all four vendors.
+values for all five vendors.
 
 ## `.seed` on a started unit
 
 In Python the seed is a typed attribute on whatever
 [`unit()`/`served()`](unit.md#driver) handed back —
 `vendorfake.testing.SquareSeed`, `CloverSeed`, `ToastSeed`,
-`LightspeedSeed` — not a JSON blob to parse:
+`LightspeedSeed`, `LightspeedKSeed` — not a JSON blob to parse:
 
 ```python
 with unit("square") as square:
@@ -37,17 +37,19 @@ vendors:
   `refresh_token` (`None` exactly when `credentials.grant` is
   `client_credentials`) and `tenant_id` (Square's and Clover's
   `merchant_id` — the seller, not a location — Toast's `restaurant_guid`,
-  Lightspeed's `retailer_id`).
+  Lightspeed X-Series's `retailer_id`, Lightspeed K-Series's
+  `business_location_id`).
 - `credentials` — `app_id`, `app_secret` and `grant`, whatever the vendor's
   own field names are. `grant` names the token lifecycle worth branching on:
-  Square, Clover and Lightspeed issue a refresh token and rotate it, Toast
+  Square, Clover and both Lightspeed series issue a refresh token and rotate it, Toast
   issues a bearer with no refresh and expects a fresh login. A bare
   `refresh_token` is deliberately *not* on the shared type, because Toast has
   none; it lives on `token.refresh_token`, typed `str | None`.
 - `auth` — headers for the full-scope seeded bearer. For Toast this carries
   the bearer **and** the `Toast-Restaurant-External-ID` header, because a
   restaurant-scoped call needs both.
-- `read_only_auth` — the same, for the read-only seeded bearer.
+- `read_only_auth` — the same, for the read-only seeded bearer (on
+  Lightspeed K-Series, the one that carries `financial-api` only).
 - `event_types` — the webhook event vocabulary this vendor actually sends;
   `subscribe()` on a [driver](unit.md#driver) refuses a name that will never
   fire rather than registering it silently.
@@ -69,7 +71,8 @@ used:
 | Square | `expires_in_ms` | ms |
 | Clover | `access_token_expires_in_ms`, `refresh_token_expires_in_ms` | ms |
 | Toast | `expires_in_ms` | ms |
-| Lightspeed | `expires_in_s` (access token only; a seeded refresh token has no expiry field because the real API documents no refresh-token lifetime) | s |
+| Lightspeed X-Series | `expires_in_s` (access token only; a seeded refresh token has no expiry field because the real API documents no refresh-token lifetime) | s |
+| Lightspeed K-Series | `expires_in_s` (access token only; a seeded refresh token takes the configured `refresh_token_ttl_s`, 14 days) | s |
 
 `0` means expired the instant the unit starts. Absent means the configured
 TTL, as before this field existed. There is no `merchant_id`
@@ -84,7 +87,7 @@ needs a whole seed document of your own: the profile's `seed` key, or
 `VENDORFAKE_SEED` (typically a file mounted into a container).
 
 **On a running unit, by patching the entity.** `POST /__unit/state/update`
-on collection `tokens` (`refresh_tokens` too, for Lightspeed) reaches the
+on collection `tokens` (`refresh_tokens` too, for both Lightspeed series) reaches the
 fields the entity already carries, named per vendor:
 
 | Vendor | Access-token field | Refresh-token field | Tenant field |
@@ -92,7 +95,8 @@ fields the entity already carries, named per vendor:
 | Square | `expires_at` (RFC 3339, seconds) | `refresh_token_expires_at` (RFC 3339, seconds; `None` on a code-flow token, which Square documents as never expiring — PKCE only) | `merchant_id` |
 | Clover | `access_token_expiration_ms` (epoch ms) | `refresh_token_expiration_ms` (epoch ms) | `merchant_id` |
 | Toast | `expires_at_ms` (epoch ms) | n/a (no refresh token) | n/a |
-| Lightspeed | `expires_at_ms` (epoch ms) | n/a (the `refresh_tokens` collection has no expiry field) | n/a |
+| Lightspeed X-Series | `expires_at_ms` (epoch ms) | n/a (the `refresh_tokens` collection has no expiry field) | n/a |
+| Lightspeed K-Series | `expires_at_ms` (epoch ms) | `expires_at_ms` on collection `refresh_tokens` (epoch ms) | n/a |
 
 Pair a patch with `POST /__unit/clock/advance` on a
 [virtual clock](../reference/control-plane.md) to move the double *to* the
@@ -202,7 +206,7 @@ Conformance clause **C36** asserts the refusal on every vendor.
 
 On a vendor named as a literal a type checker says so first, from the
 per-vendor `TypedDict`s `SquareSeedOverlay`, `CloverSeedOverlay`,
-`ToastSeedOverlay` and `LightspeedSeedOverlay`, whose keys are that vendor's
+`ToastSeedOverlay`, `LightspeedSeedOverlay` and `LightspeedKSeedOverlay`, whose keys are that vendor's
 collections, all optional, with untyped values. A vendor passed as a plain
 `str` gets `vendorfake.testing.SeedOverlay` (`Mapping[str, Any]`); the unit
 still refuses an unknown collection at start.
@@ -212,8 +216,9 @@ still refuses an unknown collection at start.
 The collections a vendor's `.seed` is built from are refused when the unit
 starts, on every binding: its credentials, and its identity collection. On
 Square and Clover that is `tokens` and `merchant`; on Toast, `tokens` and
-`restaurant`; on Lightspeed the three collections its credentials live in
-(`tokens`, `personal_tokens`, `refresh_tokens`) and `retailer`.
+`restaurant`; on Lightspeed X-Series the three collections its credentials live in
+(`tokens`, `personal_tokens`, `refresh_tokens`) and `retailer`; on Lightspeed
+K-Series `tokens`, `refresh_tokens` and `businesses`.
 
 ```text
 seed overlay names 'tokens', which is what square's .seed is built from. The seed
@@ -276,7 +281,7 @@ from the profile's `vendor` block, so a profile that overrides the app
 credentials is reported as it actually ran rather than as the default below.
 `credentials` is the app credential from the first row of each table, spelled
 `application_id`/`application_secret` on Square and `client_id`/`client_secret`
-on the other three.
+on the other four.
 
 ### Square
 
@@ -362,3 +367,21 @@ version-1 UUID layout the vendor's own examples use, numbered by entity kind —
 sales. So the main register in full is
 `1a000000-0000-1000-8000-000000000201`. The whole surface, with transcripts, is
 on the [Lightspeed page](../vendors/lightspeed.md).
+
+### Lightspeed Restaurant K-Series
+
+| | |
+|---|---|
+| App credentials | `unit-lightspeed-k-client-id` / `unit-lightspeed-k-client-secret` (HTTP Basic on the token endpoint) |
+| OAuth shape | authorize stand-in `GET /oauth/authorize` (`https://consumer.example/callback`) + code exchange at `POST /oauth/token` from the **query string**; single-use refresh from a form body |
+| Full-access bearer | `unit-lightspeed-k-access-token-full`, scopes `financial-api orders-api` (refresh `unit-lightspeed-k-refresh-token-full`) |
+| Read-only bearer | `unit-lightspeed-k-access-token-financial` — `financial-api` only, so every Order and Pay read answers 403 to it |
+| Tenant, and how requests name it | business `100000000001` ("Unit K Bistro"), location `100000000101` (`businessLocationId` in the menu-list **query**) |
+| Catalog | V2 menu `100000000201` ("Unit Lunch Menu"): group `Mains` with Unit Burger `UNITK-001` (12.50) and Unit Lemonade `UNITK-002` (4.00) |
+| Orders and payments | none in slice 1 |
+| Webhooks | none: the `webhooks` role is declared unsupported |
+| Event types | none |
+
+The ids are sequential twelve-digit integers by kind: `…0001` the business,
+`…0101` the location, `…0201` the menu, `…0301` the menu group. The surface,
+with transcripts, is on the [Lightspeed K-Series page](../vendors/lightspeed-k.md).

@@ -6,8 +6,9 @@
 
 Unofficial. Not affiliated with, endorsed by, or connected to any vendor
 named here. Every behaviour is derived from publicly published API
-documentation. Four vendors ship today: Square (Connect v2), Clover
-(REST v3), Toast (REST v2/v3), Lightspeed Retail X-Series (API 2026-07).
+documentation. Five vendors ship today: Square (Connect v2), Clover
+(REST v3), Toast (REST v2/v3), Lightspeed Retail X-Series (API 2026-07),
+Lightspeed Restaurant K-Series (`lightspeed-k`, V1 authentication, slice 1).
 
 ## Docs
 
@@ -33,6 +34,10 @@ documentation. Four vendors ship today: Square (Connect v2), Clover
   from a served unit, the five places the vendor's own document contradicts
   itself and this fake reproduces it, the capability table, and every judgment
   call with the page that is silent about it.
+- [Lightspeed Restaurant K-Series](https://github.com/konyklabs/vendorfake/blob/main/docs/vendors/lightspeed-k.md):
+  the `lightspeed-k` page -- the V1 token endpoint and the three Order and Pay
+  reads it models, transcripts from a served unit, what is documented and
+  what is judgment, and what the slice leaves out.
 - [Which binding to use](https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md):
   the four bindings (in-process sync, in-process async, served, container),
   the `vendorfake` pytest marker and its three fixtures, docker compose, CI,

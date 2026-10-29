@@ -400,7 +400,7 @@ def toast_target(
 
 LIGHTSPEED_VENDOR = "lightspeed"
 LIGHTSPEED_PROFILES: tuple[str, ...] = PROFILES
-"""The same six names again, so one matrix shape covers all four vendors."""
+"""The same six names again, so one matrix shape covers every vendor."""
 
 LIGHTSPEED_EXPECTED_SKIPS = _LIGHTSPEED_EXPECTED_SKIPS
 LIGHTSPEED_INAPPLICABLE = _LIGHTSPEED_INAPPLICABLE
