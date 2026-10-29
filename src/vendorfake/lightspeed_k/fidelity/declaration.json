@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "vendored": false,
+  "sources": [
+    {
+      "kind": "openapi3",
+      "url": "https://api-docs.lsk.lightspeed.app/source.json",
+      "label": "k-series"
+    }
+  ],
+  "error_schema": "apePaymentBadRequestError",
+  "aliases": [],
+  "excused": [
+    {
+      "method": "GET",
+      "path": "/oauth/authorize",
+      "reason": "Lightspeed's interactive consent screen, documented in prose on the V1 authorization overview (https://api-portal.lsk.lightspeed.app/quick-start/authentication/v1-authentication/v1-authorization-overview, fetched 2026-10-29) and absent from source.json, whose securitySchemes names the V2 OpenID Connect authorizationUrl. This unit serves a stand-in at the documented path that approves automatically; its route summary says so."
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token",
+      "reason": "The V1 token endpoint, documented in prose only (same page, fetched 2026-10-29): code exchange from query parameters, refresh from a form body, HTTP Basic client authentication, a five-member JSON response. source.json's securitySchemes tokenUrl is the V2 OpenID Connect one, so no operation describes this route."
+    }
+  ],
+  "deviations": [
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "pattern": "503",
+      "routes": ["GET /o/op/data/businesses", "GET /o/op/1/menu/list"],
+      "reason": "The document's only declared 503 body (under */* on apeGetMenuByIdV2) types status as the string enum '503'; this unit answers that one envelope for every 503, and on the two routes that declare no 503 the body falls back to error_schema, whose status is an integer. One keyword, one pointer, the two routes.",
+      "url": "https://api-docs.lsk.lightspeed.app/source.json"
+    }
+  ],
+  "overrides": [],
+  "stubs_accepted": [],
+  "variables": {
+    "client_id": "unit-lightspeed-k-client-id",
+    "client_secret": "unit-lightspeed-k-client-secret",
+    "basic_auth": "Basic dW5pdC1saWdodHNwZWVkLWstY2xpZW50LWlkOnVuaXQtbGlnaHRzcGVlZC1rLWNsaWVudC1zZWNyZXQ=",
+    "basic_auth_v2": "Basic ZGV2cC12Mi11bml0LWNsaWVudDp1bml0LWxpZ2h0c3BlZWQtay1jbGllbnQtc2VjcmV0",
+    "redirect_uri": "https://consumer.example/callback",
+    "access_token": "unit-lightspeed-k-access-token-full",
+    "refresh_token": "unit-lightspeed-k-refresh-token-full",
+    "financial_only_access_token": "unit-lightspeed-k-access-token-financial",
+    "business_id": "100000000001",
+    "business_location_id": "100000000101",
+    "menu_id": "100000000201",
+    "sku_a": "UNITK-001"
+  }
+}

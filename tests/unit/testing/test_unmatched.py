@@ -29,6 +29,7 @@ MISSPELLED_AUTH: dict[str, tuple[str, str]] = {
     "clover": ("/oauth/v2/tokens", "ExchangeToken"),
     "toast": ("/authentication/v1/authentication/logins", "Login"),
     "lightspeed": ("/api/1.0/tokens", "TokenExchange"),
+    "lightspeed-k": ("/oauth/tokens", "OauthToken"),
 }
 
 

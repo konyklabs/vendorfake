@@ -36,7 +36,7 @@ jobs:
       # thirty seconds together, and the only pytest a pull request runs. The
       # full suite stays on push to main (konyklabs/roadmap#116, phase 9).
       - name: Vendor and parity suites
-        run: uv run pytest tests/unit/square tests/unit/clover tests/unit/toast tests/unit/lightspeed tests/parity -q -p no:randomly
+        run: uv run pytest tests/unit/square tests/unit/clover tests/unit/toast tests/unit/lightspeed tests/unit/lightspeed_k tests/parity -q -p no:randomly
 
   test:
     if: github.event_name != 'pull_request'

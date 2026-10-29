@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "id": "auth.bearer.missing",
+  "title": "An Order and Pay read with no Authorization header is a 4xx; this unit answers 401 in the apePaymentBadRequestError shape",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/quick-start/authentication/v1-authentication/v1-managing-access-tokens",
+    "fetched": "2026-10-29",
+    "provenance": "judgment",
+    "note": "The page: 'If an access token becomes invalid or expired, a 4xx error will be returned'. The 401 status (RFC 6750 s3.1) and the body -- the Order and Pay tag's one named error component without timestamp and path -- are this unit's judgment."
+  },
+  "routes": [
+    "GET /o/op/1/menu/list"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "no bearer",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/1/menu/list",
+        "query": {
+          "businessLocationId": "${vars.business_location_id}"
+        }
+      },
+      "expect": {
+        "status": 401,
+        "body": {
+          "status": 401,
+          "error": "Unauthorized",
+          "message": "${re:.+}"
+        },
+        "absent": [
+          "/timestamp",
+          "/path"
+        ]
+      }
+    }
+  ]
+}

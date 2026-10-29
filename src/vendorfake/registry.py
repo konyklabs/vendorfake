@@ -59,6 +59,7 @@ loader's table: it decides which module to import, before a profile exists."""
 _BUILTIN: Mapping[str, str] = {
     "clover": "vendorfake.clover:VENDOR",
     "lightspeed": "vendorfake.lightspeed:VENDOR",
+    "lightspeed-k": "vendorfake.lightspeed_k:VENDOR",
     "square": "vendorfake.square:VENDOR",
     "toast": "vendorfake.toast:VENDOR",
 }

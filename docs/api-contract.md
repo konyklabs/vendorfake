@@ -49,10 +49,11 @@ and `webhook_receiver()`; the `Driver`, `StartedUnit`, `ServedUnit`,
 `WebhookReceiver` and `Delivery` handles; `UnitTransport`; the
 `UnmatchedRequest` assertion error and `checked_unmatched`, the validation
 `unit()` applies to its `unmatched=` argument; `ClockInfo` and `RouteInfo`;
-the `Seed` protocol, the four per-vendor seed types, `Credentials` and
-`Token`; the four per-vendor seed-overlay types (`SquareSeedOverlay`,
-`CloverSeedOverlay`, `ToastSeedOverlay`, `LightspeedSeedOverlay`) and the
-untyped `SeedOverlay`;
+the `Seed` protocol, the five per-vendor seed types (`LightspeedKSeed` for
+the `lightspeed-k` identifier among them), `Credentials` and
+`Token`; the five per-vendor seed-overlay types (`SquareSeedOverlay`,
+`CloverSeedOverlay`, `ToastSeedOverlay`, `LightspeedSeedOverlay`,
+`LightspeedKSeedOverlay`) and the untyped `SeedOverlay`;
 the `SeedT` type variable; and the tuning constants `CLIENT_TIMEOUT_S`, `DRAIN_TIMEOUT_S`,
 `DEFAULT_REQUEST_LIMIT`, `LOG_LINES`, `SERVE_COMMAND` and `NO_SEED_HINT`.
 
@@ -90,7 +91,8 @@ collection the seed does not have are in
 **An overlay may not name the collections `.seed` is built from.** `tokens`,
 and the vendor's identity collection (`merchant` on Square and Clover,
 `restaurant` on Toast, `retailer` on Lightspeed, which also refuses
-`personal_tokens` and `refresh_tokens`), are refused with `UnitError` when the
+`personal_tokens` and `refresh_tokens`, `businesses` on lightspeed-k, which
+also refuses `refresh_tokens`), are refused with `UnitError` when the
 unit starts —
 on all three bindings, and in the parent process before `served()` spawns a
 child. `.seed` carries the shipped credentials and tenant id from this
@@ -139,7 +141,8 @@ loaded explicitly with `-p vendorfake.conformance.plugin`.
 ### The per-vendor path constants
 
 `vendorfake.square.paths`, `vendorfake.clover.paths`,
-`vendorfake.toast.paths` and `vendorfake.lightspeed.paths` — one
+`vendorfake.toast.paths`, `vendorfake.lightspeed.paths` and
+`vendorfake.lightspeed_k.paths` — one
 `UPPER_SNAKE` constant per route carrying an
 `operation_id`, named after that `operation_id`, which is the same identifier
 `registry.routes` and `GET /__unit/routes` publish.

@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "id": "auth.token.code-exchange-query",
+  "title": "The V1 code exchange reads grant_type, code and redirect_uri from the query string and answers the five documented members",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/quick-start/authentication/v1-authentication/v1-authorization-overview",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "The overview: the authorization URL takes response_type=code, client_id, scope and redirect_uri, and redirects with code and state; the exchange 'values must be passed as query parameters' with HTTP Basic client_id:client_secret; both sample responses carry access_token, token_type bearer, refresh_token, expires_in 3599 and scope 'financial-api orders-api ' -- the trailing space is in both documented samples; that it is always present is this unit's judgment. The authorize route is a stand-in for the consent screen, and the code below is the first one a fresh unit mints (deterministic by C06/C22)."
+  },
+  "routes": [
+    "GET /oauth/authorize",
+    "POST /oauth/token"
+  ],
+  "profile": "oauth-only",
+  "steps": [
+    {
+      "name": "authorize",
+      "request": {
+        "method": "GET",
+        "path": "/oauth/authorize",
+        "query": {
+          "response_type": "code",
+          "client_id": "${vars.client_id}",
+          "redirect_uri": "${vars.redirect_uri}",
+          "state": "opaque-consumer-state",
+          "scope": "financial-api orders-api"
+        }
+      },
+      "expect": {
+        "status": 302,
+        "headers": {
+          "location": "${re:https://consumer\\.example/callback\\?code=[A-Za-z0-9]{6}&state=opaque-consumer-state}"
+        }
+      }
+    },
+    {
+      "name": "exchange the code through the query string",
+      "request": {
+        "method": "POST",
+        "path": "/oauth/token",
+        "headers": {
+          "authorization": "${vars.basic_auth}"
+        },
+        "query": {
+          "grant_type": "authorization_code",
+          "code": "E59Xgh",
+          "redirect_uri": "${vars.redirect_uri}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "access_token": "${re:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}}",
+          "token_type": "bearer",
+          "refresh_token": "${re:[0-9a-f-]{36}}",
+          "expires_in": 3599,
+          "scope": "financial-api orders-api "
+        }
+      }
+    }
+  ]
+}

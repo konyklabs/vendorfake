@@ -53,6 +53,8 @@ from vendorfake.testing.conformance import CLOVER_EXPECTED_SKIPS as _CLOVER_EXPE
 from vendorfake.testing.conformance import CLOVER_INAPPLICABLE as _CLOVER_INAPPLICABLE
 from vendorfake.testing.conformance import LIGHTSPEED_EXPECTED_SKIPS as _LIGHTSPEED_EXPECTED_SKIPS
 from vendorfake.testing.conformance import LIGHTSPEED_INAPPLICABLE as _LIGHTSPEED_INAPPLICABLE
+from vendorfake.testing.conformance import LIGHTSPEED_K_EXPECTED_SKIPS as _LIGHTSPEED_K_EXPECTED_SKIPS
+from vendorfake.testing.conformance import LIGHTSPEED_K_INAPPLICABLE as _LIGHTSPEED_K_INAPPLICABLE
 from vendorfake.testing.conformance import TOAST_EXPECTED_SKIPS as _TOAST_EXPECTED_SKIPS
 from vendorfake.testing.conformance import TOAST_INAPPLICABLE as _TOAST_INAPPLICABLE
 
@@ -398,7 +400,7 @@ def toast_target(
 
 LIGHTSPEED_VENDOR = "lightspeed"
 LIGHTSPEED_PROFILES: tuple[str, ...] = PROFILES
-"""The same six names again, so one matrix shape covers all four vendors."""
+"""The same six names again, so one matrix shape covers every vendor."""
 
 LIGHTSPEED_EXPECTED_SKIPS = _LIGHTSPEED_EXPECTED_SKIPS
 LIGHTSPEED_INAPPLICABLE = _LIGHTSPEED_INAPPLICABLE
@@ -425,4 +427,28 @@ def lightspeed_target(
         out_of_process=out_of_process,
         expected_skips=LIGHTSPEED_EXPECTED_SKIPS,
         inapplicable=LIGHTSPEED_INAPPLICABLE,
+    )
+
+
+LIGHTSPEED_K_VENDOR = "lightspeed-k"
+LIGHTSPEED_K_EXPECTED_SKIPS = _LIGHTSPEED_K_EXPECTED_SKIPS
+LIGHTSPEED_K_INAPPLICABLE = _LIGHTSPEED_K_INAPPLICABLE
+
+
+def lightspeed_k_target(
+    *,
+    profiles: tuple[str, ...] = PROFILES,
+    transports: tuple[str, ...] = ("inprocess", "http"),
+    out_of_process: tuple[str, ...] = (OUT_OF_PROCESS_TRANSPORT,),
+) -> ConformanceTarget:
+    """The fifth vendor. No ``path_params``: slice 1 has no tenant path segment."""
+    return ConformanceTarget(
+        name=LIGHTSPEED_K_VENDOR,
+        open_client=functools.partial(open_client, vendor=LIGHTSPEED_K_VENDOR),
+        open_with_seed_overlay=functools.partial(open_with_seed_overlay, vendor=LIGHTSPEED_K_VENDOR),
+        profiles=profiles,
+        transports=transports,
+        out_of_process=out_of_process,
+        expected_skips=LIGHTSPEED_K_EXPECTED_SKIPS,
+        inapplicable=LIGHTSPEED_K_INAPPLICABLE,
     )

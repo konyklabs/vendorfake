@@ -36,4 +36,7 @@ def test_a_missing_required_file_fails_and_a_complete_wheel_passes() -> None:
 def test_forbidden_is_derived_from_the_non_vendored_declarations() -> None:
     """Adversarial A8: a second fetch-never-commit vendor is covered the day
     its declaration says `vendored: false`, with no list to remember."""
-    assert check_wheel_data.FORBIDDEN == ("vendorfake/toast/fidelity/extract.json",)
+    assert check_wheel_data.FORBIDDEN == (
+        "vendorfake/lightspeed_k/fidelity/extract.json",
+        "vendorfake/toast/fidelity/extract.json",
+    )

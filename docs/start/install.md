@@ -7,7 +7,7 @@ pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.
 # or, in a uv project:
 uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.8.0"  # x-release-please-version
 
-vendorfake vendors            # -> clover, lightspeed, square, toast
+vendorfake vendors            # -> clover, lightspeed, lightspeed-k, square, toast
 vendorfake serve --vendor square
 ```
 

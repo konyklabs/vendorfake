@@ -28,6 +28,8 @@ from vendorfake.clover.vendor import create_clover_vendor
 from vendorfake.core.kernel.types import VendorDefinition
 from vendorfake.lightspeed import paths as lightspeed_paths
 from vendorfake.lightspeed.vendor import create_lightspeed_vendor
+from vendorfake.lightspeed_k import paths as lightspeed_k_paths
+from vendorfake.lightspeed_k.vendor import create_lightspeed_k_vendor
 from vendorfake.square import paths as square_paths
 from vendorfake.square.vendor import create_square_vendor
 from vendorfake.toast import paths as toast_paths
@@ -38,6 +40,7 @@ VENDORS: tuple[tuple[str, Callable[[], VendorDefinition], object], ...] = (
     ("clover", create_clover_vendor, clover_paths),
     ("toast", create_toast_vendor, toast_paths),
     ("lightspeed", create_lightspeed_vendor, lightspeed_paths),
+    ("lightspeed-k", create_lightspeed_k_vendor, lightspeed_k_paths),
 )
 
 

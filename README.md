@@ -23,13 +23,16 @@ unstated are this project's reading of it, labelled `JUDGMENT` at the site.
 > documentation. Vendor names are used only to identify which public API a
 > module imitates.
 
-Covers **Square** (Connect v2), **Clover** (REST v3), **Toast** (REST v2/v3)
-and **Lightspeed Retail X-Series** (API 2026-07) — see [the docs
+Covers **Square** (Connect v2), **Clover** (REST v3), **Toast** (REST v2/v3),
+**Lightspeed Retail X-Series** (API 2026-07) and **Lightspeed Restaurant
+K-Series** (`lightspeed-k`, V1 authentication, slice 1 of D-016; the other
+Restaurant series are not modelled) — see [the docs
 site](docs/index.md) for what each surface covers; the route reference lists
 every route per vendor, and `vendorfake explain` describes one in place.
 Lightspeed has a page of its own, with real transcripts, the vendor's own
 inconsistencies it reproduces and every judgment call it makes:
-[Lightspeed Retail X-Series](docs/vendors/lightspeed.md).
+[Lightspeed Retail X-Series](docs/vendors/lightspeed.md); so does
+[Lightspeed Restaurant K-Series](docs/vendors/lightspeed-k.md).
 
 ## Start in sixty seconds
 
@@ -40,7 +43,7 @@ pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.
 # or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.8.0"  # x-release-please-version
 # or, from a checkout of this repository: uv sync
 
-vendorfake vendors                       # -> clover, lightspeed, square, toast
+vendorfake vendors                       # -> clover, lightspeed, lightspeed-k, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 vendorfake serve --vendor lightspeed     # or any other installed vendor
 ```
@@ -56,7 +59,7 @@ curl -s http://127.0.0.1:8080/__unit/health
 # -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.8.0"}  # x-release-please-version
 ```
 
-Every command names a vendor (`--vendor square|clover|toast|lightspeed`, or
+Every command names a vendor (`--vendor square|clover|toast|lightspeed|lightspeed-k`, or
 `VENDORFAKE_VENDOR`); with none installed it refuses and lists what it found.
 Drop the `@v0.8.0` to track `main` instead of a release tag. <!-- x-release-please-version --> A container image
 is also available (one image, every vendor, chosen at run time) — see

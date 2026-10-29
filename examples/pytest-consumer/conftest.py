@@ -12,7 +12,15 @@ from collections.abc import Iterator
 
 import pytest
 
-from vendorfake.testing import CloverSeed, SquareSeed, StartedUnit, WebhookReceiver, unit, webhook_receiver
+from vendorfake.testing import (
+    CloverSeed,
+    LightspeedKSeed,
+    SquareSeed,
+    StartedUnit,
+    WebhookReceiver,
+    unit,
+    webhook_receiver,
+)
 
 
 @pytest.fixture
@@ -36,6 +44,12 @@ def toast() -> Iterator[StartedUnit]:
 @pytest.fixture
 def lightspeed() -> Iterator[StartedUnit]:
     with unit("lightspeed") as started:
+        yield started
+
+
+@pytest.fixture
+def lightspeed_k() -> Iterator[StartedUnit[LightspeedKSeed]]:
+    with unit("lightspeed-k") as started:
         yield started
 
 

@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "id": "auth.token.v2-client-refused",
+  "title": "A devp-v2 client id is a V2 API client, and the V1 token endpoint refuses it as invalid_client",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/quick-start/authentication/v1-authentication/v1-authorization-overview",
+    "fetched": "2026-10-29",
+    "provenance": "judgment",
+    "note": "Every V1 page carries the banner 'If your API client_id begins with the prefix devp-v2 it is a V2 API client'. What the V1 endpoint answers such a client is not documented; the 401 invalid_client with WWW-Authenticate: Basic is RFC 6749 s5.2, this unit's judgment."
+  },
+  "routes": [
+    "POST /oauth/token"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "refresh as a V2 client",
+      "request": {
+        "method": "POST",
+        "path": "/oauth/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded",
+          "authorization": "${vars.basic_auth_v2}"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${vars.refresh_token}"
+      },
+      "expect": {
+        "status": 401,
+        "headers": {
+          "www-authenticate": "Basic"
+        },
+        "body": {
+          "error": "invalid_client"
+        }
+      }
+    }
+  ]
+}

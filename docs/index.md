@@ -31,7 +31,7 @@ signs it. Where the public documentation is silent and a behaviour had to be
 decided, the wire says so — see
 [Provenance labels](concepts/chaos.md#provenance).
 
-## Four vendors, modelled properly
+## Five vendors, modelled properly
 
 | Vendor | What the fake covers |
 |---|---|
@@ -39,12 +39,13 @@ decided, the wire says so — see
 | **Clover** (REST v3) | OAuth v2 with single-use refresh rotation and the documented 401-for-everything auth; orders and line items with client-owned totals; atomic order and checkout calculators with taxes; inventory with modifier groups; employees, tenders, order types, customers; external-tender payments that lock the order; webhooks in Clover's aggregate shape with the `X-Clover-Auth` header and the verification handshake |
 | **Toast** (REST v2/v3) | The consumer-driven slice an ordering integration calls: machine-client login with a JWT; the V3 menu and configuration lists; `/prices` and orders priced server-side from the tax rates; OTHER and pre-authorised CREDIT payments, tips, voids, discounts, stock; webhooks in Toast's envelope with the `Toast-Signature` HMAC and its documented retry schedule |
 | **[Lightspeed Retail X-Series](vendors/lightspeed.md)** (API 2026-07) | The token endpoint with both grants and the rotation that revokes the access token it was returned with; the retailer, outlets, registers and payment types behind Lightspeed's per-retailer version cursor (`after`/`before`/`page_size`, `{"data": …, "version": {max, min}}`); the register open/close actions, with a close synthesising the closure the `register_closure.create` webhook carries; the documented fixed-window rate limiter (`300 × registers + 50` per five minutes, with an RFC 1123 `Retry-After`); products with inline variants, inventory records and levels with the 1-1000 stock-adjustment batch, and customers — each firing its documented webhook; sales, with line items and payments inline on the sale, a declared `parked | pending | voided | closed` lifecycle, computed totals, payment refusals in the vendor's `PaymentErrorResponse` shape, the return action, and a close that draws the outlet's stock; webhook CRUD, and form-encoded delivery signed with `X-Signature` |
+| **[Lightspeed Restaurant K-Series](vendors/lightspeed-k.md)** (`lightspeed-k`, V1 authentication, unofficial) | Slice 1 of D-016: the V1 token endpoint with both grants (the code exchange from the query string, the single-use refresh from a form body, HTTP Basic client authentication) and a stand-in for the consent screen; the three Order and Pay reads under `orders-api` -- the businesses and locations, a location's menus, and one menu in its V2 shape |
 
 ## Sixty seconds to a first request
 
 ```sh
 pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.8.0"   # [serve] for `vendorfake serve`; in-process tests need no extra; x-release-please-version
-vendorfake vendors                       # -> clover, lightspeed, square, toast
+vendorfake vendors                       # -> clover, lightspeed, lightspeed-k, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```
 

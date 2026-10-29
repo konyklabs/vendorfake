@@ -25,8 +25,10 @@ def test_every_vendor_publishes_a_token_that_agrees_with_its_grant(vendor: str) 
         assert token.access_token and token.tenant_id
         # The one real lifecycle difference, stated twice and agreeing.
         assert (token.refresh_token is None) == (seed.credentials.grant == "client_credentials")
-        # It is the token ``auth`` sends, not a second one.
-        assert seed.auth["Authorization"] == f"Bearer {token.access_token}"
+        # It is the token ``auth`` sends, not a second one. lightspeed-k spells the scheme as
+        # both V1 samples print it, lowercase (v1-overview); its unit matches it case-insensitively.
+        scheme = "bearer" if vendor == "lightspeed-k" else "Bearer"
+        assert seed.auth["Authorization"] == f"{scheme} {token.access_token}"
 
 
 def test_square_tenant_is_the_seller_not_a_location() -> None:

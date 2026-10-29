@@ -240,7 +240,11 @@ def run_conformance(
         strict=strict,
         expected_skips=declared_skips(target),
         inapplicable=dict(target.inapplicable),
-        unobserved=unobserved_contracts(specs, results) if strict else {},
+        unobserved=(
+            {cid: why for cid, why in unobserved_contracts(specs, results).items() if cid not in target.inapplicable}
+            if strict
+            else {}
+        ),
         cross_profile=derived if cross_profile is None else cross_profile,
     )
 

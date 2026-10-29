@@ -562,12 +562,14 @@ def test_every_installed_vendor_ships_a_conformance_target_and_a_seed() -> None:
     that only builds from a hand-written mapping would pass while the
     consumer path raised."""
     from vendorfake import available_vendors
+    from vendorfake.registry import resolve_vendor
     from vendorfake.testing import conformance as shipped
 
     vendors = available_vendors()
     assert len(vendors) >= 3
     for vendor in vendors:
-        factory = getattr(shipped, f"{vendor}_target", None)
+        # D-010/D-016 naming: the hyphenated identifier's target is lightspeed_k_target.
+        factory = getattr(shipped, f"{vendor.replace('-', '_')}_target", None)
         assert factory is not None, f"vendorfake.testing.conformance ships no {vendor}_target"
         built = factory()
         assert built.name == vendor
@@ -575,7 +577,9 @@ def test_every_installed_vendor_ships_a_conformance_target_and_a_seed() -> None:
         with unit(vendor) as driver:
             seed = driver.seed
             assert seed is not None, f"vendorfake.testing.seeds.seed_for knows no {vendor!r}"
-            assert seed.event_types, f"{vendor!r} publishes no event types for subscribe() validation"
+            # A vendor that declares the webhooks role unsupported (D-010) has no event to subscribe to.
+            if resolve_vendor(vendor).roles.get("webhooks") is not None:
+                assert seed.event_types, f"{vendor!r} publishes no event types for subscribe() validation"
             assert "Authorization" in seed.auth, f"{vendor!r}'s seed.auth carries no bearer"
 
 

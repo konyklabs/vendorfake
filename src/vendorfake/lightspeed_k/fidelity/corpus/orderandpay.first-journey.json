@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "id": "orderandpay.first-journey",
+  "title": "The online-ordering first journey: businesses, a location's menus, then one menu in its V2 shape",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "The tutorial's Part 1, Step 1: send the GET All Menus request and copy the ikentooMenuId of the menu to work with. The tutorial's Postman step loads 'GET Single Menu' without saying which version; this case walks V2, the non-deprecated one (changes, 2026-05-15)."
+  },
+  "routes": [
+    "GET /o/op/data/businesses",
+    "GET /o/op/1/menu/list",
+    "GET /o/op/2/menu/load/{menuId}"
+  ],
+  "profile": "orders-only",
+  "steps": [
+    {
+      "name": "businesses",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/data/businesses",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": [
+          {
+            "name": "Unit K Bistro",
+            "id": 100000000001,
+            "businessLocations": [
+              {
+                "id": 100000000101,
+                "name": "${re:.+}"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "menus at the location",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/1/menu/list",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        },
+        "query": {
+          "businessLocationId": "${vars.business_location_id}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": [
+          {
+            "menuName": "Unit Lunch Menu",
+            "ikentooMenuId": 100000000201
+          }
+        ]
+      },
+      "capture": {
+        "menu_id": "/0/ikentooMenuId"
+      }
+    },
+    {
+      "name": "one menu, V2",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/2/menu/load/${cap.menu_id}",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        },
+        "query": {
+          "businessLocationId": "${vars.business_location_id}"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "ikentooMenuId": 100000000201,
+          "menuEntryGroups": [
+            {
+              "@type": "group",
+              "menuEntry": [
+                {
+                  "@type": "menuItem",
+                  "sku": "${vars.sku_a}",
+                  "productPrice": 12.5
+                },
+                {
+                  "@type": "menuItem",
+                  "sku": "UNITK-002"
+                }
+              ]
+            }
+          ],
+          "richDataMissing": false
+        }
+      }
+    }
+  ]
+}

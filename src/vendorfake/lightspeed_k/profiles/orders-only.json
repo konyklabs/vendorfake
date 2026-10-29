@@ -1,0 +1,18 @@
+{
+  "name": "orders-only",
+  "summary": "The three Order and Pay reads with request faults and no token endpoint: authenticate with the seeded bearer.",
+  "capabilities": [
+    "order_and_pay",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-k-client-id",
+    "client_secret": "unit-lightspeed-k-client-secret"
+  },
+  "chaos": {
+    "seed": 20261029,
+    "strict_rules": true,
+    "rules": []
+  }
+}

@@ -18,6 +18,8 @@ __all__ = [
     "CloverSeed",
     "CloverSeedOverlay",
     "Credentials",
+    "LightspeedKSeed",
+    "LightspeedKSeedOverlay",
     "LightspeedSeed",
     "LightspeedSeedOverlay",
     "Seed",
@@ -338,6 +340,51 @@ class LightspeedSeed:
         return f"{self.api_prefix}{suffix}"
 
 
+@dataclass(frozen=True, slots=True)
+class LightspeedKSeed:
+    """The Lightspeed K-Series scenario: one business and location, one V2 menu, a full and a
+    financial-api-only bearer, one refresh token. V1 authentication; the tenant is the location."""
+
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    access_token: str
+    refresh_token: str
+    financial_only_access_token: str
+    business_id: int
+    business_name: str
+    business_location_id: int
+    business_location_name: str
+    menu_id: int
+    menu_name: str
+    item_skus: tuple[str, ...]
+    token_path: str
+    basic_auth: str
+    event_types: tuple[str, ...] = ()
+
+    @property
+    def credentials(self) -> Credentials:
+        return Credentials(app_id=self.client_id, app_secret=self.client_secret, grant="refresh_token")
+
+    @property
+    def token(self) -> Token:
+        return Token(
+            access_token=self.access_token, refresh_token=self.refresh_token, tenant_id=str(self.business_location_id)
+        )
+
+    @property
+    def auth(self) -> dict[str, str]:
+        return {"Authorization": f"bearer {self.access_token}"}
+
+    @property
+    def read_only_auth(self) -> dict[str, str]:
+        return {"Authorization": f"bearer {self.financial_only_access_token}"}
+
+    @property
+    def basic_auth_headers(self) -> dict[str, str]:
+        return {"Authorization": self.basic_auth}
+
+
 # Seed overlays: one ``TypedDict(total=False)`` per vendor, keyed by its seed
 # collections, so a checker rejects a key that is not one. Values are ``object``.
 
@@ -396,6 +443,15 @@ class ToastSeedOverlay(TypedDict, total=False):
     credit_authorizations: object
     stock: object
     webhook_subscriptions: object
+
+
+class LightspeedKSeedOverlay(TypedDict, total=False):
+    """The collections ``vendorfake/lightspeed_k/seed/default.seed.json`` carries."""
+
+    businesses: object
+    menus: object
+    tokens: object
+    refresh_tokens: object
 
 
 class LightspeedSeedOverlay(TypedDict, total=False):
@@ -577,6 +633,33 @@ def _lightspeed(vendor_config: Mapping[str, object]) -> LightspeedSeed:
     )
 
 
+def _lightspeed_k(vendor_config: Mapping[str, object]) -> LightspeedKSeed:
+    import base64
+
+    from vendorfake.lightspeed_k.config import LightspeedKConfig
+    from vendorfake.lightspeed_k.paths import OAUTH_TOKEN
+    from vendorfake.lightspeed_k.seed import constants as c
+
+    config = LightspeedKConfig.model_validate(dict(vendor_config))
+    return LightspeedKSeed(
+        client_id=config.client_id,
+        client_secret=config.client_secret,
+        redirect_uri=config.redirect_uri,
+        access_token=c.SEED_ACCESS_TOKEN,
+        refresh_token=c.SEED_REFRESH_TOKEN,
+        financial_only_access_token=c.SEED_FINANCIAL_ONLY_ACCESS_TOKEN,
+        business_id=c.SEED_BUSINESS_ID,
+        business_name=c.SEED_BUSINESS_NAME,
+        business_location_id=c.SEED_BUSINESS_LOCATION_ID,
+        business_location_name=c.SEED_BUSINESS_LOCATION_NAME,
+        menu_id=c.SEED_MENU_ID,
+        menu_name=c.SEED_MENU_NAME,
+        item_skus=c.SEED_ITEM_SKUS,
+        token_path=OAUTH_TOKEN,
+        basic_auth="Basic " + base64.b64encode(f"{config.client_id}:{config.client_secret}".encode()).decode(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _BuiltInSeed:
     """One shipped vendor's seed: :attr:`build` reads module constants, and
@@ -598,8 +681,11 @@ _BUILT_IN_SEEDS: Mapping[str, _BuiltInSeed] = {
         build=_lightspeed,
         collections=frozenset({"tokens", "personal_tokens", "refresh_tokens", "retailer"}),
     ),
+    "lightspeed-k": _BuiltInSeed(
+        build=_lightspeed_k, collections=frozenset({"tokens", "refresh_tokens", "businesses"})
+    ),
 }
-"""The four vendors this distribution ships, as data. An entry-point vendor is
+"""The five vendors this distribution ships, as data. An entry-point vendor is
 not here: it publishes its own via :data:`SEED_COLLECTIONS_ATTR`."""
 
 SEED_COLLECTIONS_ATTR = "seed_collections"

@@ -46,7 +46,8 @@ jobs:
           for entry in \
             "square=vendorfake.testing.fidelity:square_target" \
             "toast=vendorfake.testing.fidelity:toast_target" \
-            "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
+            "lightspeed=vendorfake.testing.fidelity:lightspeed_target" \
+            "lightspeed-k=vendorfake.testing.fidelity:lightspeed_k_target"
           do
             vendor="${entry%%=*}"
             target="${entry#*=}"

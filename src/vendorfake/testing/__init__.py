@@ -43,6 +43,8 @@ from vendorfake.testing.seeds import (
     CloverSeed,
     CloverSeedOverlay,
     Credentials,
+    LightspeedKSeed,
+    LightspeedKSeedOverlay,
     LightspeedSeed,
     LightspeedSeedOverlay,
     Seed,
@@ -70,6 +72,8 @@ __all__ = [
     "Credentials",
     "Delivery",
     "Driver",
+    "LightspeedKSeed",
+    "LightspeedKSeedOverlay",
     "LightspeedSeed",
     "LightspeedSeedOverlay",
     "RouteInfo",
@@ -436,7 +440,7 @@ class ServedUnit(Driver[SeedT]):
 
 
 NO_SEED_HINT = (
-    "vendorfake ships a seed for square, clover, toast and lightspeed. A vendor from the "
+    "vendorfake ships a seed for square, clover, toast, lightspeed and lightspeed-k. A vendor from the "
     "'vendorfake.vendors' entry-point group publishes its own by implementing "
     "vendorfake.core.kernel.types.SeedingVendor -- a seed(vendor_config) method "
     "returning an object with credentials, auth, read_only_auth and event_types. "
@@ -555,6 +559,22 @@ def unit(
     unmatched: UnmatchedPolicy | None = ...,
     clock_start: datetime | str | None = ...,
 ) -> AbstractContextManager[StartedUnit[LightspeedSeed]]: ...
+
+
+@overload
+def unit(
+    vendor: Literal["lightspeed-k"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    seed_overlay: LightspeedKSeedOverlay | str | os.PathLike[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractContextManager[StartedUnit[LightspeedKSeed]]: ...
 
 
 @overload
@@ -825,6 +845,22 @@ def async_unit(
 
 @overload
 def async_unit(
+    vendor: Literal["lightspeed-k"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    sink: DeliverySink | None = ...,
+    env: Mapping[str, str] | None = ...,
+    logger: Logger | None = ...,
+    seed: int | None = ...,
+    seed_overlay: LightspeedKSeedOverlay | str | os.PathLike[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    clock_start: datetime | str | None = ...,
+) -> AbstractAsyncContextManager[StartedUnit[LightspeedKSeed]]: ...
+
+
+@overload
+def async_unit(
     vendor: str,
     profile: str | None = ...,
     *,
@@ -1002,6 +1038,24 @@ def served(
     validate: bool = ...,
     seed_overlay: LightspeedSeedOverlay | str | os.PathLike[str] | None = ...,
 ) -> AbstractContextManager[ServedUnit[LightspeedSeed]]: ...
+
+
+@overload
+def served(
+    vendor: Literal["lightspeed-k"],
+    profile: str | None = ...,
+    *,
+    capabilities: Sequence[str] | None = ...,
+    unmatched: UnmatchedPolicy | None = ...,
+    port: int = ...,
+    host: str = ...,
+    log_level: str = ...,
+    timeout_s: float = ...,
+    env: Mapping[str, str] | None = ...,
+    clock_start: datetime | str | None = ...,
+    validate: bool = ...,
+    seed_overlay: LightspeedKSeedOverlay | str | os.PathLike[str] | None = ...,
+) -> AbstractContextManager[ServedUnit[LightspeedKSeed]]: ...
 
 
 @overload
