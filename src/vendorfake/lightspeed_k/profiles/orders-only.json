@@ -1,6 +1,6 @@
 {
   "name": "orders-only",
-  "summary": "The three Order and Pay reads with request faults and no token endpoint: authenticate with the seeded bearer.",
+  "summary": "Order and Pay alone, the to-go order included, with request faults and no token endpoint: authenticate with the seeded bearer. No notification is delivered.",
   "capabilities": [
     "order_and_pay",
     "chaos"

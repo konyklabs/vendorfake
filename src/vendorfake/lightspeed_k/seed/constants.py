@@ -15,6 +15,7 @@ __all__ = [
     "SEED_BUSINESS_NAME",
     "SEED_CLIENT_ID",
     "SEED_CLIENT_SECRET",
+    "SEED_EXAMPLE_ENDPOINT_ID",
     "SEED_FINANCIAL_ONLY_ACCESS_TOKEN",
     "SEED_GROUP_ID",
     "SEED_ITEM_SKUS",
@@ -22,6 +23,7 @@ __all__ = [
     "SEED_MENU_NAME",
     "SEED_REDIRECT_URI",
     "SEED_REFRESH_TOKEN",
+    "SEED_UNKNOWN_SKU",
 ]
 
 SEED_CLIENT_ID = "unit-lightspeed-k-client-id"
@@ -38,5 +40,7 @@ SEED_MENU_ID = 100000000201
 SEED_MENU_NAME = "Unit Lunch Menu"
 SEED_GROUP_ID = "100000000301"
 SEED_ITEM_SKUS = ("UNITK-001", "UNITK-002")
+SEED_UNKNOWN_SKU = "UNITK-404"
+SEED_EXAMPLE_ENDPOINT_ID = "UNIT-K-EXAMPLE-ENDPOINT"
 SEED_BASIC_AUTH = "Basic dW5pdC1saWdodHNwZWVkLWstY2xpZW50LWlkOnVuaXQtbGlnaHRzcGVlZC1rLWNsaWVudC1zZWNyZXQ="
 DEFAULT_SEED_PATH: Path = Path(str(resources.files("vendorfake.lightspeed_k") / "seed" / "default.seed.json"))

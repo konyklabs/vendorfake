@@ -4,8 +4,11 @@ A site labels its behaviour with one comment naming a :data:`SOURCES` key."""
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
+from pydantic import BaseModel, ValidationError
+
+from vendorfake.core.config.models import unit_error_from_validation
 from vendorfake.core.kernel.types import HandlerArgs, UnitError, UnitErrorKind
 from vendorfake.core.time.clock import Clock
 from vendorfake.lightspeed_k.config import LightspeedKConfig
@@ -20,6 +23,7 @@ __all__ = [
     "int64_path",
     "int64_query",
     "is_past_ms",
+    "validate_body",
 ]
 
 PORTAL = "https://api-portal.lsk.lightspeed.app"
@@ -38,6 +42,7 @@ FETCHED = "2026-10-29"
 BEARER_AUTH = "bearer"
 SCOPE_ORDERS = "orders-api"
 _INT64 = 2**63
+_M = TypeVar("_M", bound=BaseModel)
 
 
 @runtime_checkable
@@ -71,3 +76,10 @@ def int64_query(args: HandlerArgs, name: str) -> int:
 
 def int64_path(args: HandlerArgs, name: str) -> int:
     return _int64(args.params.get(name), name)
+
+
+def validate_body(model: type[_M], body: Any, **context: Any) -> _M:
+    try:
+        return model.model_validate(body, context=context)
+    except ValidationError as exc:
+        raise unit_error_from_validation(exc) from exc

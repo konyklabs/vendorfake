@@ -1,9 +1,10 @@
 {
   "name": "no-faults",
-  "summary": "The V1 token endpoint and the three Order and Pay reads with fault injection switched off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token.",
+  "summary": "The V1 token endpoint, Order and Pay with the to-go order, and order notifications, with fault injection switched off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token.",
   "capabilities": [
     "auth",
-    "order_and_pay"
+    "order_and_pay",
+    "webhooks"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {

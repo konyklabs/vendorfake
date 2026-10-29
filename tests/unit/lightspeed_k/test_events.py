@@ -143,3 +143,20 @@ def test_the_body_never_carries_the_deprecated_or_example_only_names(h: Harness)
         (event,) = LightspeedKEventMapper().map(_entry("insert", order_id=order_id), Ctx(h))  # type: ignore[arg-type]
         body = event.build(META)
         assert not {"ikentooAccountId", "iKentooAccountId", "account"} & set(body)
+
+
+# The example payloads' member names in source.json's webhooks "apeOrder notification", minus the account snapshot
+# (never attached) and ikentooAccountId (the examples' spelling of the deprecated iKentooAccountId, never sent).
+SUCCESS_EXAMPLE_KEYS = {"thirdPartyReference", "businessLocationId", "status", "ikentooAccountIdentifier", "type"}
+FAILURE_EXAMPLE_KEYS = {"status", "reason", "thirdPartyReference"}
+
+
+@pytest.mark.parametrize(
+    ("status", "keys"),
+    [("SUCCESS", SUCCESS_EXAMPLE_KEYS), ("READY_FOR_PICKUP", SUCCESS_EXAMPLE_KEYS), ("CLOSED", SUCCESS_EXAMPLE_KEYS),
+     ("FAILURE", FAILURE_EXAMPLE_KEYS)],
+)
+def test_each_body_has_exactly_its_example_members(h: Harness, status: str, keys: set[str]) -> None:
+    _store(h, _row(status))
+    (event,) = LightspeedKEventMapper().map(_entry("insert"), Ctx(h))  # type: ignore[arg-type]
+    assert set(event.build(META)) == keys

@@ -1,10 +1,12 @@
 {
   "name": "chaos-demo",
-  "summary": "Every capability on a virtual clock with a preloaded fault set: a mid-flow token expiry on the second V2 menu load and the documented 503 envelope on the third.",
+  "summary": "Every capability on a virtual clock with a preloaded fault set: a mid-flow token expiry on the second V2 menu load, the documented 503 envelope on the third, and the first SUCCESS notification delivered twice.",
   "capabilities": [
     "auth",
     "order_and_pay",
-    "chaos"
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {
@@ -46,6 +48,23 @@
           ]
         },
         "note": "The third apeGetMenuByIdV2 answers the documented 503 envelope."
+      },
+      {
+        "id": "duplicate-first-order-success",
+        "scope": "webhook",
+        "fault": "webhook.duplicate",
+        "match": {
+          "event_type": "order:SUCCESS:*"
+        },
+        "when": {
+          "nth": [
+            1
+          ]
+        },
+        "params": {
+          "copies": 1
+        },
+        "note": "The first SUCCESS notification is delivered twice with the same event id."
       }
     ]
   }

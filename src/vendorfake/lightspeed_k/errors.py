@@ -1,5 +1,5 @@
-"""lightspeed-k error shaping: one table, three bodies chosen by the refusal. Every status is JUDGMENT
-but the 503's; see ``docs/vendors/lightspeed-k.md`` and each row's ``note``."""
+"""lightspeed-k error shaping: one table, four bodies chosen by the refusal. Every status is JUDGMENT
+but the 503's and the to-go 409's; see ``docs/vendors/lightspeed-k.md`` and each row's ``note``."""
 
 from __future__ import annotations
 
@@ -75,7 +75,7 @@ LIGHTSPEED_K_ERROR_TABLE: dict[UnitErrorKind, LightspeedKErrorMapping] = {
         "judgment",
         "Unauthorized",
         "The access token was revoked.",
-        "Never raised in slice 1: a refresh leaves the previous access token valid (D-010).",
+        "Never raised: a refresh leaves the previous access token valid (D-010).",
     ),
     UnitErrorKind.FORBIDDEN_SCOPE: _M(
         403, "judgment", "Forbidden", "The access token does not carry the orders-api scope this endpoint requires."
@@ -93,7 +93,14 @@ LIGHTSPEED_K_ERROR_TABLE: dict[UnitErrorKind, LightspeedKErrorMapping] = {
     UnitErrorKind.INVALID_TRANSITION: _M(
         409, "judgment", "Conflict", "The entity cannot be changed in its current state."
     ),
-    UnitErrorKind.CONFLICT: _M(409, "judgment", "Conflict", "Conflicting request."),
+    UnitErrorKind.CONFLICT: _M(
+        409,
+        "documented",
+        "Conflict",
+        "reference has already been used",
+        "apePlaceToGoOrder declares 409 {status:'fail', msg:'reference has already been used <ref>'} under */* "
+        "(source.json, fetched 2026-10-29) for a thirdPartyReference already spent.",
+    ),
     UnitErrorKind.RATE_LIMITED: _M(
         429,
         "judgment",
@@ -138,6 +145,9 @@ class LightspeedKErrorShaper:
         elif err.kind is UnitErrorKind.UNAVAILABLE:
             # DOCUMENTED source.json
             body = {"status": str(mapping.status), "message": detail, "apiSubExceptions": []}
+        elif err.kind is UnitErrorKind.CONFLICT:
+            # DOCUMENTED source.json: apePlaceToGoOrder 409 under */*
+            body = {"status": "fail", "msg": detail}
         else:
             body = {"status": mapping.status, "error": mapping.title, "message": detail}
         if self._sidecar:

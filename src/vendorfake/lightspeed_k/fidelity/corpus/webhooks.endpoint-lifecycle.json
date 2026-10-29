@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "id": "webhooks.endpoint-lifecycle",
+  "title": "A webhook endpoint created with Basic credentials, updated without the three flags (which reset), read, deleted, then not found",
+  "source": {
+    "url": "https://api-docs.lsk.lightspeed.app/source.json",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "apeCreateWebhookOo, apeUpdateWebhookOo ('if provideAccount, expandTransactions, or expandPayments are excluded from the update request, they will be reset to their default values'), apeGetWebhookOo (404 example 'endpoint ID not found for MISSING-ENDPOINT') and apeDeleteWebhookEndpoint (200 'Webhook deleted'). That username survives the update is this unit's judgment; the reset is the documented fact asserted."
+  },
+  "routes": [
+    "PUT /o/wh/1/webhook",
+    "POST /o/wh/1/webhook",
+    "GET /o/wh/1/webhook/{endpointId}",
+    "DELETE /o/wh/1/webhook/{endpointId}"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create with provideAccount and Basic",
+      "request": {
+        "method": "PUT",
+        "path": "/o/wh/1/webhook",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {
+          "endpointId": "${vars.endpoint_id}",
+          "url": "${vars.webhook_url}",
+          "withBasicAuth": true,
+          "username": "${vars.basic_user}",
+          "password": "${vars.basic_password}",
+          "provideAccount": true
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "endpointId": "${vars.endpoint_id}",
+          "url": "${vars.webhook_url}",
+          "withBasicAuth": true,
+          "username": "${vars.basic_user}",
+          "provideAccount": true,
+          "expandTransactions": false,
+          "expandPayments": false
+        }
+      }
+    },
+    {
+      "name": "update without the three flags",
+      "request": {
+        "method": "POST",
+        "path": "/o/wh/1/webhook",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {"endpointId": "${vars.endpoint_id}", "url": "${vars.webhook_url}"}
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "endpointId": "${vars.endpoint_id}",
+          "username": "${vars.basic_user}",
+          "provideAccount": false,
+          "expandTransactions": false,
+          "expandPayments": false
+        }
+      }
+    },
+    {
+      "name": "read it back",
+      "request": {
+        "method": "GET",
+        "path": "/o/wh/1/webhook/${vars.endpoint_id}",
+        "headers": {"authorization": "bearer ${vars.access_token}"}
+      },
+      "expect": {
+        "status": 200,
+        "body": {"endpointId": "${vars.endpoint_id}", "username": "${vars.basic_user}", "provideAccount": false}
+      }
+    },
+    {
+      "name": "delete",
+      "request": {
+        "method": "DELETE",
+        "path": "/o/wh/1/webhook/${vars.endpoint_id}",
+        "headers": {"authorization": "bearer ${vars.access_token}"}
+      },
+      "expect": {"status": 200}
+    },
+    {
+      "name": "gone",
+      "request": {
+        "method": "GET",
+        "path": "/o/wh/1/webhook/${vars.endpoint_id}",
+        "headers": {"authorization": "bearer ${vars.access_token}"}
+      },
+      "expect": {
+        "status": 404,
+        "body": {"status": 404, "message": "endpoint ID not found for ${vars.endpoint_id}"}
+      }
+    }
+  ]
+}

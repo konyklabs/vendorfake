@@ -13,7 +13,7 @@ from vendorfake.lightspeed_k.paths import APE_GET_MENU_BY_ID_V2, APE_LOAD_MENUS,
 from vendorfake.lightspeed_k.seed.constants import SEED_MENU_ID
 from vendorfake.lightspeed_k.surface.common import BEARER_AUTH, SCOPE_ORDERS, LightspeedKDeps, int64_path, int64_query
 
-__all__ = ["CAPABILITY", "LightspeedKOrderAndPaySurface", "order_and_pay_routes"]
+__all__ = ["CAPABILITY", "LightspeedKOrderAndPaySurface", "known_location", "order_and_pay_routes"]
 
 CAPABILITY = "order_and_pay"
 _LOCATION = "businessLocationId"
@@ -76,7 +76,7 @@ class LightspeedKOrderAndPaySurface:
 
     # DOCUMENTED tutorial: list the menus, then copy the ikentooMenuId to load one
     def menus(self, args: HandlerArgs) -> ReplyInit:
-        location = _known_location(args.ctx, int64_query(args, _LOCATION))
+        location = known_location(args.ctx, int64_query(args, _LOCATION))
         rows = args.ctx.store.collection(COL.menus).all()
         return json_(
             [
@@ -89,7 +89,7 @@ class LightspeedKOrderAndPaySurface:
     # JUDGMENT: richContent=false strips itemRichData; accountProfile is accepted and ignored
     def menu(self, args: HandlerArgs) -> ReplyInit:
         menu_id = int64_path(args, "menuId")
-        location = _known_location(args.ctx, int64_query(args, _LOCATION))
+        location = known_location(args.ctx, int64_query(args, _LOCATION))
         rich = _boolean(args.query("richContent"))
         stored = args.ctx.store.collection(COL.menus).get(str(menu_id))
         if stored is None:
@@ -106,7 +106,7 @@ def order_and_pay_routes(deps: LightspeedKDeps) -> tuple[Route, ...]:
     return LightspeedKOrderAndPaySurface(deps).routes()
 
 
-def _known_location(ctx: UnitContext, location: int) -> int:
+def known_location(ctx: UnitContext, location: int) -> int:
     for row in ctx.store.collection(COL.businesses).all():
         if any(entry.get("id") == location for entry in row["document"].get("businessLocations", [])):
             return location

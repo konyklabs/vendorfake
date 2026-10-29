@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from vendorfake.core.rand.ids import HEX, MIXED_ALNUM, IdStream
 
+_DIGITS = "0123456789"
+
 __all__ = ["LightspeedKIds"]
 
 
@@ -21,3 +23,7 @@ class LightspeedKIds(IdStream):
     # DOCUMENTED v1-overview: the code samples GyIpgM and Bp68Nr
     def code(self) -> str:
         return self._pick(MIXED_ALNUM, 6)
+
+    # DOCUMENTED source.json: the examples' A17700.3 shape
+    def account_identifier(self) -> str:
+        return "A" + self._pick(_DIGITS, 5) + "." + str(1 + self._rng.int(9))

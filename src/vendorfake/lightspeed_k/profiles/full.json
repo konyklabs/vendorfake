@@ -4,7 +4,9 @@
   "capabilities": [
     "auth",
     "order_and_pay",
-    "chaos"
+    "webhooks",
+    "chaos",
+    "webhooks.chaos"
   ],
   "seed": "seed/default.seed.json",
   "vendor": {

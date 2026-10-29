@@ -1,0 +1,82 @@
+{
+  "schema": 1,
+  "id": "orderandpay.to-go.tutorial",
+  "title": "The tutorial's To Go order: register an endpoint, send the order with takeAway, a reused reference is the documented 409, a missing reference is 400",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "Part 2 (PUT Create Webhook), Part 3 B (the To Go body, takeAway included though apePlaceToGoOrder's schema has no such member) and Part 4 ('You will receive a 200 OK response'). The 409 body is apePlaceToGoOrder's under */* in https://api-docs.lsk.lightspeed.app/source.json; thirdPartyReference is required there."
+  },
+  "routes": [
+    "PUT /o/wh/1/webhook",
+    "POST /o/op/1/order/toGo"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create the webhook",
+      "request": {
+        "method": "PUT",
+        "path": "/o/wh/1/webhook",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {"endpointId": "${vars.endpoint_id}", "url": "${vars.webhook_url}"}
+      },
+      "expect": {"status": 200, "body": {"endpointId": "${vars.endpoint_id}"}}
+    },
+    {
+      "name": "the to-go order",
+      "request": {
+        "method": "POST",
+        "path": "/o/op/1/order/toGo",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {
+          "accountProfileCode": "AAP-TOGO",
+          "businessLocationId": 100000000101,
+          "thirdPartyReference": "${vars.third_party_reference}",
+          "endpointId": "${vars.endpoint_id}",
+          "customerInfo": {"firstName": "Jane"},
+          "items": [{"quantity": 2, "sku": "${vars.sku_a}"}],
+          "takeAway": true
+        }
+      },
+      "expect": {"status": 200, "body": {"status": "ok"}}
+    },
+    {
+      "name": "the same reference again",
+      "request": {
+        "method": "POST",
+        "path": "/o/op/1/order/toGo",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {
+          "accountProfileCode": "AAP-TOGO",
+          "businessLocationId": 100000000101,
+          "thirdPartyReference": "${vars.third_party_reference}",
+          "endpointId": "${vars.endpoint_id}",
+          "customerInfo": {"firstName": "Jane"},
+          "items": [{"quantity": 2, "sku": "${vars.sku_a}"}],
+          "takeAway": true
+        }
+      },
+      "expect": {
+        "status": 409,
+        "body": {"status": "fail", "msg": "reference has already been used ${vars.third_party_reference}"}
+      }
+    },
+    {
+      "name": "no reference",
+      "request": {
+        "method": "POST",
+        "path": "/o/op/1/order/toGo",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {
+          "businessLocationId": 100000000101,
+          "endpointId": "${vars.endpoint_id}",
+          "customerInfo": {"firstName": "Jane"},
+          "items": [{"quantity": 2, "sku": "${vars.sku_a}"}]
+        }
+      },
+      "expect": {"status": 400, "body": {"status": 400, "error": "Bad Request"}}
+    }
+  ]
+}
