@@ -1,0 +1,166 @@
+{
+  "schema": 1,
+  "id": "taxbreakdown.seeded-menu",
+  "title": "The tax breakdown of the seeded order: one tax-exclusive and one tax-inclusive line, an unknown SKU is 400, an unknown location 404, a token without orders-api 403",
+  "source": {
+    "url": "https://api-docs.lsk.lightspeed.app/source.json",
+    "fetched": "2026-10-29",
+    "provenance": "judgment",
+    "note": "The response types, the taxRate string semantics and the */* string-status envelope are documented; every number is this unit's arithmetic over the seeded menu (one item tax-exclusive, one tax-inclusive), and the 403 body is the one declared disagreement, absorbed by two declared deviations."
+  },
+  "routes": [
+    "POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown"
+  ],
+  "profile": "orders-only",
+  "steps": [
+    {
+      "name": "the seeded order",
+      "request": {
+        "method": "POST",
+        "path": "/tp/v1/business-locations/${vars.business_location_id}/tax-breakdown",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        },
+        "body": {
+          "items": [
+            {
+              "sku": "${vars.sku_a}",
+              "quantity": 2
+            },
+            {
+              "sku": "${vars.sku_b}"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "transactions": [
+            {
+              "sku": "${vars.sku_a}",
+              "quantity": 2.0,
+              "unitPrice": 12.5,
+              "netAmount": 25.0,
+              "grossAmount": 27.5,
+              "taxAmount": 2.5
+            },
+            {
+              "sku": "${vars.sku_b}",
+              "quantity": 1.0,
+              "unitPrice": 4.0,
+              "netAmount": 3.64,
+              "grossAmount": 4.0,
+              "taxAmount": 0.36
+            }
+          ],
+          "taxLines": [
+            {
+              "description": "10% VAT",
+              "taxRate": "1.10",
+              "netAmount": 25.0,
+              "grossAmount": 27.5,
+              "taxAmount": 2.5,
+              "taxIncluded": false
+            },
+            {
+              "description": "10% VAT",
+              "taxRate": "1.10",
+              "netAmount": 3.64,
+              "grossAmount": 4.0,
+              "taxAmount": 0.36,
+              "taxIncluded": true
+            }
+          ],
+          "totalNetAmountInCents": 2864,
+          "totalGrossAmountInCents": 3150,
+          "totalTaxAmountInCents": 286,
+          "amountDue": 31.5
+        }
+      }
+    },
+    {
+      "name": "an unknown SKU",
+      "request": {
+        "method": "POST",
+        "path": "/tp/v1/business-locations/${vars.business_location_id}/tax-breakdown",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        },
+        "body": {
+          "items": [
+            {
+              "sku": "${vars.unknown_sku}"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 400,
+        "body": {
+          "status": "400",
+          "apiSubExceptions": [
+            {
+              "field": "items.0.sku",
+              "rejectedValue": "${vars.unknown_sku}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "an unknown location",
+      "request": {
+        "method": "POST",
+        "path": "/tp/v1/business-locations/999999999999/tax-breakdown",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        },
+        "body": {
+          "items": [
+            {
+              "sku": "${vars.sku_a}",
+              "quantity": 2
+            },
+            {
+              "sku": "${vars.sku_b}"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 404,
+        "body": {
+          "status": "404"
+        }
+      }
+    },
+    {
+      "name": "a token without orders-api",
+      "request": {
+        "method": "POST",
+        "path": "/tp/v1/business-locations/${vars.business_location_id}/tax-breakdown",
+        "headers": {
+          "authorization": "bearer ${vars.financial_only_access_token}"
+        },
+        "body": {
+          "items": [
+            {
+              "sku": "${vars.sku_a}",
+              "quantity": 2
+            },
+            {
+              "sku": "${vars.sku_b}"
+            }
+          ]
+        }
+      },
+      "expect": {
+        "status": 403,
+        "body": {
+          "status": 403
+        }
+      }
+    }
+  ]
+}

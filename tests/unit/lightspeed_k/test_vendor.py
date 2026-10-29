@@ -68,8 +68,8 @@ def test_info_publishes_roles_reasons_and_the_statement(h: Harness) -> None:
 
 def test_every_route_is_under_oauth_order_and_pay_or_webhooks() -> None:
     paths = [route.path for route in VENDOR.routes]
-    assert len(paths) == 10
-    assert all(path.startswith(("/oauth/", "/o/op/", "/o/wh/")) for path in paths)
+    assert len(paths) == 11
+    assert all(path.startswith(("/oauth/", "/o/op/", "/o/wh/", "/tp/")) for path in paths)
     assert [route.operation_id for route in VENDOR.routes] == [
         "OauthAuthorize",
         "OauthToken",
@@ -81,7 +81,12 @@ def test_every_route_is_under_oauth_order_and_pay_or_webhooks() -> None:
         "apeUpdateWebhookOo",
         "apeGetWebhookOo",
         "apeDeleteWebhookEndpoint",
+        "tax-preview-apiTaxBreakdown",
     ]
+    tax = VENDOR.routes[-1]
+    assert tax.example_body is None
+    assert tax.example_params == {"businessLocationId": "100000000101"}
+    assert tax.capability == "order_and_pay"
 
 
 def test_every_order_and_pay_and_webhook_route_needs_an_orders_api_bearer() -> None:

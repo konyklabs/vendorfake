@@ -131,6 +131,10 @@ def webhook_path(endpoint_id: str) -> str:
     return f"{WEBHOOK}/{endpoint_id}"
 
 
+def tax_breakdown_path(location: object) -> str:
+    return f"/tp/v1/business-locations/{location}/tax-breakdown"
+
+
 def redirect_query(res: InProcessResponse) -> dict[str, str]:
     location = res.header("location") or ""
     return {key: values[0] for key, values in parse_qs(urlsplit(location).query).items()}

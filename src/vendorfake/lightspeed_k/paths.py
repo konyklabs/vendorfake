@@ -13,6 +13,7 @@ __all__ = [
     "APE_UPDATE_WEBHOOK_OO",
     "OAUTH_AUTHORIZE",
     "OAUTH_TOKEN",
+    "TAX_PREVIEW_API_TAX_BREAKDOWN",
 ]
 
 OAUTH_AUTHORIZE = "/oauth/authorize"
@@ -25,3 +26,4 @@ APE_CREATE_WEBHOOK_OO = "/o/wh/1/webhook"
 APE_UPDATE_WEBHOOK_OO = "/o/wh/1/webhook"
 APE_GET_WEBHOOK_OO = "/o/wh/1/webhook/{endpointId}"
 APE_DELETE_WEBHOOK_ENDPOINT = "/o/wh/1/webhook/{endpointId}"
+TAX_PREVIEW_API_TAX_BREAKDOWN = "/tp/v1/business-locations/{businessLocationId}/tax-breakdown"

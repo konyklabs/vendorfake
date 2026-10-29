@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import copy
 import json
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from vendorfake.lightspeed_k.config import LightspeedKConfig
 from vendorfake.lightspeed_k.entities import COL
 from vendorfake.lightspeed_k.seed import constants as c
 from vendorfake.lightspeed_k.seed.document import parse_seed_document
+from vendorfake.lightspeed_k.surface.tax_breakdown import price_line
 from vendorfake.testing.seeds import LightspeedKSeed, seed_for
 
 
@@ -55,6 +57,20 @@ def test_the_unknown_sku_is_on_no_seeded_menu() -> None:
     skus = {entry.get("sku") for menu in _document()["menus"] for entry in _entries(menu["menuEntryGroups"])}
     assert c.SEED_UNKNOWN_SKU not in skus
     assert c.SEED_EXAMPLE_ENDPOINT_ID
+
+
+def test_every_seeded_tax_amount_is_the_breakdown_at_quantity_one() -> None:
+    entries = [entry for menu in _document()["menus"] for entry in _entries(menu["menuEntryGroups"])]
+    items = [entry for entry in entries if entry["@type"] == "menuItem"]
+    assert items
+    for item in items:
+        taxes = item["taxes"]
+        percentages = [tax["percentage"] for tax in taxes]
+        _, parts, _ = price_line(item["productPrice"], Decimal(1), percentages, item["taxIncludedInPrice"])
+        amounts = [tax["amount"] for tax in taxes]
+        assert [part / 100 for part in parts] == amounts, item["sku"]
+        assert item["defaultTaxAmount"] == sum(amounts), item["sku"]
+        assert item["defaultTaxPercentage"] == sum(percentages), item["sku"]
 
 
 def test_every_menu_entry_carries_its_type() -> None:

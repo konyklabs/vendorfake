@@ -1,9 +1,10 @@
 # Lightspeed Restaurant K-Series (V1 authentication)
 
 The fifth vendor, identifier `lightspeed-k`, and the first whose identifier
-differs from its module (`vendorfake.lightspeed_k`). D-016's first two slices:
+differs from its module (`vendorfake.lightspeed_k`). D-016's three slices:
 the V1 token lifecycle, three Order and Pay reads, the to-go order, the webhook
-endpoint CRUD and the order notifications delivered to it. Lightspeed's other
+endpoint CRUD and the order notifications delivered to it, and the tax
+breakdown of a proposed order. Lightspeed's other
 Restaurant series are not modelled.
 
 !!! warning "Unofficial"
@@ -15,7 +16,7 @@ Restaurant series are not modelled.
 
 ## What is modelled
 
-Ten routes and one delivery on one merchant account:
+Eleven routes and one delivery on one merchant account:
 
 | Route | Operation | Fidelity |
 |---|---|---|
@@ -29,6 +30,7 @@ Ten routes and one delivery on one merchant account:
 | `POST /o/wh/1/webhook` | `apeUpdateWebhookOo` | validated against `source.json` |
 | `GET /o/wh/1/webhook/{endpointId}` | `apeGetWebhookOo` | validated against `source.json` |
 | `DELETE /o/wh/1/webhook/{endpointId}` | `apeDeleteWebhookEndpoint` | validated against `source.json` |
+| `POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown` | `tax-preview-apiTaxBreakdown` | validated against `source.json` |
 | delivery: `POST <your url>` | `webhooks["apeOrder notification"]` | asserted in a unit test; the fidelity cut carries no `webhooks` entries yet |
 
 ## Consumer calls
@@ -42,7 +44,7 @@ The six calls an online-ordering consumer makes, and which are modelled:
 | 3 | the menu (`GET /o/op/1/menu/list`, `GET /o/op/2/menu/load/{menuId}`) | yes |
 | 4 | the to-go order (`POST /o/op/1/order/toGo`) | yes |
 | 5 | the webhook registration (`PUT /o/wh/1/webhook`) | yes |
-| 6 | the tax breakdown | no: slice 3 |
+| 6 | the tax breakdown (`POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown`) | yes |
 
 V1 authentication is the documented legacy path: "As of November 10, 2025 all
 newly created API clients are V2 by default. Existing V1 clients will continue
@@ -80,7 +82,7 @@ $ curl -s http://127.0.0.1:8125/o/op/data/businesses -H 'Authorization: bearer u
 $ curl -s 'http://127.0.0.1:8125/o/op/1/menu/list?businessLocationId=100000000101' -H 'Authorization: bearer unit-lightspeed-k-access-token-full'
 [{"menuName":"Unit Lunch Menu","ikentooMenuId":100000000201}]
 $ curl -s 'http://127.0.0.1:8125/o/op/2/menu/load/100000000201?businessLocationId=100000000101' -H 'Authorization: bearer unit-lightspeed-k-access-token-full'
-{"menuName":"Unit Lunch Menu","ikentooMenuId":100000000201,"menuEntryGroups":[{"@type":"group","id":"100000000301","name":"Mains","color":"blue","menuEntry":[{"@type":"menuItem","productName":"Unit Burger","productPrice":12.5,"sku":"UNITK-001","taxes":[{"description":"10% VAT","amount":1.25,"percentage":10.0}],"defaultTaxAmount":1.25,"defaultTaxPercentage":10.0,"taxIncludedInPrice":true,"menuModifierGroups":[]},{"@type":"menuItem","productName":"Unit Lemonade","productPrice":4.0,"sku":"UNITK-002","taxes":[{"description":"10% VAT","amount":0.4,"percentage":10.0}],"defaultTaxAmount":0.4,"defaultTaxPercentage":10.0,"taxIncludedInPrice":true,"menuModifierGroups":[]}]}],"richDataMissing":false,"conditionalTaxRules":false}
+{"menuName":"Unit Lunch Menu","ikentooMenuId":100000000201,"menuEntryGroups":[{"@type":"group","id":"100000000301","name":"Mains","color":"blue","menuEntry":[{"@type":"menuItem","productName":"Unit Burger","productPrice":12.5,"sku":"UNITK-001","taxes":[{"description":"10% VAT","amount":1.25,"percentage":10.0}],"defaultTaxAmount":1.25,"defaultTaxPercentage":10.0,"taxIncludedInPrice":false,"menuModifierGroups":[]},{"@type":"menuItem","productName":"Unit Lemonade","productPrice":4.0,"sku":"UNITK-002","taxes":[{"description":"10% VAT","amount":0.36,"percentage":10.0}],"defaultTaxAmount":0.36,"defaultTaxPercentage":10.0,"taxIncludedInPrice":true,"menuModifierGroups":[]}]}],"richDataMissing":false,"conditionalTaxRules":false}
 $ curl -s -X POST http://127.0.0.1:8125/oauth/token -H "Authorization: $BASIC" -d grant_type=refresh_token -d refresh_token=unit-lightspeed-k-refresh-token-full
 {"access_token":"ba3b68ac-d77f-45e2-9fa3-b04ec4b4cdba","token_type":"bearer","refresh_token":"2ecfe92a-4ad1-4d11-ad28-a903e44f15f8","expires_in":3599,"scope":"financial-api orders-api "}
 $ curl -s -X POST http://127.0.0.1:8125/oauth/token -H "Authorization: $BASIC" -d grant_type=refresh_token -d refresh_token=unit-lightspeed-k-refresh-token-full
@@ -147,6 +149,63 @@ failure) unless a profile says otherwise.
     `webhooks.signature_keys` and in the subscriber list at
     `GET /__unit/webhooks/subscriptions`. Never register a real credential.
 
+## Tax breakdown
+
+`POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown` prices a
+proposed order from the seeded menu and stores nothing. On the default seed
+`UNITK-001` is tax-exclusive and `UNITK-002` tax-inclusive, both at 10 %:
+
+```console
+$ curl -s -X POST http://127.0.0.1:8125/tp/v1/business-locations/100000000101/tax-breakdown -H 'Authorization: bearer unit-lightspeed-k-access-token-full' -H 'content-type: application/json' -d '{"items":[{"sku":"UNITK-001","quantity":2},{"sku":"UNITK-002"}]}'
+{"transactions":[{"sku":"UNITK-001","quantity":2.0,"unitPrice":12.5,"netAmount":25.0,"grossAmount":27.5,"taxAmount":2.5},{"sku":"UNITK-002","quantity":1.0,"unitPrice":4.0,"netAmount":3.64,"grossAmount":4.0,"taxAmount":0.36}],"taxLines":[{"description":"10% VAT","taxRate":"1.10","netAmount":25.0,"grossAmount":27.5,"taxAmount":2.5,"taxIncluded":false},{"description":"10% VAT","taxRate":"1.10","netAmount":3.64,"grossAmount":4.0,"taxAmount":0.36,"taxIncluded":true}],"totalNetAmountInCents":2864,"totalGrossAmountInCents":3150,"totalTaxAmountInCents":286,"amountDue":31.5}
+$ curl -s -X POST http://127.0.0.1:8125/tp/v1/business-locations/100000000101/tax-breakdown -H 'Authorization: bearer unit-lightspeed-k-access-token-full' -H 'content-type: application/json' -d '{"items":[{"sku":"UNITK-404"}]}'
+{"status":"400","message":"Unknown SKU UNITK-404 at business location 100000000101","apiSubExceptions":[{"field":"items.0.sku","rejectedValue":"UNITK-404","message":"Unknown SKU UNITK-404 at business location 100000000101"}]}
+$ curl -s -X POST http://127.0.0.1:8125/tp/v1/business-locations/100000000101/tax-breakdown -H 'Authorization: bearer unit-lightspeed-k-access-token-financial' -H 'content-type: application/json' -d '{"items":[]}'
+{"status":403,"error":"Forbidden","message":"The access token is missing the required permission(s): orders-api."}
+```
+
+!!! warning "Integer cents beside decimal numbers"
+    One body carries both: `totalNetAmountInCents`, `totalGrossAmountInCents`
+    and `totalTaxAmountInCents` are int64 **cents** (`3150`), while every
+    `*Amount`, `unitPrice` and `amountDue` is a decimal number of currency
+    units (`31.5`). Read each field in its own unit.
+
+`taxRate` is a string: `"1.20"` means 20 % (the document's own example), so
+10 % is `"1.10"`, 8.875 % is `"1.08875"` and 0 % is `"1.00"`: at least two
+decimals, more only when the configured percentage has them.
+
+The arithmetic, all JUDGMENT:
+
+1. Every input is read as a `Decimal` of its decimal text; floats are never
+   multiplied.
+2. A line's amount is `productPrice × quantity` in cents, rounded half-up once.
+3. Tax-exclusive (`taxIncludedInPrice: false`): net is the amount, each tax
+   part is `net × rate` rounded half-up, gross is net plus the parts.
+4. Tax-inclusive (`true`): gross is the amount, each part is
+   `gross / (1 + R) × rate` rounded half-up (`R` the sum of the item's rates),
+   net is gross minus the parts, so `net + tax = gross` always holds.
+5. An item with no `taxes[]` has no tax and no tax line, and still counts.
+6. A transaction line echoes `sku`, the quantity and `productPrice`, with its
+   net, gross and tax in currency units.
+7. One tax line per distinct `(description, percentage, taxIncluded)`, first
+   seen first: the nets of the lines carrying it, that tax's parts, and their
+   sum as gross. `taxCode` and `taxName` are omitted.
+8. The three totals are the integer sums of the per-line cents and
+   `amountDue` is the gross total in currency units, so transactions, tax
+   lines and totals agree to the cent; rounding is per line, never per order.
+9. A line or total outside an int64 of cents is 400 `invalid_value` on
+   `items` (a quantity of `1e300` is a valid double).
+
+Two envelopes answer refusals here. The route's own 400 and 404, and the 503
+of an armed `unavailable` fault, answer the declared `*/*` body with a
+**string** status, `{"status": "400", "message", "apiSubExceptions"}`, with one
+sub-exception naming the field (and `rejectedValue` for an unknown SKU). The
+kernel's 403 for a token without `orders-api` is refused before any vendor code
+runs and keeps the **integer**-status body every other route answers; the
+document types it as the string `"403"`, and two declared deviations
+(`type` and `enum` on `/status`, this route only) record the disagreement. A
+401 is unchanged.
+
 ## Documented
 
 All pages fetched 2026-10-29.
@@ -175,6 +234,11 @@ All pages fetched 2026-10-29.
 | With `withBasicAuth`, "a username and password ... to authenticate the requests being sent to your endpoint": Basic is the only delivery authentication | tutorial |
 | The notification shapes: the `failure` example; the others `apeBaseWebhookInformation` plus `status`, `type: ORDER`; `ikentooAccountIdentifier` shaped `A17700.3`; the status enum `SUCCESS, FAILURE, IN_DELIVERY, READY_FOR_PICKUP, CLOSED, ABANDONED, CANCELLED` | `source.json` webhooks |
 | Order `FAILURE`, `READY_FOR_PICKUP` and `CANCELLED` are always sent; `order: DELIVERED` is subscribable | `source.json` `apeEventResource` |
+| The tax breakdown's path, `businessLocationId` int64 with `minimum: 1`, and `orders-api` | `source.json` `tax-preview-apiTaxBreakdown` |
+| Its request body is required: `accountProfileCode`, `items[].sku` (required, at most 25), `items[].quantity` (double), `items[].subItems[]` of the same | `source.json` |
+| Its response: `transactions[]` and `taxLines[]` of numbers, `taxLines[].taxIncluded` boolean, the three `*InCents` totals int64, `amountDue` a number "in big decimal format" | `source.json` |
+| `taxRate` is "a decimal number encoded in a string, \"1.20\" means 20% tax" | `source.json` |
+| Its 400, 403, 404 and 503 under `*/*`: `{status: "<code>" (a string), timestamp, message, apiSubExceptions[{field, rejectedValue, message}]}` | `source.json` |
 
 ## Judgment
 
@@ -205,6 +269,18 @@ All pages fetched 2026-10-29.
 | Routing travels in the event type, `order:<STATUS>:<endpointId percent-encoded>`; a registration subscribes to its own `order:*:<id>` only | the core's matcher |
 | No HTTPS rule on `url`, beyond refusing a link-local host | none is documented |
 | 404 for an unknown business location on the to-go order | the reads' choice |
+| Tax breakdown: half-up rounding, once per line amount and once per tax part | nothing documented |
+| Tax breakdown: the inclusive split `gross / (1 + R) × rate` | nothing documented |
+| Tax lines keyed on description, rate and inclusion; `taxCode` and `taxName` omitted | the seeded menu carries neither |
+| An unknown SKU is 400 with one sub-exception; an unknown location is 404 | a body value versus a path value |
+| `{}` is 200 with empty arrays and zeros; an empty body is 400 `missing_field` | `requestBody.required` |
+| `quantity` defaults to 1 and must be a finite number above 0 | nothing documented |
+| A sub-item is its own transaction line, right after its parent, at parent × sub quantity | nothing documented |
+| The first served menu in store order wins when two carry one SKU | nothing documented |
+| `taxes[]` is authoritative; `amount`, `defaultTaxAmount` and `defaultTaxPercentage` are never read | `amount` "can change dynamically at time of sale" |
+| `accountProfileCode` is accepted and ignored | one price per item |
+| A line or total beyond an int64 of cents is 400 on `items` | the totals are int64 |
+| The 403 keeps the integer-status envelope (two declared deviations) | the kernel refuses before the route runs |
 
 ## Unverified
 
@@ -217,6 +293,11 @@ All pages fetched 2026-10-29.
 - The contents of the tutorial's second confirmation webhook, shown only as a
   screenshot: this unit sends one notification per status change.
 - Whether a 2xx other than 200 is accepted as delivered (this unit accepts any).
+- The real tax breakdown's rounding mode and how it allocates tax across lines.
+- The real status for an unknown SKU on the tax breakdown.
+- Whether a real 403 carries the string-status envelope.
+- How a real location prices sub-items.
+- Whether `taxCode` and `taxName` are always present.
 
 ## Differences from X-Series
 
@@ -227,8 +308,9 @@ All pages fetched 2026-10-29.
 
 ## Deferred
 
-Slice 3: the tax breakdown, V2 authentication (OpenID Connect), the V1-to-V2
-token exchange and `GET /oauth/userinfo`. Not planned: the V1 menu load
+Until a consumer asks: V2 authentication (OpenID Connect), the V1-to-V2 token
+exchange, `GET /oauth/userinfo`, `accountProfileCode` pricing, conditional tax
+rules and `/f/finance/{businessLocationId}/tax-rates`. Not planned: the V1 menu load
 (deprecated 2026-05-15), local orders, the `/business-locations` webhook
 operations and payment, item and order_api notifications, the `account`
 snapshot, `subscribeTo` filtering, `order: DELIVERED`, scheduled dispatch,

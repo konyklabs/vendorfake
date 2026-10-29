@@ -16,3 +16,4 @@ Every route lightspeed-k's surface serves -- vendor-facing only. The `/__unit/*`
 | POST | `/o/wh/1/webhook` | apeUpdateWebhookOo | webhooks | Update an endpoint; provideAccount, expandTransactions and expandPayments reset when omitted. |
 | GET | `/o/wh/1/webhook/{endpointId}` | apeGetWebhookOo | webhooks | One endpoint as registered, password included. |
 | DELETE | `/o/wh/1/webhook/{endpointId}` | apeDeleteWebhookEndpoint | webhooks | Delete an endpoint; later orders naming it deliver to nobody. |
+| POST | `/tp/v1/business-locations/{businessLocationId}/tax-breakdown` | tax-preview-apiTaxBreakdown | order_and_pay | The tax breakdown of a proposed order, priced from the seeded menu's tax lines (JUDGMENT arithmetic); a read, so no example body. |

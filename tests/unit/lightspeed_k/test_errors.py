@@ -5,8 +5,10 @@ from __future__ import annotations
 from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 from vendorfake.core.kernel.unit import make_request
 from vendorfake.lightspeed_k.errors import (
+    ENVELOPE_INFO_KEY,
     LIGHTSPEED_K_ERROR_TABLE,
     OAUTH_ERROR_INFO_KEY,
+    STATUS_STRING_ENVELOPE,
     LightspeedKErrorShaper,
 )
 from vendorfake.lightspeed_k.vendor import LightspeedKVendor
@@ -63,6 +65,33 @@ def test_unavailable_answers_envelope_b_with_a_string_status() -> None:
     )
     assert shaped.status == 503
     assert shaped.body == {"status": "503", "message": "Service unavailable.", "apiSubExceptions": []}
+
+
+def test_the_envelope_key_selects_the_string_status_body() -> None:
+    info = {ENVELOPE_INFO_KEY: STATUS_STRING_ENVELOPE, "rejected_value": "X"}
+    err = UnitError(UnitErrorKind.INVALID_VALUE, detail="d", field="items.0.sku", info=info)
+    shaped = LightspeedKErrorShaper().shape(err, fake_ctx(error_sidecar_mode="headers"))
+    assert shaped.status == 400
+    assert shaped.body == {
+        "status": "400",
+        "message": "d",
+        "apiSubExceptions": [{"field": "items.0.sku", "rejectedValue": "X", "message": "d"}],
+    }
+    missing = UnitError(UnitErrorKind.NOT_FOUND, detail="gone", info={ENVELOPE_INFO_KEY: STATUS_STRING_ENVELOPE})
+    shaped = LightspeedKErrorShaper().shape(missing, fake_ctx(error_sidecar_mode="headers"))
+    assert shaped.status == 404
+    assert shaped.body == {"status": "404", "message": "gone", "apiSubExceptions": []}
+
+
+def test_without_the_key_envelope_a_is_unchanged() -> None:
+    for err in (
+        UnitError(UnitErrorKind.INVALID_VALUE, detail="d", field="items.0.sku", info={"rejected_value": "X"}),
+        UnitError(UnitErrorKind.NOT_FOUND, detail="gone"),
+        UnitError(UnitErrorKind.FORBIDDEN_SCOPE),
+    ):
+        shaped = LightspeedKErrorShaper().shape(err, fake_ctx(error_sidecar_mode="headers"))
+        assert set(shaped.body) == {"status", "error", "message"}, err.kind
+        assert type(shaped.body["status"]) is int and shaped.body["status"] == shaped.status, err.kind
 
 
 def test_the_oauth_key_selects_the_rfc_body_and_invalid_client_adds_basic() -> None:

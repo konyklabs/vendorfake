@@ -4,6 +4,7 @@ Every body is the stored ``document``, so the fidelity validator is the oracle f
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
@@ -13,7 +14,7 @@ from vendorfake.lightspeed_k.paths import APE_GET_MENU_BY_ID_V2, APE_LOAD_MENUS,
 from vendorfake.lightspeed_k.seed.constants import SEED_MENU_ID
 from vendorfake.lightspeed_k.surface.common import BEARER_AUTH, SCOPE_ORDERS, LightspeedKDeps, int64_path, int64_query
 
-__all__ = ["CAPABILITY", "LightspeedKOrderAndPaySurface", "known_location", "order_and_pay_routes"]
+__all__ = ["CAPABILITY", "LightspeedKOrderAndPaySurface", "known_location", "menu_item", "order_and_pay_routes"]
 
 CAPABILITY = "order_and_pay"
 _LOCATION = "businessLocationId"
@@ -111,6 +112,28 @@ def known_location(ctx: UnitContext, location: int) -> int:
         if any(entry.get("id") == location for entry in row["document"].get("businessLocations", [])):
             return location
     raise _not_found(f"Business location {location} was not found.", _LOCATION, "unknown_business_location")
+
+
+# JUDGMENT: the first menu in store order wins when two served menus carry one SKU
+def menu_item(ctx: UnitContext, location: int, sku: str) -> Mapping[str, Any] | None:
+    for row in ctx.store.collection(COL.menus).all():
+        if location in row["business_location_ids"]:
+            found = _find_sku(row["document"].get("menuEntryGroups"), sku)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_sku(entries: Any, sku: str) -> Mapping[str, Any] | None:
+    for entry in entries if isinstance(entries, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("@type") == "menuItem" and entry.get("sku") == sku:
+            return entry
+        found = _find_sku(entry.get("menuEntry"), sku)
+        if found is not None:
+            return found
+    return None
 
 
 def _boolean(raw: str | None) -> bool:

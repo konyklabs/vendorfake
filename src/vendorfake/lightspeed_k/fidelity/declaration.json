@@ -30,6 +30,22 @@
       "routes": ["GET /o/op/data/businesses", "GET /o/op/1/menu/list"],
       "reason": "The document's only declared 503 body (under */* on apeGetMenuByIdV2) types status as the string enum '503'; this unit answers that one envelope for every 503, and on the two routes that declare no 503 the body falls back to error_schema, whose status is an integer. One keyword, one pointer, the two routes.",
       "url": "https://api-docs.lsk.lightspeed.app/source.json"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "type",
+      "value": 403,
+      "routes": ["POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown"],
+      "reason": "The kernel refuses a token without orders-api at pipeline step 5, before any vendor code runs, and the shaper sees no route, so this 403 keeps the integer-status envelope every other route answers; the document types status as the string enum '403'. The handler's own 400 and 404, and the 503, answer the declared string-status envelope. One keyword per row, one pointer, this route.",
+      "url": "https://api-docs.lsk.lightspeed.app/source.json"
+    },
+    {
+      "pointer": "/status",
+      "keyword": "enum",
+      "value": 403,
+      "routes": ["POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown"],
+      "reason": "The kernel refuses a token without orders-api at pipeline step 5, before any vendor code runs, and the shaper sees no route, so this 403 keeps the integer-status envelope every other route answers; the document types status as the string enum '403'. The handler's own 400 and 404, and the 503, answer the declared string-status envelope. One keyword per row, one pointer, this route.",
+      "url": "https://api-docs.lsk.lightspeed.app/source.json"
     }
   ],
   "overrides": [],
@@ -47,6 +63,7 @@
     "business_location_id": "100000000101",
     "menu_id": "100000000201",
     "sku_a": "UNITK-001",
+    "sku_b": "UNITK-002",
     "endpoint_id": "UNIT-K-ENDPOINT",
     "webhook_url": "https://receiver.example.test/hooks",
     "basic_user": "unit-k-user",
