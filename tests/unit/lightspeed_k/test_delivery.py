@@ -128,7 +128,9 @@ def test_the_pos_stand_in_drives_the_next_status(d: Harness, sink: MemorySink) -
     register(d, "A", URL_A)
     order(d, "A")
     oid = order_id(d)
-    res = d.api.post("/__unit/state/update", {"collection": "orders", "id": oid, "patch": {"status": "READY_FOR_PICKUP"}})
+    res = d.api.post(
+        "/__unit/state/update", {"collection": "orders", "id": oid, "patch": {"status": "READY_FOR_PICKUP"}}
+    )
     assert res.status == 200, res.text
     d.drain()
     statuses = [payload(request)["status"] for request in received(sink, URL_A)]

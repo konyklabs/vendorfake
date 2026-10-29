@@ -100,7 +100,9 @@ def test_a_to_go_order_is_confirmed_by_its_webhook(
         "ikentooMenuId"
     ]
     menu = client.get(f"/o/op/2/menu/load/{menu_id}", params={"businessLocationId": location}, headers=bearer)
-    sku = next(entry["sku"] for entry in _menu_items(menu.json()["menuEntryGroups"]) if entry["sku"] == seed.item_skus[0])
+    sku = next(
+        entry["sku"] for entry in _menu_items(menu.json()["menuEntryGroups"]) if entry["sku"] == seed.item_skus[0]
+    )
 
     # The tutorial's Part 2: a webhook endpoint, here with the documented optional Basic credentials.
     registered = client.put(

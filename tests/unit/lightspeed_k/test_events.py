@@ -76,7 +76,15 @@ def _store(h: Harness, row: dict[str, Any]) -> None:
 
 
 def test_the_status_vocabulary_is_the_documented_enum() -> None:
-    assert ORDER_STATUSES == {"SUCCESS", "FAILURE", "IN_DELIVERY", "READY_FOR_PICKUP", "CLOSED", "ABANDONED", "CANCELLED"}
+    assert {
+        "SUCCESS",
+        "FAILURE",
+        "IN_DELIVERY",
+        "READY_FOR_PICKUP",
+        "CLOSED",
+        "ABANDONED",
+        "CANCELLED",
+    } == ORDER_STATUSES
     assert "CHECK_WAS_UPDATED" not in ORDER_STATUSES
     assert len(LIGHTSPEED_K_EVENT_TYPES) == len(ORDER_STATUSES)
 
@@ -153,8 +161,12 @@ FAILURE_EXAMPLE_KEYS = {"status", "reason", "thirdPartyReference"}
 
 @pytest.mark.parametrize(
     ("status", "keys"),
-    [("SUCCESS", SUCCESS_EXAMPLE_KEYS), ("READY_FOR_PICKUP", SUCCESS_EXAMPLE_KEYS), ("CLOSED", SUCCESS_EXAMPLE_KEYS),
-     ("FAILURE", FAILURE_EXAMPLE_KEYS)],
+    [
+        ("SUCCESS", SUCCESS_EXAMPLE_KEYS),
+        ("READY_FOR_PICKUP", SUCCESS_EXAMPLE_KEYS),
+        ("CLOSED", SUCCESS_EXAMPLE_KEYS),
+        ("FAILURE", FAILURE_EXAMPLE_KEYS),
+    ],
 )
 def test_each_body_has_exactly_its_example_members(h: Harness, status: str, keys: set[str]) -> None:
     _store(h, _row(status))

@@ -17,7 +17,13 @@ from vendorfake.lightspeed_k.retry import (
 )
 from vendorfake.lightspeed_k.surface.common import FETCHED, SOURCES
 
-__all__ = ["AUTH_HEADER", "LIGHTSPEED_K_SIGNER_PROPERTIES", "LightspeedKBasicSigner", "basic_header", "verify_basic_auth"]
+__all__ = [
+    "AUTH_HEADER",
+    "LIGHTSPEED_K_SIGNER_PROPERTIES",
+    "LightspeedKBasicSigner",
+    "basic_header",
+    "verify_basic_auth",
+]
 
 AUTH_HEADER = "Authorization"
 LIGHTSPEED_K_SIGNER_PROPERTIES = SignerProperties(

@@ -38,7 +38,9 @@ LIGHTSPEED_K_EVENT_TYPES: tuple[str, ...] = tuple(f"order:{status}:*" for status
 def _payload(row: Mapping[str, Any], status: str) -> dict[str, Any]:
     # DOCUMENTED source.json: the failure example, and apeBaseWebhookInformation plus status/type for the rest
     if status == "FAILURE":
-        return compact({"status": status, "reason": row.get("reason"), "thirdPartyReference": row.get("thirdPartyReference")})
+        return compact(
+            {"status": status, "reason": row.get("reason"), "thirdPartyReference": row.get("thirdPartyReference")}
+        )
     return compact(
         {
             "thirdPartyReference": row.get("thirdPartyReference"),

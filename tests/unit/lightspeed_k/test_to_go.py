@@ -92,7 +92,9 @@ FUTURE = "2026-10-29T13:00:00.000+00:00"
         body(orderCollectionTimeAsIso8601="2026-10-29T11:59:59.000+00:00"),
         body(orderCollectionTimeAsIso8601="not a time"),
         body(maxTimeToAttemptOrderDeliverToPos=59999),
-        body(items=[{"quantity": 1, "sku": "UNITK-001", "discountAmountOverride": 1.0, "discountPercentOverride": 5.0}]),
+        body(
+            items=[{"quantity": 1, "sku": "UNITK-001", "discountAmountOverride": 1.0, "discountPercentOverride": 5.0}]
+        ),
     ],
 )
 def test_a_documented_constraint_is_invalid_value(virtual: Harness, payload: dict[str, Any]) -> None:
