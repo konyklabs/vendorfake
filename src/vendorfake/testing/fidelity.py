@@ -95,10 +95,17 @@ def toast_target() -> FidelityTarget:
 
 def target_for(vendor: str) -> FidelityTarget | None:
     """The target for a vendor name, or ``None`` when that vendor has no fidelity leg.
-    Discovered from the tree: a leg is a ``vendorfake.<vendor>.fidelity`` package
-    carrying ``declaration.json``, never a hand-kept list."""
-    anchor = f"vendorfake.{vendor}.fidelity"
-    if importlib.util.find_spec(anchor) is None or not resources.files(anchor).joinpath("declaration.json").is_file():
+    Discovered from the tree: a leg is the vendor module's ``.fidelity`` package carrying
+    ``declaration.json``, resolved through the registry so a hyphenated identifier finds its module."""
+    target = registry._targets().get(vendor)
+    if target is None:
+        return None
+    anchor = f"{target.split(':', 1)[0]}.fidelity"
+    try:
+        found = importlib.util.find_spec(anchor) is not None
+    except (ImportError, ValueError):
+        found = False
+    if not found or not resources.files(anchor).joinpath("declaration.json").is_file():
         return None
     return FidelityTarget(
         name=vendor,
