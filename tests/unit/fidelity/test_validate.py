@@ -1084,3 +1084,116 @@ def test_a_declared_deviation_absorbs_a_request_body_error() -> None:
         assert ledger.absorbed() == ((deviation.label, 1),)
     finally:
         unit.stop()
+
+
+# ---------------------------------------------------------------------------
+# The dialect follows the extract (konyklabs/roadmap#179): draft-04 under OAS
+# 3.0, 2020-12 under OAS 3.1; and a body declared only under */* is JSON.
+# ---------------------------------------------------------------------------
+
+
+def _dialect_extract(openapi: str, kind: dict[str, Any], *, media: str = "application/json") -> dict[str, Any]:
+    thing = {"type": "object", "properties": {"kind": kind, "id": {"type": "string", "readOnly": True}}}
+    busy = {"type": "object", "required": ["status"], "properties": {"status": {"type": "string", "enum": ["503"]}}}
+    return {
+        "openapi": openapi,
+        "info": {"title": "dialect", "version": "1"},
+        "paths": {
+            "/v3/things": {
+                "post": {
+                    "requestBody": {"content": {media: {"schema": {"$ref": "#/components/schemas/Thing"}}}},
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {media: {"schema": {"$ref": "#/components/schemas/Thing"}}},
+                        },
+                        "503": {
+                            "description": "busy",
+                            "content": {"*/*": {"schema": {"$ref": "#/components/schemas/Busy"}}},
+                        },
+                    },
+                }
+            }
+        },
+        "components": {"schemas": {"Thing": thing, "Busy": busy}},
+    }
+
+
+def _dialect_world(extract: dict[str, Any], *, validate_requests: bool = False) -> World:
+    script = Script()
+    unit = make_unit([route("POST", "/v3/things", script.answer)], control_routes=control_plane_routes)
+    ledger = Ledger()
+    declaration = replace(DECLARATION, aliases=(), excused=(), error_envelope=None, error_member=None)
+    client = ValidatingClient(unit, Surface(declaration, Extract(extract)), ledger, validate_requests=validate_requests)
+    return World(unit, script, ledger, client)
+
+
+@pytest.mark.parametrize(("openapi", "refused"), [("3.1.0", True), ("3.0.0", False)])
+def test_const_is_enforced_under_3_1_and_ignored_under_draft_04(openapi: str, refused: bool) -> None:
+    built = _dialect_world(_dialect_extract(openapi, {"const": "a"}))
+    try:
+        built.script.body = {"kind": "b"}
+        if refused:
+            with pytest.raises(FidelityViolation, match="/kind"):
+                built.client.post("/v3/things", {})
+        else:
+            assert built.client.post("/v3/things", {}).status == 200
+            assert built.ledger.total("validated") == 1
+    finally:
+        built.unit.stop()
+
+
+def test_a_type_list_admits_null_under_3_1() -> None:
+    built = _dialect_world(_dialect_extract("3.1.0", {"type": ["string", "null"]}))
+    try:
+        built.script.body = {"kind": None}
+        assert built.client.post("/v3/things", {}).status == 200
+        built.script.body = {"kind": 7}
+        with pytest.raises(FidelityViolation, match="/kind"):
+            built.client.post("/v3/things", {})
+    finally:
+        built.unit.stop()
+
+
+def test_a_503_declared_only_under_any_media_type_validates_end_to_end() -> None:
+    """The pointer to a ``*/*`` body escapes the slash (``*~1*``); a conforming body is validated, a wrong-typed one
+    is a violation, and neither is "no schema for status 503"."""
+    built = _dialect_world(_dialect_extract("3.1.0", {"type": "string"}))
+    try:
+        built.script.status = 503
+        built.script.body = {"status": "503"}
+        assert built.client.post("/v3/things", {}).status == 503
+        assert built.ledger.row("POST /v3/things") == LedgerRow("POST /v3/things", validated=1)
+        built.script.body = {"status": 503}
+        with pytest.raises(FidelityViolation) as caught:
+            built.client.post("/v3/things", {})
+        assert "/status: 503 is not of type 'string'" in caught.value.errors
+    finally:
+        built.unit.stop()
+
+
+@pytest.mark.parametrize(("openapi", "refused"), [("3.1.0", False), ("3.0.0", True)])
+def test_request_bodies_under_3_1_use_the_one_validator_with_no_read_write_split(openapi: str, refused: bool) -> None:
+    """OAS 3.0's write validator refuses a ``readOnly`` member in a request; 3.1 has one validator, for which
+    ``readOnly`` is an annotation, so the same request is accepted."""
+    built = _dialect_world(_dialect_extract(openapi, {"type": "string"}), validate_requests=True)
+    try:
+        built.script.body = {"kind": "a"}
+        if refused:
+            with pytest.raises(FidelityViolation, match="request body"):
+                built.client.post("/v3/things", {"kind": "a", "id": "x"})
+        else:
+            assert built.client.post("/v3/things", {"kind": "a", "id": "x"}).status == 200
+            assert built.ledger.total("request_validated") == 1
+    finally:
+        built.unit.stop()
+
+
+def test_request_validation_enforces_3_1_keywords() -> None:
+    built = _dialect_world(_dialect_extract("3.1.0", {"const": "a"}), validate_requests=True)
+    try:
+        built.script.body = {"kind": "a"}
+        with pytest.raises(FidelityViolation, match="request body"):
+            built.client.post("/v3/things", {"kind": "b"})
+    finally:
+        built.unit.stop()

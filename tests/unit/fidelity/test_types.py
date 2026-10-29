@@ -288,3 +288,66 @@ def test_a_deviation_may_name_a_pattern_instead_of_a_value_and_glob_a_segment() 
         Deviation.of({k: v for k, v in row.items() if k != "pattern"})
     with pytest.raises(ValueError, match="regular expression"):
         Deviation.of({**row, "pattern": "("})
+
+
+def _media(*pairs: tuple[str, str]) -> dict[str, Any]:
+    return {"description": "x", "content": {media: {"schema": {"$ref": ref}} for media, ref in pairs}}
+
+
+STAR = Extract(
+    {
+        "openapi": "3.1.0",
+        "info": {"title": "t", "version": "1"},
+        "paths": {
+            "/v1/star": {
+                "post": {
+                    "requestBody": {"content": {"*/*": {"schema": {"$ref": "#/components/schemas/In"}}}},
+                    "responses": {
+                        "200": _media(("*/*", "#/components/schemas/Ok")),
+                        "503": _media(("*/*", "#/components/schemas/Busy")),
+                    },
+                }
+            },
+            "/v1/both": {
+                "post": {
+                    "requestBody": {
+                        "content": {
+                            "*/*": {"schema": {"$ref": "#/components/schemas/Busy"}},
+                            "application/json": {"schema": {"$ref": "#/components/schemas/In"}},
+                        }
+                    },
+                    "responses": {
+                        "200": _media(
+                            ("*/*", "#/components/schemas/Busy"), ("application/json", "#/components/schemas/Ok")
+                        )
+                    },
+                }
+            },
+            "/v1/text": {"get": {"responses": {"200": _media(("text/plain", "#/components/schemas/Ok"))}}},
+        },
+        "components": {"schemas": {"In": {}, "Ok": {}, "Busy": {}}},
+    }
+)
+
+
+def test_a_body_declared_only_under_any_media_type_is_looked_up_as_json() -> None:
+    """konyklabs/roadmap#179: a document that declares a body under ``*/*`` alone still describes the JSON the
+    route answers; before this the lookup found no schema and the validator called the status undeclared."""
+    star = STAR.operation("POST", "/v1/star")
+    assert star is not None
+    assert star.response_schema(503) == {"$ref": "#/components/schemas/Busy"}
+    assert star.response_schema(200) == {"$ref": "#/components/schemas/Ok"}
+    assert star.request_schema() == {"$ref": "#/components/schemas/In"}
+
+
+def test_application_json_wins_over_any_media_type_whatever_the_order() -> None:
+    both = STAR.operation("POST", "/v1/both")
+    assert both is not None
+    assert both.response_schema(200) == {"$ref": "#/components/schemas/Ok"}
+    assert both.request_schema() == {"$ref": "#/components/schemas/In"}
+
+
+def test_a_non_json_media_type_is_still_no_schema() -> None:
+    text_op = STAR.operation("GET", "/v1/text")
+    assert text_op is not None
+    assert text_op.response_schema(200) is None

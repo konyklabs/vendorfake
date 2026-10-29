@@ -18,9 +18,15 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from jsonschema.exceptions import ValidationError, relevance
-from openapi_schema_validator import OAS30ReadValidator, OAS30WriteValidator, oas30_format_checker
+from openapi_schema_validator import (
+    OAS30ReadValidator,
+    OAS30WriteValidator,
+    OAS31Validator,
+    oas30_format_checker,
+    oas31_format_checker,
+)
 from referencing import Registry
-from referencing.jsonschema import DRAFT4
+from referencing.jsonschema import DRAFT4, DRAFT202012
 
 from vendorfake.core.kernel.reply import decode_body
 from vendorfake.core.kernel.router import Match, Router
@@ -199,6 +205,12 @@ class Ledger:
         return f"fidelity: {parts} over {len(self._rows)} {noun}"
 
 
+def _dialect(document: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
+    if str(document.get("openapi", "")).startswith("3.1"):
+        return DRAFT202012, OAS31Validator, OAS31Validator, oas31_format_checker
+    return DRAFT4, OAS30ReadValidator, OAS30WriteValidator, oas30_format_checker
+
+
 class ResponseValidator:
     """The check itself, over one ``UnitRequest`` and the ``UnitResponse`` the unit gave for it -- nothing else, so the same instance serves the in-process client and a socket binding that hands it over as a :data:`~vendorfake.core.kernel.types.ResponseObserver`.
 
@@ -207,7 +219,9 @@ class ResponseValidator:
 
     __slots__ = (
         "_built",
+        "_format_checker",
         "_ledger",
+        "_read_cls",
         "_registry",
         "_request_validators",
         "_router",
@@ -217,6 +231,7 @@ class ResponseValidator:
         "_validate_requests",
         "_validators",
         "_via_envelope",
+        "_write_cls",
     )
 
     def __init__(
@@ -234,8 +249,9 @@ class ResponseValidator:
         self._validate_requests = validate_requests
         # The unit's own table, control plane included, so a call is matched exactly as the unit matched it.
         self._router = Router(unit.routes)
-        # Draft-04 is the dialect OAS 3.0 schemas are written in and OAS30ReadValidator resolves under.
-        resource = DRAFT4.create_resource(surface.extract.document)
+        # The dialect follows the extract: draft-04 under OAS 3.0, 2020-12 under OAS 3.1, which has no read/write split.
+        draft, self._read_cls, self._write_cls, self._format_checker = _dialect(surface.extract.document)
+        resource = draft.create_resource(surface.extract.document)
         self._registry: Registry[Any] = Registry().with_resource(EXTRACT_URI, resource)
         #: Keyed by the UNIT route and status, not the spec operation: an alias maps two unit routes onto one operation.
         self._validators: dict[tuple[str, int], Any] = {}
@@ -489,24 +505,24 @@ class ResponseValidator:
                 raise RuntimeError(f"{operation.key}: the schema for status {status} is not in the extract document")
         if pointer is not None:
             # The root schema is a reference into the registered document, so every nested #/components/... resolves there.
-            validator = OAS30ReadValidator(
-                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=oas30_format_checker
+            validator = self._read_cls(
+                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=self._format_checker
             )
             self._built += 1
         self._validators[cache_key] = validator
         return validator
 
     def _request_validator_for(self, key: str, operation: Operation, schema: Mapping[str, Any]) -> Any:
-        """The validator for one route's ``requestBody``, built once. ``OAS30WriteValidator`` and not the read one,
-        because OAS 3.0 reads ``readOnly`` and ``writeOnly`` oppositely in the two directions; everything else --
-        registry, format checker, ``$ref`` into the registered extract -- is what :meth:`_validator_for` uses."""
+        """The validator for one route's ``requestBody``, built once. The write class and not the read one, because
+        OAS 3.0 reads ``readOnly`` and ``writeOnly`` oppositely in the two directions (3.1 has one class); everything
+        else -- registry, format checker, ``$ref`` into the registered extract -- is what :meth:`_validator_for` uses."""
         if key in self._request_validators:
             return self._request_validators[key]
         pointer = _request_schema_pointer(self._surface.extract.document, operation, schema)
         validator: Any = None
         if pointer is not None:
-            validator = OAS30WriteValidator(
-                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=oas30_format_checker
+            validator = self._write_cls(
+                {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=self._format_checker
             )
         self._request_validators[key] = validator
         return validator

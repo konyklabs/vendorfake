@@ -2,7 +2,7 @@
 
 A vendor route is never silently unvalidated: ``Surface.classify`` returns exactly one of four kinds for every route the unit serves, and the only kind that carries no schema and no reason is ``undeclared``, which the validator raises on. Excusing a route costs a sentence in the declaration; that sentence is the audit trail.
 
-The extract is a valid OpenAPI 3.0 document restricted to the operations the unit models and the schemas reachable from them, with prose stripped -- see ``extract.py`` for how it is cut and ``pin.py`` for how it is tied to the upstream bytes. This module only reads it.
+The extract is a valid OpenAPI 3.0 or 3.1 document restricted to the operations the unit models and the schemas reachable from them, with prose stripped -- see ``extract.py`` for how it is cut and ``pin.py`` for how it is tied to the upstream bytes. This module only reads it.
 """
 
 from __future__ import annotations
@@ -338,6 +338,20 @@ class FidelityDeclaration:
         return None
 
 
+def _json_media(content: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    fallback: Mapping[str, Any] | None = None
+    for media, body in content.items():
+        schema = body.get("schema") if isinstance(body, Mapping) else None
+        if not isinstance(schema, Mapping):
+            continue
+        kind = media.split(";")[0].strip().lower()
+        if kind == "application/json":
+            return schema
+        if kind == "*/*" and fallback is None:
+            fallback = schema
+    return fallback
+
+
 @dataclass(frozen=True, slots=True)
 class Operation:
     """One ``paths[path][method]`` of the extract, located."""
@@ -365,11 +379,9 @@ class Operation:
             content = response.get("content")
             if not isinstance(content, Mapping):
                 continue
-            for media, body in content.items():
-                if media.split(";")[0].strip().lower() == "application/json" and isinstance(body, Mapping):
-                    schema = body.get("schema")
-                    if isinstance(schema, Mapping):
-                        return schema
+            schema = _json_media(content)
+            if schema is not None:
+                return schema
         return None
 
     def request_schema(self) -> Mapping[str, Any] | None:
@@ -377,16 +389,11 @@ class Operation:
         if not isinstance(body, Mapping):
             return None
         content = body.get("content", {})
-        for media, spec in content.items():
-            if media.split(";")[0].strip().lower() == "application/json" and isinstance(spec, Mapping):
-                schema = spec.get("schema")
-                if isinstance(schema, Mapping):
-                    return schema
-        return None
+        return _json_media(content) if isinstance(content, Mapping) else None
 
 
 class Extract:
-    """``extract.json``, read: a scoped OpenAPI 3.0 document plus its own metadata."""
+    """``extract.json``, read: a scoped OpenAPI 3.0 or 3.1 document plus its own metadata."""
 
     __slots__ = ("_by_shape", "document")
 
