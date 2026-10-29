@@ -1,4 +1,4 @@
-"""Merchant reference data on the wire: the merchant, locations and catalog objects.
+"""Merchant reference data on the wire: the merchant, locations, channels and catalog objects.
 
 INVARIANT: an absent optional emits no key, everywhere in this package, via
 the core's ``compact()``. These projections take the raw entity mapping
@@ -20,7 +20,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from vendorfake.core.util.json import compact
-from vendorfake.square.entities import CatalogObjectEntity, LocationEntity, MerchantEntity
+from vendorfake.square.entities import CatalogObjectEntity, ChannelEntity, LocationEntity, MerchantEntity
 from vendorfake.square.model.order import MoneyRequest
 
 __all__ = [
@@ -36,6 +36,7 @@ __all__ = [
     "UpsertCatalogObjectRequest",
     "catalog_name_of",
     "project_catalog_object",
+    "project_channel",
     "project_location",
     "project_merchant",
 ]
@@ -86,6 +87,26 @@ def project_location(entity: Mapping[str, Any]) -> dict[str, Any]:
             "phone_number": location.phone_number,
             "business_name": location.business_name,
             "type": location.type,
+        }
+    )
+
+
+def project_channel(entity: Mapping[str, Any]) -> dict[str, Any]:
+    """One stored channel as Square's ``Channel`` JSON (https://developer.squareup.com/reference/square/objects/Channel);
+    ``version`` is the store's -- JUDGMENT, no route writes a channel."""
+    channel = ChannelEntity.from_entity(entity)
+    created_at = entity.get("created_at")
+    updated_at = entity.get("updated_at")
+    return compact(
+        {
+            "id": channel.id,
+            "merchant_id": channel.merchant_id,
+            "name": channel.name,
+            "version": entity.get("version"),
+            "reference": None if channel.reference is None else dict(channel.reference),
+            "status": channel.status,
+            "created_at": None if created_at is None else str(created_at),
+            "updated_at": None if updated_at is None else str(updated_at),
         }
     )
 

@@ -1,6 +1,6 @@
 """Merchant reference data: the entities an order points at.
 
-ListMerchants, RetrieveMerchant, ListLocations and ListCatalog -- the read
+ListMerchants, RetrieveMerchant, ListLocations, ListChannels and ListCatalog -- the read
 endpoints a consumer needs before it can create an order. All are reads, so
 none takes an idempotency key, appends to the journal, or emits a webhook.
 The catalog's other reads and its one write live in
@@ -17,7 +17,7 @@ Square's other ``CatalogObjectType`` values changes an order's price here.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from vendorfake.core.kernel.reply import json_
@@ -32,13 +32,20 @@ from vendorfake.core.kernel.types import (
 )
 from vendorfake.core.util.json import compact
 from vendorfake.core.util.numbers import as_int
-from vendorfake.square.entities import COL
-from vendorfake.square.model.catalog import ITEM, project_catalog_object, project_location, project_merchant
+from vendorfake.square.entities import COL, ChannelEntity
+from vendorfake.square.model.catalog import (
+    ITEM,
+    project_catalog_object,
+    project_channel,
+    project_location,
+    project_merchant,
+)
 
 __all__ = [
     "CAPABILITY",
     "CATALOG_DEFAULT_LIMIT",
     "CATALOG_MAX_LIMIT",
+    "CHANNELS_LIMIT",
     "ME",
     "DirectorySurface",
     "directory_routes",
@@ -46,7 +53,7 @@ __all__ = [
 ]
 
 CAPABILITY = "merchant-directory"
-"""The capability both routes below belong to."""
+"""The capability every route below belongs to."""
 
 CATALOG_DEFAULT_LIMIT = 100
 """ListCatalog pages at 100 by default. JUDGMENT -- Square documents no
@@ -56,6 +63,17 @@ CATALOG_MAX_LIMIT = 1000
 """The ceiling the core clamps to. JUDGMENT -- Square documents no maximum
 for ListCatalog."""
 
+CHANNELS_LIMIT = 100
+"""DOCUMENTED default: "When not provided the returned results will be cap at 100 channels."
+JUDGMENT -- also the maximum, which Square does not document."""
+
+_CHANNEL_FILTERS: Mapping[str, Callable[[ChannelEntity], str | None]] = {
+    "reference_type": lambda channel: None if channel.reference is None else channel.reference.get("type"),
+    "reference_id": lambda channel: None if channel.reference is None else channel.reference.get("id"),
+    "status": lambda channel: channel.status,
+}
+"""ListChannels' query filters, each read off the stored channel; written once for the match and the fingerprint."""
+
 ME = "me"
 """RetrieveMerchant's alias for the caller's own merchant.
 https://developer.squareup.com/reference/square/merchants-api/retrieve-merchant
@@ -63,7 +81,7 @@ https://developer.squareup.com/reference/square/merchants-api/retrieve-merchant
 
 
 class DirectorySurface:
-    """The four reference-data routes; the only surface with no vendor
+    """The five reference-data routes; the only surface with no vendor
     dependency -- all routes are reads over seeded reference data."""
 
     __slots__ = ()
@@ -109,6 +127,17 @@ class DirectorySurface:
                 scopes=("MERCHANT_PROFILE_READ",),
                 operation_id="ListLocations",
                 summary="Every location for the seeded merchant.",
+            ),
+            Route(
+                method="GET",
+                path="/v2/channels",
+                capability=CAPABILITY,
+                handler=self.list_channels,
+                auth="bearer",
+                scopes=("CHANNELS_READ",),
+                operation_id="ListChannels",
+                summary="Sales channels (Beta upstream), filtered by reference and status, cursor-paginated.",
+                pagination=PaginationSpec(style="cursor", items_path="channels"),
             ),
             Route(
                 method="GET",
@@ -162,6 +191,28 @@ class DirectorySurface:
         """
         locations = args.ctx.store.collection(COL.locations).all()
         return json_({"locations": [project_location(entity) for entity in locations]})
+
+    # -- GET /v2/channels ---------------------------------------------------
+
+    def list_channels(self, args: HandlerArgs) -> ReplyInit:
+        """Channels matching every supplied filter, by id code point, cursor-paginated.
+        https://developer.squareup.com/reference/square/channels-api/list-channels
+        JUDGMENT: an undocumented ``reference_type`` or ``status`` matches nothing, as ListCatalog's unknown type does."""
+        collection = args.ctx.store.collection(COL.channels)
+        wanted = {name: value for name in _CHANNEL_FILTERS if (value := args.query(name))}
+        matching = sorted(
+            (entity for entity in collection.all() if _channel_matches(entity, wanted)),
+            key=lambda entity: str(entity["id"]),
+        )
+        page = collection.paginate(
+            matching,
+            limit=_requested_limit(args.query("limit")),
+            cursor=args.query("cursor"),
+            fingerprint=wanted,
+            default_limit=CHANNELS_LIMIT,
+            max_limit=CHANNELS_LIMIT,
+        )
+        return json_(compact({"channels": [project_channel(entity) for entity in page.items], "cursor": page.cursor}))
 
     # -- GET /v2/catalog/list ----------------------------------------------
 
@@ -245,6 +296,11 @@ def _requested_types(raw: str | None) -> frozenset[str]:
     if raw is None or not raw.strip():
         return frozenset({ITEM})
     return frozenset(part.strip().upper() for part in raw.split(",") if part.strip())
+
+
+def _channel_matches(entity: Mapping[str, Any], wanted: Mapping[str, str]) -> bool:
+    channel = ChannelEntity.from_entity(entity)
+    return all(_CHANNEL_FILTERS[name](channel) == value for name, value in wanted.items())
 
 
 def _requested_limit(raw: str | None) -> int | None:

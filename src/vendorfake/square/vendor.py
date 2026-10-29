@@ -72,10 +72,11 @@ SQUARE_SCOPES: tuple[str, ...] = (
     "LOYALTY_WRITE",
     "INVENTORY_READ",
     "INVENTORY_WRITE",
+    "CHANNELS_READ",
     WEBHOOK_SUBSCRIPTIONS_SCOPE,
 )
-"""DOCUMENTED -- all but the last are Square's published OAuth permissions; the last is not, see
-:data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`.
+"""DOCUMENTED -- Square's published OAuth permissions, plus two the permissions page omits: CHANNELS_READ, named only
+by ListChannels' ``security`` in the API document, and the last (see :data:`~vendorfake.square.config.WEBHOOK_SUBSCRIPTIONS_SCOPE`).
 https://developer.squareup.com/docs/oauth-api/square-permissions"""
 
 SQUARE_MAGIC = MagicTriggerSpec(

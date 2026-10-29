@@ -21,6 +21,7 @@ __all__ = [
     "DELETE_WEBHOOK_SUBSCRIPTION",
     "GET_PAYMENT",
     "LIST_CATALOG",
+    "LIST_CHANNELS",
     "LIST_LOCATIONS",
     "LIST_MERCHANTS",
     "LIST_WEBHOOK_EVENT_TYPES",
@@ -58,6 +59,7 @@ CREATE_WEBHOOK_SUBSCRIPTION = "/v2/webhooks/subscriptions"
 DELETE_WEBHOOK_SUBSCRIPTION = "/v2/webhooks/subscriptions/{subscription_id}"
 GET_PAYMENT = "/v2/payments/{payment_id}"
 LIST_CATALOG = "/v2/catalog/list"
+LIST_CHANNELS = "/v2/channels"
 LIST_LOCATIONS = "/v2/locations"
 LIST_MERCHANTS = "/v2/merchants"
 LIST_WEBHOOK_EVENT_TYPES = "/v2/webhooks/event-types"

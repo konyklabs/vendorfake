@@ -27,6 +27,7 @@ __all__ = [
     "COL",
     "AuthorizationCodeEntity",
     "CatalogObjectEntity",
+    "ChannelEntity",
     "Fulfillment",
     "InventoryCountEntity",
     "LocationEntity",
@@ -51,6 +52,7 @@ class SquareCollections:
 
     merchants: str = "merchants"
     locations: str = "locations"
+    channels: str = "channels"
     catalog: str = "catalog_objects"
     orders: str = "orders"
     payments: str = "payments"
@@ -66,6 +68,7 @@ class SquareCollections:
         return (
             self.merchants,
             self.locations,
+            self.channels,
             self.catalog,
             self.orders,
             self.payments,
@@ -222,6 +225,38 @@ class LocationEntity:
                 "type": self.type,
                 "address": self.address,
                 "phone_number": self.phone_number,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelEntity:
+    """A sales channel. https://developer.squareup.com/reference/square/objects/Channel"""
+
+    id: str
+    merchant_id: str
+    name: str | None = None
+    status: str | None = None
+    reference: dict[str, str] | None = None
+
+    @classmethod
+    def from_entity(cls, entity: Mapping[str, Any]) -> ChannelEntity:
+        return cls(
+            id=_str(entity["id"]),
+            merchant_id=_str(entity.get("merchant_id")),
+            name=_opt_str(entity.get("name")),
+            status=_opt_str(entity.get("status")),
+            reference=_mapping(entity.get("reference")),
+        )
+
+    def to_entity(self) -> Entity:
+        return compact(
+            {
+                "id": self.id,
+                "merchant_id": self.merchant_id,
+                "name": self.name,
+                "status": self.status,
+                "reference": self.reference,
             }
         )
 

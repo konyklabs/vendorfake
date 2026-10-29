@@ -19,7 +19,9 @@
     "Keys are snake_case throughout, which is the one departure from the",
     "TypeScript reference's copy of this file: every other JSON this project",
     "publishes or accepts -- profiles, the control plane, the wire projections --",
-    "is snake_case, and a camelCase seed document would be the only exception."
+    "is snake_case, and a camelCase seed document would be the only exception.",
+    "  channels                 https://developer.squareup.com/reference/square/channels-api/list-channels (the first channel is the ListChannelsResponse example)",
+    "One LOCATION channel per seeded location, the kiosk's INACTIVE, is this scenario's JUDGMENT."
   ],
   "merchant": {
     "id": "MLQW2MYBY81PZ",
@@ -66,6 +68,41 @@
       "status": "ACTIVE",
       "type": "MOBILE",
       "created_at": "2018-02-01T09:00:00.000Z"
+    }
+  ],
+  "channels": [
+    {
+      "id": "CH_9C03D0B59",
+      "name": "Contoso Fulfillment Application",
+      "reference": {
+        "type": "OAUTH_APPLICATION",
+        "id": "OA_9C03D0444"
+      },
+      "status": "ACTIVE",
+      "created_at": "2022-10-25T16:27:00Z",
+      "updated_at": "2022-10-25T16:48:00Z"
+    },
+    {
+      "id": "CH_7A1F3E9C2",
+      "name": "Grant Park",
+      "reference": {
+        "type": "LOCATION",
+        "id": "18YC4JDH91E1H"
+      },
+      "status": "ACTIVE",
+      "created_at": "2016-09-19T17:33:12.000Z",
+      "updated_at": "2016-09-19T17:33:12.000Z"
+    },
+    {
+      "id": "CH_057B2D4E1",
+      "name": "Midtown Kiosk",
+      "reference": {
+        "type": "LOCATION",
+        "id": "057P5VYJ4A5X1"
+      },
+      "status": "INACTIVE",
+      "created_at": "2018-02-01T09:00:00.000Z",
+      "updated_at": "2018-02-01T09:00:00.000Z"
     }
   ],
   "catalog": {
@@ -248,6 +285,7 @@
         "LOYALTY_WRITE",
         "INVENTORY_READ",
         "INVENTORY_WRITE",
+        "CHANNELS_READ",
         "DEVELOPER_APPLICATION_WEBHOOKS_WRITE"
       ]
     },
@@ -261,7 +299,8 @@
         "ITEMS_READ",
         "PAYMENTS_READ",
         "LOYALTY_READ",
-        "INVENTORY_READ"
+        "INVENTORY_READ",
+        "CHANNELS_READ"
       ]
     }
   ]
