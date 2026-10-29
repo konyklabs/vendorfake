@@ -1,0 +1,52 @@
+{
+  "name": "chaos-demo",
+  "summary": "Every capability on a virtual clock with a preloaded fault set: a mid-flow token expiry on the second V2 menu load and the documented 503 envelope on the third.",
+  "capabilities": [
+    "auth",
+    "order_and_pay",
+    "chaos"
+  ],
+  "seed": "seed/default.seed.json",
+  "vendor": {
+    "client_id": "unit-lightspeed-k-client-id",
+    "client_secret": "unit-lightspeed-k-client-secret"
+  },
+  "clock": {
+    "mode": "virtual",
+    "start": "2026-10-29T12:00:00.000Z"
+  },
+  "chaos": {
+    "seed": 20261029,
+    "strict_rules": true,
+    "rules": [
+      {
+        "id": "token-expires-on-second-menu-load",
+        "scope": "request",
+        "fault": "token_expiry",
+        "match": {
+          "route": "GET /o/op/2/menu/load/{menuId}"
+        },
+        "when": {
+          "nth": [
+            2
+          ]
+        },
+        "note": "The second apeGetMenuByIdV2 sees a 401 mid-flow without the stored token changing."
+      },
+      {
+        "id": "unavailable-on-third-menu-load",
+        "scope": "request",
+        "fault": "unavailable",
+        "match": {
+          "route": "GET /o/op/2/menu/load/{menuId}"
+        },
+        "when": {
+          "nth": [
+            3
+          ]
+        },
+        "note": "The third apeGetMenuByIdV2 answers the documented 503 envelope."
+      }
+    ]
+  }
+}

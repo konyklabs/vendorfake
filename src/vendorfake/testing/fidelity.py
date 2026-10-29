@@ -20,7 +20,7 @@ from vendorfake.fidelity.runner import FidelityTarget
 from vendorfake.fidelity.types import Surface, load_declaration, load_extract
 from vendorfake.registry import create_unit
 
-__all__ = ["lightspeed_target", "square_target", "surface_for", "target_for", "toast_target"]
+__all__ = ["lightspeed_k_target", "lightspeed_target", "square_target", "surface_for", "target_for", "toast_target"]
 
 _SQUARE = "square"
 _SQUARE_ANCHOR = "vendorfake.square.fidelity"
@@ -28,6 +28,8 @@ _TOAST = "toast"
 _TOAST_ANCHOR = "vendorfake.toast.fidelity"
 _LIGHTSPEED = "lightspeed"
 _LIGHTSPEED_ANCHOR = "vendorfake.lightspeed.fidelity"
+_LIGHTSPEED_K = "lightspeed-k"
+_LIGHTSPEED_K_ANCHOR = "vendorfake.lightspeed_k.fidelity"
 _DEFAULT_PROFILE = "full"
 
 
@@ -90,6 +92,18 @@ def toast_target() -> FidelityTarget:
         open_unit=_opener(_TOAST, _DEFAULT_PROFILE),
         default_profile=_DEFAULT_PROFILE,
         signer=_signer(_TOAST),
+    )
+
+
+def lightspeed_k_target() -> FidelityTarget:
+    """A non-vendored vendor, as Toast is: the extract is fetched, never
+    committed, so the first use on a cold cache needs the network."""
+    return FidelityTarget(
+        name=_LIGHTSPEED_K,
+        anchor=_LIGHTSPEED_K_ANCHOR,
+        open_unit=_opener(_LIGHTSPEED_K, _DEFAULT_PROFILE),
+        default_profile=_DEFAULT_PROFILE,
+        signer=None,
     )
 
 

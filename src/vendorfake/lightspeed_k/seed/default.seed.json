@@ -1,0 +1,76 @@
+{
+  "_comment": [
+    "The shipped Lightspeed Restaurant K-Series scenario, slice 1 of D-016 (konyklabs/roadmap#179).",
+    "Every id is written by hand in an obviously sequential pattern; the shapes are the vendor's,",
+    "the values are not copies of any real account's. seed/constants.py names each of them and",
+    "tests/unit/lightspeed_k/test_seed.py asserts the two agree.",
+    "",
+    "Shapes, all fetched 2026-10-29: businesses and businessLocations from apeLookupBusinesses and",
+    "https://api-portal.lsk.lightspeed.app/guides/definitions/business-locations (one business, one",
+    "location); the menu from apeMenuV2 in https://api-docs.lsk.lightspeed.app/source.json (one top-level",
+    "group of @type group, two menuItem entries with sku, productPrice, taxes, defaultTaxAmount,",
+    "defaultTaxPercentage, taxIncludedInPrice and an empty menuModifierGroups). Every menuEntry carries",
+    "@type because the document's oneOf is told apart by nothing else. The online-ordering tutorial",
+    "(https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics) orders by sku, which",
+    "is why both items carry one. Prices and tax rates are JUDGMENT.",
+    "",
+    "Tokens are readable strings here (a human types them into curl); every token POST /oauth/token mints",
+    "is UUID-shaped, as both samples on the V1 authorization overview are. The full pair carries",
+    "financial-api and orders-api; the second access token carries financial-api only, so a 403 on an",
+    "Order and Pay read has something to be asserted with. Expiries come from the unit's clock at hydrate."
+  ],
+  "businesses": [
+    {
+      "id": 100000000001,
+      "name": "Unit K Bistro",
+      "businessLocations": [{"id": 100000000101, "name": "Unit K Bistro - Main Street"}]
+    }
+  ],
+  "menus": [
+    {
+      "ikentooMenuId": 100000000201,
+      "menuName": "Unit Lunch Menu",
+      "businessLocationIds": [100000000101],
+      "menuEntryGroups": [
+        {
+          "@type": "group",
+          "id": "100000000301",
+          "name": "Mains",
+          "color": "blue",
+          "menuEntry": [
+            {
+              "@type": "menuItem",
+              "productName": "Unit Burger",
+              "productPrice": 12.5,
+              "sku": "UNITK-001",
+              "taxes": [{"description": "10% VAT", "amount": 1.25, "percentage": 10.0}],
+              "defaultTaxAmount": 1.25,
+              "defaultTaxPercentage": 10.0,
+              "taxIncludedInPrice": true,
+              "itemRichData": {"containsAlcohol": false, "allergenCodes": ["gluten"]},
+              "menuModifierGroups": []
+            },
+            {
+              "@type": "menuItem",
+              "productName": "Unit Lemonade",
+              "productPrice": 4.0,
+              "sku": "UNITK-002",
+              "taxes": [{"description": "10% VAT", "amount": 0.4, "percentage": 10.0}],
+              "defaultTaxAmount": 0.4,
+              "defaultTaxPercentage": 10.0,
+              "taxIncludedInPrice": true,
+              "menuModifierGroups": []
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tokens": [
+    {"id": "tok_seed_full", "access_token": "unit-lightspeed-k-access-token-full", "scopes": ["financial-api", "orders-api"]},
+    {"id": "tok_seed_financial", "access_token": "unit-lightspeed-k-access-token-financial", "scopes": ["financial-api"]}
+  ],
+  "refresh_tokens": [
+    {"id": "rt_seed_full", "refresh_token": "unit-lightspeed-k-refresh-token-full", "scopes": ["financial-api", "orders-api"], "access_token_id": "tok_seed_full"}
+  ]
+}

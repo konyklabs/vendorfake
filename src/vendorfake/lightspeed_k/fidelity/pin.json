@@ -1,0 +1,26 @@
+{
+  "cut_sha256": "ae18a3bae9ec5006a66aaff7c41e88792f9c2bc86dad071f0cdba018a3d83aeb",
+  "extract_sha256": "e030fea24f0d5ed58a65efd36fd41661e5f90a1b6593a2528223d28bfe79a144",
+  "modeled": [
+    "GET /o/op/1/menu/list",
+    "GET /o/op/2/menu/load/{menuId}",
+    "GET /o/op/data/businesses",
+    "GET /oauth/authorize",
+    "POST /oauth/token"
+  ],
+  "operations": {
+    "GET /o/op/1/menu/list": "ba35c40f2c027a587997885268558ab2327b840d1163822b223bafcba78f90a6",
+    "GET /o/op/2/menu/load/{menuId}": "785cd1652f193973039482d8aeb675cc57b9c4f2a5b44684f3791d92209f767d",
+    "GET /o/op/data/businesses": "df80ff13259509af780a11b9d24eb0bbc5a9de0cdf515ddd5549122e16fb0633"
+  },
+  "schema": 1,
+  "sources": [
+    {
+      "bytes": 956555,
+      "fetched": "2026-10-29",
+      "sha256": "583a58b1402083674c38dd42254353dddc64d9a0abaa7cae45e11005918cfa38",
+      "url": "https://api-docs.lsk.lightspeed.app/source.json",
+      "version": "1.0.0"
+    }
+  ]
+}

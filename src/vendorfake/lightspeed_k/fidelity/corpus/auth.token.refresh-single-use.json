@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "id": "auth.token.refresh-single-use",
+  "title": "A V1 refresh from a form body issues a new pair; the consumed refresh token is refused; the previous access token still reads",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/quick-start/authentication/v1-authentication/v1-authorization-faq",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "The FAQ: 'Refresh tokens can only be used once'; the overview: the refresh values 'must be passed in the request body as an x-www-form-encoded payload' and the endpoint 'will return a new access token and a new refresh token'. The refusal's status and body are RFC 6749 s5.2, this unit's judgment; Lightspeed documents only that a refresh token can be used once. That the pre-refresh bearer still reads is JUDGMENT per D-010: nothing documents revoking it."
+  },
+  "routes": [
+    "POST /oauth/token",
+    "GET /o/op/data/businesses"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "refresh",
+      "request": {
+        "method": "POST",
+        "path": "/oauth/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded",
+          "authorization": "${vars.basic_auth}"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${vars.refresh_token}"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "access_token": "${re:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}}",
+          "token_type": "bearer",
+          "refresh_token": "${re:[0-9a-f-]{36}}",
+          "expires_in": 3599,
+          "scope": "financial-api orders-api "
+        }
+      },
+      "capture": {
+        "new_access": "/access_token",
+        "new_refresh": "/refresh_token"
+      }
+    },
+    {
+      "name": "replay the consumed refresh token",
+      "request": {
+        "method": "POST",
+        "path": "/oauth/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded",
+          "authorization": "${vars.basic_auth}"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${vars.refresh_token}"
+      },
+      "expect": {
+        "status": 400,
+        "body": {
+          "error": "invalid_grant"
+        }
+      }
+    },
+    {
+      "name": "the pre-refresh bearer still reads",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/data/businesses",
+        "headers": {
+          "authorization": "bearer ${vars.access_token}"
+        }
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "the new bearer reads",
+      "request": {
+        "method": "GET",
+        "path": "/o/op/data/businesses",
+        "headers": {
+          "authorization": "bearer ${cap.new_access}"
+        }
+      },
+      "expect": {
+        "status": 200
+      }
+    },
+    {
+      "name": "the new refresh token refreshes",
+      "request": {
+        "method": "POST",
+        "path": "/oauth/token",
+        "headers": {
+          "content-type": "application/x-www-form-urlencoded",
+          "authorization": "${vars.basic_auth}"
+        },
+        "body": "grant_type=refresh_token&refresh_token=${cap.new_refresh}"
+      },
+      "expect": {
+        "status": 200,
+        "body": {
+          "access_token": "${re:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}}",
+          "token_type": "bearer",
+          "refresh_token": "${re:[0-9a-f-]{36}}",
+          "expires_in": 3599,
+          "scope": "financial-api orders-api "
+        }
+      }
+    }
+  ]
+}
