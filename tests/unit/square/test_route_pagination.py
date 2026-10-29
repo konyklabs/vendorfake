@@ -17,6 +17,7 @@ from vendorfake.square.vendor import create_square_vendor
 WALKABLE = {
     "SearchOrders",
     "ListCatalog",
+    "ListChannels",
     "SearchCatalogObjects",
     "SearchLoyaltyAccounts",
 }

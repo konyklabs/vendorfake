@@ -20,6 +20,8 @@ from vendorfake.core.kernel.types import UnitError, UnitErrorKind
 
 __all__ = [
     "SeedCatalog",
+    "SeedChannel",
+    "SeedChannelReference",
     "SeedDocument",
     "SeedInventoryCount",
     "SeedItem",
@@ -87,6 +89,28 @@ class SeedLocation(BaseModel):
     phone_number: str | None = None
     type: Literal["PHYSICAL", "MOBILE"] = "PHYSICAL"
     created_at: str | None = None
+
+
+class SeedChannelReference(BaseModel):
+    """The entity a channel points at. https://developer.squareup.com/reference/square/objects/Reference"""
+
+    model_config = _SEED
+
+    type: str = Field(min_length=1)
+    id: str = Field(min_length=1)
+
+
+class SeedChannel(BaseModel):
+    """One sales channel of the merchant. https://developer.squareup.com/reference/square/objects/Channel"""
+
+    model_config = _SEED
+
+    id: str = Field(min_length=1)
+    name: str | None = None
+    reference: SeedChannelReference | None = None
+    status: Literal["ACTIVE", "INACTIVE"] = "ACTIVE"
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class SeedVariation(BaseModel):
@@ -301,6 +325,7 @@ class SeedDocument(BaseModel):
     comment: tuple[str, ...] = Field(default=(), alias="_comment")
     merchant: SeedMerchant
     locations: tuple[SeedLocation, ...] = ()
+    channels: tuple[SeedChannel, ...] = ()
     catalog: SeedCatalog | None = None
     orders: tuple[SeedOrder, ...] = ()
     loyalty_program: SeedLoyaltyProgram | None = None

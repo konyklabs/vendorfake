@@ -17,6 +17,7 @@ from vendorfake.square.config import SquareConfig
 from vendorfake.square.entities import (
     COL,
     CatalogObjectEntity,
+    ChannelEntity,
     InventoryCountEntity,
     LocationEntity,
     LoyaltyAccountEntity,
@@ -48,6 +49,7 @@ def hydrate_square(ctx: UnitContext, seed: object, config: SquareConfig) -> Seed
     doc = parse_seed_document(seed)
     _insert_merchant(ctx, doc)
     _insert_locations(ctx, doc)
+    _insert_channels(ctx, doc)
     _insert_catalog(ctx, doc)
     _insert_orders(ctx, doc)
     _insert_loyalty(ctx, doc)
@@ -100,6 +102,22 @@ def _insert_locations(ctx: UnitContext, doc: SeedDocument) -> None:
             # Stated, not defaulted; `Collection.insert` fills this only when absent.
             entity["created_at"] = location.created_at
         locations.insert(entity, SEED_META)
+
+
+def _insert_channels(ctx: UnitContext, doc: SeedDocument) -> None:
+    channels = ctx.store.collection(COL.channels)
+    for channel in doc.channels:
+        entity = ChannelEntity(
+            id=channel.id,
+            merchant_id=doc.merchant.id,
+            name=channel.name,
+            status=channel.status,
+            reference=None if channel.reference is None else channel.reference.model_dump(),
+        ).to_entity()
+        if channel.created_at is not None:
+            entity["created_at"] = channel.created_at
+            entity["updated_at"] = channel.updated_at or channel.created_at
+        channels.insert(entity, SEED_META)
 
 
 def _insert_catalog(ctx: UnitContext, doc: SeedDocument) -> None:

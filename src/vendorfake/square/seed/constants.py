@@ -14,6 +14,7 @@ __all__ = [
     "COLD_BREW_SMALL_VARIATION_ID",
     "DEFAULT_SEED_PATH",
     "SEED_ACCESS_TOKEN",
+    "SEED_CHANNEL_ID",
     "SEED_COMPLETED_ORDER_CLOSED_AT",
     "SEED_COMPLETED_ORDER_ID",
     "SEED_COMPLETED_ORDER_TENDER_ID",
@@ -21,7 +22,9 @@ __all__ = [
     "SEED_INVENTORY_CALCULATED_AT",
     "SEED_INVENTORY_COLD_BREW_SMALL_QUANTITY",
     "SEED_INVENTORY_TEA_MUG_QUANTITY",
+    "SEED_KIOSK_CHANNEL_ID",
     "SEED_KIOSK_LOCATION_ID",
+    "SEED_LOCATION_CHANNEL_ID",
     "SEED_LOCATION_ID",
     "SEED_LOYALTY_ACCOUNT_ID",
     "SEED_LOYALTY_ACCOUNT_PHONE",
@@ -48,6 +51,11 @@ DEFAULT_SEED_PATH = Path(__file__).resolve().parent / "default.seed.json"
 SEED_MERCHANT_ID = "MLQW2MYBY81PZ"
 SEED_LOCATION_ID = "18YC4JDH91E1H"
 SEED_KIOSK_LOCATION_ID = "057P5VYJ4A5X1"
+SEED_CHANNEL_ID = "CH_9C03D0B59"
+SEED_LOCATION_CHANNEL_ID = "CH_7A1F3E9C2"
+SEED_KIOSK_CHANNEL_ID = "CH_057B2D4E1"
+"""The ListChannelsResponse example's channel (https://developer.squareup.com/reference/square/channels-api/list-channels);
+JUDGMENT: one LOCATION channel per seeded location, the kiosk's INACTIVE."""
 
 TEA_ITEM_ID = "W62UWFY35CWMYGVWK6TWJDNI"
 TEA_MUG_VARIATION_ID = "2TZFAOHWGG7PAK2QEXWYPZSP"
@@ -107,6 +115,7 @@ SEED_SCOPES: tuple[str, ...] = (
     "LOYALTY_WRITE",
     "INVENTORY_READ",
     "INVENTORY_WRITE",
+    "CHANNELS_READ",
     "DEVELOPER_APPLICATION_WEBHOOKS_WRITE",
 )
 """The full seeded grant, including the webhook-subscriptions scope withheld
@@ -121,6 +130,7 @@ SEED_READ_ONLY_SCOPES: tuple[str, ...] = (
     "PAYMENTS_READ",
     "LOYALTY_READ",
     "INVENTORY_READ",
+    "CHANNELS_READ",
 )
 """A second token that cannot write, so "403 on the write path" is testable
 without minting anything."""

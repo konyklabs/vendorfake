@@ -54,6 +54,17 @@ def test_every_constant_names_something_the_document_contains(document: dict[str
         seed_constants.SEED_LOCATION_ID,
         seed_constants.SEED_KIOSK_LOCATION_ID,
     }
+    assert {channel.id for channel in doc.channels} == {
+        seed_constants.SEED_CHANNEL_ID,
+        seed_constants.SEED_LOCATION_CHANNEL_ID,
+        seed_constants.SEED_KIOSK_CHANNEL_ID,
+    }
+    location_channel = next(
+        channel for channel in doc.channels if channel.id == seed_constants.SEED_LOCATION_CHANNEL_ID
+    )
+    assert location_channel.reference is not None
+    assert location_channel.reference.type == "LOCATION"
+    assert location_channel.reference.id == SEED_LOCATION_ID
     assert doc.catalog is not None
     catalog_ids = {item.id for item in doc.catalog.items} | {
         variation.id for item in doc.catalog.items for variation in item.variations
@@ -135,6 +146,7 @@ def test_the_store_holds_what_the_document_describes(h: Harness) -> None:
     assert stats["entities"] == {
         "merchants": 1,
         "locations": 2,
+        "channels": 3,
         "catalog_objects": 6,
         "orders": 2,
         "loyalty_programs": 1,

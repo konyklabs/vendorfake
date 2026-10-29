@@ -40,5 +40,5 @@ def test_a_call_through_the_harness_is_counted_as_validated(h: Harness) -> None:
 def test_no_vendor_route_is_undeclared(h: Harness) -> None:
     kinds = {classified.key: classified.kind for classified in SURFACE.classify_all(h.unit.routes)}
     assert "undeclared" not in kinds.values(), {k: v for k, v in kinds.items() if v == "undeclared"}
-    assert sum(1 for kind in kinds.values() if kind == "operation") == 33
+    assert sum(1 for kind in kinds.values() if kind == "operation") == 34
     assert sum(1 for kind in kinds.values() if kind == "excused") == 2

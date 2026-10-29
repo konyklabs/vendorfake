@@ -26,7 +26,7 @@ SQUARE_CAPABILITIES: tuple[CapabilityDecl, ...] = (
     ),
     CapabilityDecl(
         name="merchant-directory",
-        summary="Merchant, locations and catalog -- the reference data orders point at.",
+        summary="Merchant, locations, channels and catalog -- the reference data orders point at.",
     ),
     CapabilityDecl(
         name="payments",

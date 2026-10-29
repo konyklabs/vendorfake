@@ -145,6 +145,7 @@ PUBLIC_API: Mapping[str, tuple[str, ...]] = {
         "DELETE_WEBHOOK_SUBSCRIPTION",
         "GET_PAYMENT",
         "LIST_CATALOG",
+        "LIST_CHANNELS",
         "LIST_LOCATIONS",
         "LIST_MERCHANTS",
         "LIST_WEBHOOK_EVENT_TYPES",

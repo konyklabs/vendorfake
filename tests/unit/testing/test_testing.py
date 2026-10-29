@@ -59,6 +59,20 @@ def test_a_square_unit_answers_a_seeded_call_through_httpx() -> None:
         assert square.health()["status"] == "ok"
 
 
+def test_a_square_unit_finds_the_seeded_location_channel() -> None:
+    """The consumer's path to its location's sales channel through the public fixture layer."""
+    with unit("square") as square:
+        response = square.client.get(
+            "/v2/channels",
+            params={"reference_type": "LOCATION", "reference_id": square.seed.location_id, "status": "ACTIVE"},
+            headers=square.seed.auth,
+        )
+        assert response.status_code == 200, response.text
+        found = response.json()["channels"]
+        assert len(found) == 1
+        assert found[0]["reference"]["id"] == square.seed.location_id
+
+
 def test_a_clover_unit_answers_a_seeded_call_under_its_merchant() -> None:
     with unit("clover") as clover:
         assert isinstance(clover.seed, CloverSeed)

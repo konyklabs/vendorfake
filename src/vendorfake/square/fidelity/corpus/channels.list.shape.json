@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "id": "channels.list.shape",
+  "title": "ListChannels answers the merchant's channels with the documented Channel fields, filtered by reference type",
+  "source": {
+    "url": "https://developer.squareup.com/reference/square/channels-api/list-channels",
+    "fetched": "2026-10-29",
+    "provenance": "documented",
+    "note": "Response fields `channels` and `cursor`; the example response shows id, merchant_id, name, version 1, reference {id, type OAUTH_APPLICATION}, status ACTIVE, created_at and updated_at. The seeded channel reuses the example's id, name, reference, status and timestamps; merchant_id is the seeded merchant's. Filtering on reference_type narrows the list to that one channel; two more LOCATION channels are this scenario's count."
+  },
+  "routes": [
+    "GET /v2/channels"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "path": "/v2/channels",
+        "query": {
+          "reference_type": "OAUTH_APPLICATION"
+        },
+        "headers": {
+          "$auth": "bearer"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "headers": {
+          "content-type": "application/json"
+        },
+        "body": {
+          "channels": [
+            {
+              "id": "CH_9C03D0B59",
+              "merchant_id": "${any}",
+              "name": "Contoso Fulfillment Application",
+              "version": 1,
+              "reference": {
+                "id": "OA_9C03D0444",
+                "type": "OAUTH_APPLICATION"
+              },
+              "status": "ACTIVE",
+              "created_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}",
+              "updated_at": "${re:\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z}"
+            }
+          ]
+        },
+        "absent": [
+          "/errors",
+          "/cursor"
+        ]
+      }
+    }
+  ]
+}

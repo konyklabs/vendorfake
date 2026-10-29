@@ -347,6 +347,7 @@ class SquareSeedOverlay(TypedDict, total=False):
 
     merchant: object
     locations: object
+    channels: object
     catalog: object
     orders: object
     loyalty_program: object
