@@ -15,13 +15,20 @@ on:
 jobs:
   release-please:
     if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
-    # No `with: release-type`: manifest mode, so release-please reads
-    # release-please-config.json (extra-files for the docs pins,
-    # bump-minor-pre-major) and .release-please-manifest.json (konyklabs/roadmap#106).
-    uses: konyklabs/.github/.github/workflows/release-please.yml@a70221d667cb7ba702c6884b6544ec409c1ed369 # main
+    steps:
+      # Called directly rather than through konyklabs/.github's reusable
+      # (konyklabs/roadmap#170): a copy of this repository in another
+      # organisation then releases with no dependency on the upstream
+      # organisation's workflows. No `release-type`: manifest mode, so
+      # release-please reads release-please-config.json (extra-files for the
+      # docs pins, bump-minor-pre-major) and .release-please-manifest.json
+      # (konyklabs/roadmap#106). Pinned to a commit, the tag in the comment.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
 
   # PyPI via OIDC trusted publishing -- no token secret anywhere.
   #
