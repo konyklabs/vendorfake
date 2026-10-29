@@ -160,6 +160,18 @@ fidelity leg and review round that came with it.
   could set a content type through `DeliveryHeaderProvider` and then send
   bytes contradicting it, which is the one shape a fake must not ship.
 
+### Behaviour changes
+
+* **fidelity:** `pin --check` and `pin --offline` judge the **cut** -- the modelled
+  operations, the schemas they reach and their annotations -- not the source bytes.
+  A byte-only upstream move now reads `upstream moved, cut unchanged` and exits `0`
+  (`6` under the new `--fail-on-move`, which the weekly drift job passes), where it
+  used to exit `1`; a moved cut is still `CHANGED` / `INCONSISTENT`, exit `1`, naming
+  the operations. A non-vendored `pin.json` records `cut_sha256` and one digest per
+  operation (digests, not copies); Toast is re-pinned (orders 2.14.2). The cache's
+  `DRIFT` note is gone: the cached extract's own source rows say where it came from
+  (`vendorfake.fidelity.cache.DRIFT_FILE` and `drift_rows` are removed). (konyklabs/roadmap#178)
+
 ---
 
 Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
