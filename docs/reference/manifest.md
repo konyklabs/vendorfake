@@ -122,6 +122,7 @@ will read a month ahead of your own clock rather than these dates:
   "ids": {
     "merchants": ["MLQW2MYBY81PZ"],
     "locations": ["18YC4JDH91E1H", "057P5VYJ4A5X1"],
+    "channels": ["CH_9C03D0B59", "CH_7A1F3E9C2", "…"],
     "catalog_objects": ["W62UWFY35CWMYGVWK6TWJDNI", "2TZFAOHWGG7PAK2QEXWYPZSP", "…"],
     "orders": ["CAISENgvlJ6jLWAzERDzjyHVybY", "CAISEM82RcpmcFBM0TfOyiHV3es"],
     "loyalty_programs": ["d619f755-2d17-41f3-990d-c04ecedd64dd"],

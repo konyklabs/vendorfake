@@ -75,6 +75,16 @@ fidelity leg and review round that came with it.
   `examples/vitest-consumer/tests/lightspeed.test.ts`, the latter with pinned
   parity vectors for the form-encoded HMAC signer.
 
+* **square:** `GET /v2/channels` (ListChannels, Beta in Square's document),
+  served from a seeded `channels` collection: the document's own example
+  channel and one LOCATION channel per seeded location (the kiosk's INACTIVE).
+  `reference_type`, `reference_id` and `status` filter together;
+  cursor-paginated, 100 per page by default and at most. The route requires
+  `CHANNELS_READ`, which the API document's security block names and the
+  permissions page does not; both seeded tokens now carry it, so a consumer
+  pinning an exact scope list sees one more. The fidelity extract is re-cut
+  from the unchanged pinned document (konyklabs/roadmap#176).
+
 * **fidelity:** a declaration may now name **prose annotations** --
   `{"name", "select", "item"}` rows whose regular expressions the cutter runs
   over each modeled operation's `description` *before* it strips it, recording

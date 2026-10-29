@@ -20,6 +20,7 @@ Every route square's surface serves -- vendor-facing only. The `/__unit/*` contr
 | GET | `/v2/merchants` | ListMerchants | merchant-directory | Every merchant the caller can reach -- one, in this unit. |
 | GET | `/v2/merchants/{merchant_id}` | RetrieveMerchant | merchant-directory | One merchant by id, or `me` for the caller's own. |
 | GET | `/v2/locations` | ListLocations | merchant-directory | Every location for the seeded merchant. |
+| GET | `/v2/channels` | ListChannels | merchant-directory | Sales channels (Beta upstream), filtered by reference and status, cursor-paginated. |
 | GET | `/v2/catalog/list` | ListCatalog | merchant-directory | Catalog objects, filtered by type and cursor-paginated. |
 | GET | `/v2/catalog/object/{object_id}` | RetrieveCatalogObject | merchant-directory | One catalog object; an ITEM carries its variations. |
 | POST | `/v2/catalog/search` | SearchCatalogObjects | merchant-directory | Catalog objects by type, by name prefix or exactly, or changed since a time. |

@@ -191,8 +191,8 @@ collections that exist:
 
 ```text
 seed overlay names 'merchants', which the seed document for profile 'full'
-does not have. ... Valid collections: catalog, inventory_counts, locations,
-loyalty_accounts, loyalty_program, merchant, orders, tokens.
+does not have. ... Valid collections: catalog, channels, inventory_counts,
+locations, loyalty_accounts, loyalty_program, merchant, orders, tokens.
 ```
 
 This is the one mistake an overlay has no other symptom for: `{"order":
