@@ -7,6 +7,11 @@ fidelity leg and review round that came with it.
 
 ### Features
 
+* **lightspeed-k:** `POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown`
+  (`tax-preview-apiTaxBreakdown`), the tax breakdown of a proposed order priced from the seeded menu's
+  `taxes[]` with JUDGMENT half-up arithmetic; the documented string-status envelope on its 400/404/503 and two
+  declared deviations for the kernel's integer-status 403; all six consumer calls of D-016 are now modelled
+  (konyklabs/roadmap#184).
 * **lightspeed-k:** slice 2 of D-016 (konyklabs/roadmap#183): `POST /o/op/1/order/toGo`, the webhook endpoint
   CRUD under `/o/wh/1/webhook`, order notifications delivered from the journal to the endpoint an order names
   with HTTP Basic when registered with it, and a JUDGMENT retry schedule; the `webhooks` role is declared, so
@@ -273,6 +278,9 @@ Hardening round after 0.3 (konyklabs/roadmap#105), landed with the reviewed
 
 ### Bug fixes
 
+* **lightspeed-k:** the default seed's UNITK-001 is tax-exclusive and UNITK-002's tax amount is 0.36, so every
+  seeded `taxes[].amount` equals the tax breakdown at quantity 1; the released 0.9.0 menu said
+  `taxIncludedInPrice: true` with tax-exclusive amounts (konyklabs/roadmap#184).
 * **examples:** the Vitest example's Toast signature helper now mirrors
   `toast/signer.py` exactly -- the timestamp is appended only when the body is
   a JSON object carrying one as a string; anything else is signed alone. It
