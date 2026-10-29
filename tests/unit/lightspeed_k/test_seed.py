@@ -5,11 +5,13 @@ from __future__ import annotations
 import base64
 import copy
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.unit.lightspeed_k.harness import Harness
+from tests.unit.lightspeed_k.conftest import VIRTUAL
+from tests.unit.lightspeed_k.harness import BUSINESSES, Harness, bearer, harness
 from vendorfake.core.kernel.types import UnitError
 from vendorfake.lightspeed_k import create_lightspeed_k_vendor
 from vendorfake.lightspeed_k.config import LightspeedKConfig
@@ -137,3 +139,19 @@ def test_the_vendor_block_refuses_v2_clients_and_plain_http(block: dict[str, str
 def test_a_seed_overlay_still_validates_entries() -> None:
     doc = copy.deepcopy(_document())
     assert parse_seed_document(doc).menus[0].ikentooMenuId == c.SEED_MENU_ID
+
+
+def test_a_seed_token_with_expires_in_s_zero_is_expired_at_start(tmp_path: Path) -> None:
+    """``docs/concepts/seed.md``, Token lifetimes: ``0`` is expired the instant the unit starts, absent is the TTL."""
+    doc = _document()
+    doc["tokens"][0]["expires_in_s"] = 0
+    path = tmp_path / "seed.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    for started in harness(env={**VIRTUAL, "VENDORFAKE_SEED": str(path)}):
+        tokens = started.unit.context.store.collection(COL.tokens)
+        now = int(started.unit.context.clock.now())
+        assert tokens.get("tok_seed_full")["expires_at_ms"] == now
+        assert tokens.get("tok_seed_financial")["expires_at_ms"] == now + 3_599_000
+        res = started.get(BUSINESSES, headers=bearer(c.SEED_ACCESS_TOKEN))
+        assert res.status == 401
+        assert res.json()["unit_error"]["kind"] == "token_expired"

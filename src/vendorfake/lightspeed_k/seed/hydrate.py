@@ -38,7 +38,7 @@ def hydrate_lightspeed_k(ctx: UnitContext, seed: object, config: LightspeedKConf
         ctx.store.collection(COL.menus).insert(row, SEED_META)
     now = int(ctx.clock.now())
     for token in doc.tokens:
-        ttl_s = token.expires_in_s or config.access_token_ttl_s
+        ttl_s = config.access_token_ttl_s if token.expires_in_s is None else token.expires_in_s
         entity = TokenEntity(
             id=token.id,
             access_token=token.access_token,
