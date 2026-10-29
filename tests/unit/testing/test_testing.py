@@ -1031,6 +1031,7 @@ def test_subscribe_refuses_an_event_type_the_vendor_never_sends() -> None:
         clover.subscribe("http://127.0.0.1:1/x", ["O:*"], "code")
         clover.subscribe("http://127.0.0.1:1/y", ["*"], "code")
         clover.subscribe("http://127.0.0.1:1/z", ["P:CREATE", "O:UPDATE"], "code")
+        clover.subscribe("http://127.0.0.1:1/im", ["IM:*"], "code")
     with unit("square") as square:
         with pytest.raises(ValueError, match="'square' sends none of"):
             square.subscribe("http://127.0.0.1:1/x", ["O:CREATE"], "k")
