@@ -308,7 +308,7 @@ on the other three.
 | Orders | open `SEEDORDER0001` |
 | Payment plumbing | tender `TENDEREXTRN01` (external), `TENDERCASH001`; employees `EMPLBARISTA01`, `OWNERHRVST001`; service charge `SVCCHARGE0001` (18%) |
 | Webhooks | pre-verified subscriber `wbhk_seed_quickstart` (auth code `unit-seeded-clover-webhook-auth-code`), **disabled**; register through `POST /__unit/webhooks/subscriptions` |
-| Event types | `O:`, `I:`, `C:`, `P:` (orders, inventory items, customers, payments) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted |
+| Event types | `O:`, `I:`, `C:`, `P:`, `IM:` (orders, inventory items, customers, payments, inventory modifiers) × `CREATE`, `UPDATE`, `DELETE` — e.g. `O:CREATE`; globs like `O:*` accepted, and `I:*` does not match `IM:` |
 
 ### Toast
 

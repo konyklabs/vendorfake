@@ -7,6 +7,17 @@ fidelity leg and review round that came with it.
 
 ### Features
 
+* **clover:** `POST /v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}`
+  (`UpdateModifier`, `INVENTORY_W`), a sparse modifier update answering the GET's
+  shape: `id`/`modifierGroup` in the body are ignored, a `null` resets a field to
+  its documented default, `name` cannot be cleared. Every committed change to a
+  modifier is now an `IM:<id>` webhook (`CREATE`/`UPDATE`/`DELETE`). One map
+  (`vendorfake.clover.model.webhooks.EVENT_KEYS`) now defines the key vocabulary:
+  the mapper, the stand-in's default keys, the seeded subscriber (now `*`) and
+  `seed.event_types` behind `subscribe()` all derive from it, so
+  `subscribe(url, ["IM:*"], key)` works. `I:*` does not match `IM:`; subscribe to
+  both. The internal `KEY_*` constants in `vendorfake.clover.events` are gone
+  (konyklabs/roadmap#175).
 * **lightspeed:** a fourth vendor -- **Lightspeed Retail X-Series, API
   2026-07** (konyklabs/roadmap#94). Thirty-seven routes on one retailer: the
   token endpoint (`POST /api/1.0/token`) with both documented grants, a

@@ -459,8 +459,6 @@ def _clover(vendor_config: Mapping[str, object]) -> CloverSeed:
     from vendorfake.clover.seed import constants as c
 
     config = CloverConfig.model_validate(dict(vendor_config))
-    keys = (events.KEY_ORDERS, events.KEY_INVENTORY, events.KEY_CUSTOMERS, events.KEY_PAYMENTS)
-    event_types = tuple(events.event_type(key, change) for key in keys for change in events.CHANGE_TYPES)
     return CloverSeed(
         client_id=config.client_id,
         client_secret=config.client_secret,
@@ -487,7 +485,7 @@ def _clover(vendor_config: Mapping[str, object]) -> CloverSeed:
         open_order_id=c.SEED_OPEN_ORDER_ID,
         webhook_subscription_id=c.SEED_WEBHOOK_SUBSCRIPTION_ID,
         webhook_auth_code=c.SEED_WEBHOOK_AUTH_CODE,
-        event_types=event_types,
+        event_types=tuple(events.CLOVER_EVENT_TYPES),
     )
 
 

@@ -19,7 +19,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from vendorfake.core.util.json import compact
 
-__all__ = ["ITEM_EXPANDABLE", "ItemCreateRequest", "ItemPatchRequest", "ItemWire", "PriceType", "project_item"]
+__all__ = [
+    "ITEM_EXPANDABLE",
+    "ItemCreateRequest",
+    "ItemPatchRequest",
+    "ItemWire",
+    "ModifierPatchRequest",
+    "PriceType",
+    "project_item",
+]
 
 _REQUEST = ConfigDict(extra="ignore", frozen=True)
 """Tolerates documented-but-unmodelled fields (``isAgeRestricted``, ...)
@@ -101,6 +109,20 @@ class ItemPatchRequest(BaseModel):
     isRevenue: bool | None = None
     sku: str | None = None
     code: str | None = None
+
+
+class ModifierPatchRequest(BaseModel):
+    """DOCUMENTED: the group cannot change once created
+    (https://docs.clover.com/dev/reference/modifierupdatemodifier). JUDGMENT, as the page states
+    neither: the update is sparse (only the fields sent change) and ``price`` is ``ge=0``;
+    ``id`` and ``modifierGroup`` are undeclared, so ignored rather than refused."""
+
+    model_config = _REQUEST
+
+    name: str | None = Field(default=None, min_length=1)
+    alternateName: str | None = None
+    available: bool | None = None
+    price: int | None = Field(default=None, ge=0)
 
 
 ITEM_EXPANDABLE: frozenset[str] = frozenset({"modifierGroups", "taxRates"})
