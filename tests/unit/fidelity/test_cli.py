@@ -237,6 +237,7 @@ class _Refresh:
     calls: list[dict[str, Any]] | None = None
     gone: tuple[Any, ...] = ()
     unreachable: tuple[Any, ...] = ()
+    moved: tuple[Any, ...] = ()
 
     def __call__(self, anchor_dir: Path, declaration: Any, modeled: Any, **kwargs: Any) -> _Refresh:
         assert self.calls is not None
@@ -274,6 +275,23 @@ def test_pin_check_exits_one_on_any_change_and_zero_otherwise(anchor: Any, capsy
     printed = capsys.readouterr().out
     assert "upstream sha256 moved" in printed and "pin: CHANGED" in printed
     assert changed.calls[0]["check"] is True
+
+
+def test_pin_check_on_a_move_with_an_unchanged_cut_is_a_chore(anchor: Any, capsys: pytest.CaptureFixture[str]) -> None:
+    anchor([])
+    chore = _Refresh(moved=("u",), diff_summary="upstream u: changed sha256", calls=[])
+    assert main(["pin", "--target", HERE, "--check"], refresh=chore) == 0
+    printed = capsys.readouterr().out
+    assert "pin: upstream moved, cut unchanged -- 1 source(s); a re-pin chore" in printed
+    assert main(["pin", "--target", HERE, "--check", "--fail-on-move"], refresh=chore) == 6
+    capsys.readouterr()
+    assert main(["pin", "--target", HERE], refresh=chore) == 0
+    assert "pin: written" in capsys.readouterr().out
+    changed = _Refresh(changed_upstream=True, moved=("u",), calls=[])
+    assert main(["pin", "--target", HERE, "--check", "--fail-on-move"], refresh=changed) == 1
+    assert "pin: CHANGED" in capsys.readouterr().out
+    gone = _Refresh(gone=("a",), moved=("u",), calls=[])
+    assert main(["pin", "--target", HERE, "--check", "--fail-on-move"], refresh=gone) == 5
 
 
 @pytest.mark.parametrize("check", [True, False], ids=["check", "write"])
@@ -406,13 +424,41 @@ def test_fetch_on_a_moved_upstream_exits_zero_with_the_loud_line(
 
     moved = synthetic()
     moved["info"]["version"] = "9.9.9"
-    name, cache, fetcher = not_vendored(document=moved)
+    _, _, fetcher = not_vendored(document=moved)
     assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
     out, err = capsys.readouterr()
     assert err.startswith("UPSTREAM MOVED: https://example.test/spec.json pinned ")
     assert "-- the pin is stale; tests run against the fresh document" in err
     assert "UPSTREAM MOVED (1 source(s))" in out
-    assert (cache / name / "DRIFT").is_file()
+    assert "; cut unchanged -- a re-pin chore" in out
+
+
+def test_pin_offline_on_a_non_vendored_byte_only_move_is_a_chore_and_six_under_the_flag(
+    not_vendored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.unit.fidelity.test_extract import synthetic
+
+    def explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("offline pin reached refresh")
+
+    moved = synthetic()
+    moved["info"]["version"] = "9.9.9"
+    _, _, fetcher = not_vendored(document=moved)
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    capsys.readouterr()
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 0
+    assert "upstream moved, cut unchanged (offline)" in capsys.readouterr().out
+    assert main(["pin", "--offline", "--fail-on-move", "--target", HERE], refresh=explode) == 6
+    capsys.readouterr()
+    audited = synthetic()
+    audited["components"]["schemas"]["Audit"]["properties"]["at"] = {"type": "string"}
+    _, _, fetcher = not_vendored(document=audited)
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    assert "the cut changed" in capsys.readouterr().out
+    assert main(["pin", "--offline", "--target", HERE], refresh=explode) == 1
+    printed = capsys.readouterr().out
+    assert "INCONSISTENT" in printed
+    assert "operation ~ GET /v1/widgets/{widget_id}" in printed
 
 
 def test_fetch_without_a_pin_is_a_usage_error(not_vendored: Any, capsys: pytest.CaptureFixture[str]) -> None:

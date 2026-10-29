@@ -15,9 +15,9 @@ cached ``extract.json`` is used only while its sha256 is the pin's
 
 SECOND INVARIANT: **a vendor release never fails a test run.** When a fetched
 document no longer matches its pinned row, the extract is still cut from the
-fresh bytes and cached; the discrepancy is written to ``DRIFT`` beside it and
-one ``UPSTREAM MOVED`` line goes to stderr. ``pin --check`` is what fails on
-drift, on purpose, in the one place a failure is actionable.
+fresh bytes and cached, and one ``UPSTREAM MOVED`` line goes to stderr. The cut,
+not the bytes, is what ``pin --check`` judges (konyklabs/roadmap#178): a moved
+cut fails there, on purpose; a byte-only move is a re-pin chore.
 """
 
 from __future__ import annotations
@@ -37,13 +37,12 @@ from typing import Any
 
 import httpx
 
-from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
+from vendorfake.fidelity.extract import cut_digests, cut_extract, render_json, sha256_hex
 from vendorfake.fidelity.pin import Fetcher, Pin, fetch
 from vendorfake.fidelity.types import CORPUS_DIR, DECLARATION_FILE, EXTRACT_FILE, PIN_FILE, Extract, FidelityDeclaration
 
 __all__ = [
     "CACHE_ENV_VAR",
-    "DRIFT_FILE",
     "EXTRACT_FILE",
     "CacheResult",
     "DriftRow",
@@ -52,7 +51,6 @@ __all__ = [
     "cache_path",
     "cache_root",
     "cached_extract",
-    "drift_rows",
     "populate",
     "prose_leaks",
     "read_package_pin",
@@ -60,11 +58,6 @@ __all__ = [
 
 CACHE_ENV_VAR = "VENDORFAKE_FIDELITY_CACHE"
 """Overrides the cache root wholesale: ``$VENDORFAKE_FIDELITY_CACHE/<anchor>/extract.json``."""
-
-DRIFT_FILE = "DRIFT"
-"""Written beside a cached extract that was cut from bytes the pin does not describe."""
-
-_DRIFT_SCHEMA = 1
 
 
 def cache_root(cache_dir: Path | str | None = None) -> Path:
@@ -100,7 +93,7 @@ def _refuse_inside_package(anchor: str, root: Path) -> None:
 
 
 def cache_path(anchor: str, cache_dir: Path | str | None = None) -> Path:
-    """The directory holding ``extract.json`` (and, on drift, ``DRIFT``) for ``anchor``."""
+    """The directory holding ``extract.json`` for ``anchor``."""
     root = cache_root(cache_dir)
     _refuse_inside_package(anchor, root)
     return root / anchor
@@ -136,14 +129,6 @@ class DriftRow:
             f"-- the pin is stale; tests run against the fresh document"
         )
 
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "url": self.url,
-            "pinned_sha256": self.pinned_sha256,
-            "fetched_sha256": self.fetched_sha256,
-            "fetched_bytes": self.fetched_bytes,
-        }
-
 
 @dataclass(frozen=True, slots=True)
 class CacheResult:
@@ -160,6 +145,8 @@ class CacheResult:
     extract_differs: bool = False
     #: Nothing was fetched: the network was unreachable and a cache existed.
     offline: bool = False
+    #: Whether the cut digests to the pin's ``cut_sha256``; ``None`` when the pin records none.
+    cut_matches: bool | None = None
 
     @property
     def extract_path(self) -> Path:
@@ -175,7 +162,15 @@ class CacheResult:
         if self.hit:
             return f"fidelity cache: hit {self.extract_path} (matches {PIN_FILE})"
         if self.drift:
-            return f"fidelity cache: fetched and cut into {self.extract_path}; UPSTREAM MOVED ({len(self.drift)} source(s))"
+            verdict = ""
+            if self.cut_matches is True:
+                verdict = "; cut unchanged -- a re-pin chore"
+            elif self.cut_matches is False:
+                verdict = "; the cut changed -- `pin --check --offline` names the operations"
+            return (
+                f"fidelity cache: fetched and cut into {self.extract_path}; "
+                f"UPSTREAM MOVED ({len(self.drift)} source(s)){verdict}"
+            )
         if self.extract_differs:
             return f"fidelity cache: fetched and cut into {self.extract_path}; the cut does not digest to {PIN_FILE}"
         return f"fidelity cache: fetched and cut into {self.extract_path} (matches {PIN_FILE})"
@@ -349,16 +344,8 @@ def populate(
     text = render_json(document)
     path.mkdir(parents=True, exist_ok=True)
     _write_atomic(path / EXTRACT_FILE, text)
-    drift_path = path / DRIFT_FILE
-    if drift:
-        for row in drift:
-            print(row.line, file=out)
-        _write_atomic(
-            drift_path,
-            render_json({"schema": _DRIFT_SCHEMA, "anchor": anchor, "rows": [row.to_json() for row in drift]}),
-        )
-    elif drift_path.exists():
-        drift_path.unlink()
+    for row in drift:
+        print(row.line, file=out)
     differs = not drift and sha256_hex(text.encode("utf-8")) != pin.extract_sha256
     if differs:
         print(
@@ -366,7 +353,10 @@ def populate(
             f"{PIN_FILE}'s extract_sha256 -- the cutter or the modeled list moved; re-run `vendorfake-fidelity pin`",
             file=out,
         )
-    return CacheResult(anchor, path, document, hit=False, drift=tuple(drift), extract_differs=differs)
+    cut_matches = (cut_digests(document)[0] == pin.cut_sha256) if pin.cut_sha256 else None
+    return CacheResult(
+        anchor, path, document, hit=False, drift=tuple(drift), extract_differs=differs, cut_matches=cut_matches
+    )
 
 
 def cached_extract(
@@ -379,15 +369,3 @@ def cached_extract(
     """The extract for a non-vendored vendor: from the cache when it matches
     the pin, otherwise fetched, cut, verified against the pin and cached."""
     return Extract(populate(anchor, declaration, fetcher=fetcher, cache_dir=cache_dir).document)
-
-
-def drift_rows(path: Path) -> Sequence[DriftRow]:
-    """The rows a ``DRIFT`` file records; empty when there is none."""
-    drift_path = path / DRIFT_FILE
-    if not drift_path.is_file():
-        return ()
-    doc = json.loads(drift_path.read_text(encoding="utf-8"))
-    return tuple(
-        DriftRow(str(row["url"]), row.get("pinned_sha256"), str(row["fetched_sha256"]), int(row["fetched_bytes"]))
-        for row in doc.get("rows", ())
-    )
