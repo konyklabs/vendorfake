@@ -6,7 +6,9 @@
       "extra-files": [
         "README.md",
         "docs/index.md",
-        "docs/start/install.md"
+        "docs/start/install.md",
+        {"type": "generic", "path": "examples/compose-consumer/Dockerfile"},
+        {"type": "generic", "path": "examples/compose-consumer/compose.yaml"}
       ]
     }
   },

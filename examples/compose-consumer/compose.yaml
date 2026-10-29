@@ -1,0 +1,33 @@
+# One vendor fake for a consumer's end-to-end tier. Copy this service into
+# your own compose file; your app service adds the three lines the README
+# shows. One service per vendor: VENDORFAKE_VENDOR_<SUFFIX> keys apply to
+# every vendor in a process and every vendor's config refuses a key it does
+# not have, so a Clover-only key would stop a Square mount in the same
+# process (docs/start/bindings.md, Docker compose).
+services:
+  clover:
+    build:
+      context: .
+      args:
+        # Overridable from the shell: VENDORFAKE_REF=refs/heads/<branch> docker compose build --no-cache
+        VENDORFAKE_REF: ${VENDORFAKE_REF:-v0.8.0}  # x-release-please-version
+    environment:
+      VENDORFAKE_VENDOR: clover
+      # Happy paths only. `full` (the default) and `chaos-demo` carry chaos
+      # capabilities, and chaos-demo preloads faults that read as random red
+      # runs in CI (docs/reference/profiles.md).
+      VENDORFAKE_PROFILE: no-faults
+      # Your service's own OAuth callback. The seeded app's redirect is
+      # https://example.test/oauth/callback and Clover's authorize answers
+      # 400 to any other redirect_uri, so pin it here rather than in a seed.
+      VENDORFAKE_VENDOR_REDIRECT_URI: http://app:8000/oauth/clover/callback
+    ports:
+      # Loopback only: the control plane is unauthenticated, hands out the
+      # seeded credentials and will POST webhooks at any URL it is told
+      # (docs/start/install.md, As a container). 0 asks for an ephemeral port.
+      - "127.0.0.1:${VENDORFAKE_HOST_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; exit(0 if u.urlopen('http://127.0.0.1:8080/__unit/health', timeout=2).status == 200 else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 5

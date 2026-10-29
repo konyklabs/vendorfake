@@ -16,6 +16,10 @@ package actually imported -- printing the file and line of any mismatch so
 the fix is one edit, not a grep. The same holds for the health JSON those
 three files paste after ``curl .../__unit/health``: its ``"version"`` is on an
 annotated line, so release-please rewrites it, and the second test asserts it.
+The ``examples/compose-consumer`` Dockerfile and compose file pin the same
+release as ``VENDORFAKE_REF`` (an ARG and a compose default that ``PIN_RE``
+does not see), so the third test holds both to ``__version__`` and asserts
+the release-please annotation each pin rides.
 """
 
 from __future__ import annotations
@@ -83,4 +87,43 @@ def test_every_pasted_health_version_matches_the_installed_version() -> None:
         for path, lineno, found in versions
         if found != vendorfake.__version__
     ]
+    assert not mismatches, "\n" + "\n".join(mismatches)
+
+
+# The compose example's one place to bump, and the release-please annotation
+# each line must sit under: the Dockerfile's ARG inside a start/end block
+# (a Dockerfile has no inline comments), the compose default on an annotated
+# line. (path, pin regex, the marker that must be on that line or the line above)
+EXAMPLE_PINS = (
+    (
+        "examples/compose-consumer/Dockerfile",
+        re.compile(r"^ARG VENDORFAKE_REF=v(\d+\.\d+\.\d+)$"),
+        "x-release-please-start-version",
+    ),
+    (
+        "examples/compose-consumer/compose.yaml",
+        re.compile(r"VENDORFAKE_REF: \$\{VENDORFAKE_REF:-v(\d+\.\d+\.\d+)\}"),
+        "x-release-please-version",
+    ),
+)
+
+
+def test_the_compose_example_pins_the_installed_version() -> None:
+    """The example's one-place-to-bump names the release that ships.
+
+    PIN_RE sees neither an ARG nor an archive URL, so without this the
+    example would keep installing the previous release after every bump.
+    The release-please annotation each pin rides is asserted too: a pin that
+    lost its marker would drift at the next release with this test green.
+    """
+    mismatches: list[str] = []
+    for rel, pattern, marker in EXAMPLE_PINS:
+        lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        hits = [(n, m.group(1)) for n, line in enumerate(lines, start=1) if (m := pattern.search(line))]
+        assert len(hits) == 1, f"{rel}: expected one VENDORFAKE_REF pin, found {hits}"
+        n, pinned = hits[0]
+        annotated = marker in lines[n - 1] or (n >= 2 and marker in lines[n - 2])
+        assert annotated, f"{rel}:{n}: the pin is not under a `{marker}` annotation, so a release would not bump it"
+        if pinned != vendorfake.__version__:
+            mismatches.append(f"{rel}:{n}: pinned v{pinned}, vendorfake.__version__ is {vendorfake.__version__!r}")
     assert not mismatches, "\n" + "\n".join(mismatches)
