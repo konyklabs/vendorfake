@@ -1250,7 +1250,7 @@ def _near_miss_stripping_binding(transport: str, client: ConformanceClient) -> C
     return ClientOverlay(client, on_response=on_response)
 
 
-# C34 -- every vendor maps all four capability roles to a declared capability.
+# C34 -- every capability role maps to a declared capability or is declared unsupported with a reason.
 # ---------------------------------------------------------------------------
 
 
@@ -1313,6 +1313,28 @@ raise on a capability that can never be enabled, silently, for a caller who
 never sees `roles` at all. Nothing about ordinary request handling would
 notice -- no route's own capability is spelled 'auth' -- which is why this
 mutant reaches the vendor definition rather than the route table.
+"""
+
+
+def _map_the_orders_role_to_null_without_a_reason(inner: VendorDefinition) -> VendorDefinition:
+    return VendorOverlay(inner, roles={**dict(inner.roles), "orders": None})
+
+
+register(
+    Mutant(
+        id="M59",
+        name="role-mapped-to-null-without-a-reason",
+        defect="VendorDefinition.roles['orders'] is None and not_supported_roles gives no reason for it.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C34"}),
+        vendor=_map_the_orders_role_to_null_without_a_reason,
+    )
+)
+"""D-010 lets a role map to None, so a bare None is now a *plausible* vendor
+state rather than a type error -- and a bare None is the one shape C34 must
+refuse: an absence with no why is the silence the whole declaration contract
+exists to forbid. `orders` is not core-gated, so the unit constructs and C34 is
+asked; on `full` C35 reads no role, so nothing else goes red.
 """
 
 

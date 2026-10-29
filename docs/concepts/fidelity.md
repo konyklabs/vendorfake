@@ -68,6 +68,12 @@ follows the observed API (Square's `VERSION_MISMATCH`, named on the
 optimistic-concurrency page and absent from the `ErrorCode` enumeration).
 Each deviation names its page.
 
+**The schema dialect follows the extract's `openapi` field**: an OpenAPI 3.0
+document is validated as JSON Schema draft-04 with OAS 3.0's separate read and
+write validators, a 3.1 document as JSON Schema 2020-12 with one validator for
+both directions. **A body the document declares only under `*/*` is validated
+as JSON**, and `application/json` wins where both are declared.
+
 **The request half is a flag, and it is off.** `ValidatingClient(...,
 validate_requests=True)` also checks the body a call *sent*, against the
 operation's own `requestBody` schema, whenever the unit answered 2xx: a
@@ -93,22 +99,31 @@ satisfied.
 `pin --check --offline` is what CI runs: the committed extract and pin must
 agree with each other and with the declaration. Whether *upstream* has moved
 is a scheduled question, never a pull request's -- `pin` without `--offline`
-re-fetches, re-cuts and rewrites both files, and the diff is the review.
+re-fetches, re-cuts and rewrites both files, and the diff is the review. For
+an extract that is fetched and never committed, the cache is judged by its cut
+-- the modelled operations, the schemas they reach and their annotations; not
+the source bytes, the `info` block or the stripped-key ledger -- against the
+digests the pin records (`cut_sha256`, one per operation).
 
 The scheduled `pin --check` (no `--offline`) gives every declared source one
 `upstream <url>:` line, fetching all of them whatever the first one did, and
 ends on one verdict. **`unchanged`** / **`CHANGED`** (exit `0` / `1`) mean the
 document is still published and either matches the pin or has moved -- review
 the diff, re-pin, and the fake is checked against what the vendor publishes
-today. **`GONE`** (exit `5`) means the server answered 404 or 410, after
-redirects, naming the final URL: the document the fake was checked against is
-no longer published, so the committed extract is the last known copy of a
-contract the vendor has withdrawn, and the fidelity claim is about a past
-version until the declaration moves to a current one. **`UNREACHABLE`** (exit
-`4`) means the source could not be fetched at all -- refused, DNS, TLS, a
-timeout, a 5xx, or any other 4xx -- which says nothing about drift either way;
-re-run it. On `GONE` or `UNREACHABLE` nothing is cut and nothing is written,
-with or without `--check`: a pin never records an error page's bytes.
+today. **`upstream moved, cut unchanged`** (exit `0`; `6` under
+`--fail-on-move`, which the weekly job passes) means the bytes moved and
+nothing the validator reads did: a re-pin chore, filed as such. `CHANGED`
+names what moved -- the operations, for a fetched-never-committed extract; the
+schemas, for a committed one. **`GONE`** (exit `5`) means the server answered
+404 or 410, after redirects, naming the final URL: the document the fake was
+checked against is no longer published, so the committed extract is the last
+known copy of a contract the vendor has withdrawn, and the fidelity claim is
+about a past version until the declaration moves to a current one.
+**`UNREACHABLE`** (exit `4`) means the source could not be fetched at all --
+refused, DNS, TLS, a timeout, a 5xx, or any other 4xx -- which says nothing
+about drift either way; re-run it. On `GONE` or `UNREACHABLE` nothing is cut
+and nothing is written, with or without `--check`: a pin never records an
+error page's bytes.
 
 **Toast's extract is fetched, never committed.** Toast's API terms do not
 permit a copy of its specification files in a public repository, so
@@ -125,11 +140,13 @@ python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:toast_
 ```
 
 If upstream has moved since the pin, `fetch` says so on stderr and the run
-uses the fresh document. While the pinned cut is cached (CI caches it keyed
-on the pin), a vendor release changes nothing; after the cache is evicted the
-suite validates against the fresh document and may go red for a reason that
-is Toast's, not yours -- `fetch`'s `UPSTREAM MOVED` line is the tell, and
-`pin` is the answer. That is the price of never committing the document.
+uses the fresh document. While the pinned cut is cached (CI caches it keyed on
+the pin), a vendor release changes nothing; after the cache is evicted the
+suite validates against the fresh document. `fetch`'s `UPSTREAM MOVED` line is
+the tell; `pin --check --offline` then says whether the cut moved -- a
+byte-only move is green and a re-pin chore, a moved cut is `INCONSISTENT`
+naming the operations, from the per-operation digests in `pin.json` (digests,
+not copies). That is the price of never committing the document.
 
 ## Recorded cases
 

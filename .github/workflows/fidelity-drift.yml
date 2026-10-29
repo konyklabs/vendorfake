@@ -41,6 +41,8 @@ jobs:
           set +e
           : > /tmp/fidelity-drift-body.md
           drifted=()
+          # --fail-on-move: a byte-only move (exit 6) is a re-pin chore and still files the
+          # issue; a moved cut is exit 1. The body's `pin:` line says which (konyklabs/roadmap#178).
           for entry in \
             "square=vendorfake.testing.fidelity:square_target" \
             "toast=vendorfake.testing.fidelity:toast_target" \
@@ -48,7 +50,7 @@ jobs:
           do
             vendor="${entry%%=*}"
             target="${entry#*=}"
-            output="$(uv run python -m vendorfake.fidelity pin --check --target "$target" 2>&1)"
+            output="$(uv run python -m vendorfake.fidelity pin --check --fail-on-move --target "$target" 2>&1)"
             code=$?
             echo "== $vendor (exit $code) =="
             echo "$output"

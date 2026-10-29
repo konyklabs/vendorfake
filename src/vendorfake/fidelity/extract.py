@@ -44,6 +44,7 @@ __all__ = [
     "EXTRACT_SCHEMA",
     "SCHEMA_REF_PREFIX",
     "STRIPPED_KEYS",
+    "cut_digests",
     "cut_extract",
     "render_json",
     "sha256_hex",
@@ -151,6 +152,34 @@ def _schema_refs(node: Any, into: set[str]) -> None:
     elif isinstance(node, list):
         for item in node:
             _schema_refs(item, into)
+
+
+def cut_digests(document: Mapping[str, Any]) -> tuple[str, dict[str, str]]:
+    """The cut's identity (konyklabs/roadmap#178): one digest of the extract minus ``info``, the source rows and the stripped-key ledger -- the three things nothing validates -- and one per kept operation over it, the schemas it reaches and its annotation values."""
+    meta = document.get("x-vendorfake", {})
+    cut = {key: value for key, value in document.items() if key != "info"}
+    cut["x-vendorfake"] = {key: value for key, value in meta.items() if key not in ("sources", "stripped")}
+    schemas = _available(document)
+    annotations = meta.get("annotations", {})
+    operations: dict[str, str] = {}
+    for path, item in document.get("paths", {}).items():
+        for method, operation in item.items():
+            key = route_key(method, path)
+            reached: dict[str, Any] = {}
+            pending: set[str] = set()
+            _schema_refs(operation, pending)
+            while pending:
+                name = pending.pop()
+                if name in reached:
+                    continue
+                reached[name] = schemas.get(name, {})
+                found: set[str] = set()
+                _schema_refs(reached[name], found)
+                pending |= found - reached.keys()
+            noted = {name: values[key] for name, values in annotations.items() if key in values}
+            payload = {"operation": operation, "schemas": reached, "annotations": noted}
+            operations[key] = sha256_hex(render_json(payload).encode("utf-8"))
+    return sha256_hex(render_json(cut).encode("utf-8")), operations
 
 
 def _rewrite_refs(node: Any, rewrite: Callable[[str], str]) -> Any:

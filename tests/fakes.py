@@ -7,6 +7,7 @@ is an ordering, and an ordering is only observable if each step leaves a trace.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -150,7 +151,8 @@ class FakeVendor:
     routes: tuple[Route, ...] = ()
     capabilities: tuple[CapabilityDecl, ...] = DEFAULT_CAPABILITIES
     not_supported: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_NOT_SUPPORTED))
-    roles: Mapping[str, str] = field(default_factory=dict)
+    roles: Mapping[str, str | None] = field(default_factory=dict)
+    not_supported_roles: Mapping[str, str] = field(default_factory=dict)
     auth: FakeAuth = field(default_factory=FakeAuth)
     errors: FakeErrors = field(default_factory=FakeErrors)
     magic: MagicTriggerSpec | None = None
@@ -191,13 +193,15 @@ class VendorWithoutRoles:
     dataclass field cannot be un-declared and ``del`` on the instance would
     still leave the class attribute in place; ``__getattr__`` only fires for
     what is genuinely absent, which is exactly the shape being modelled.
+    ``not_supported_roles`` is hidden for the same reason: it arrived with
+    konyklabs/roadmap#139 and is optional.
     """
 
     def __init__(self, inner: FakeVendor) -> None:
         self._inner = inner
 
     def __getattr__(self, name: str) -> Any:
-        if name == "roles":
+        if name in ("roles", "not_supported_roles"):
             raise AttributeError(name)
         return getattr(self._inner, name)
 
@@ -278,6 +282,35 @@ def make_unit(
     )
     unit.start()
     return unit
+
+
+UNSUPPORTED_ROLE_REASON = "this unit models the token lifecycle only"
+
+#: Profile name -> capabilities, for the vendor below. No ``orders-only``: the
+#: vendor declares role ``orders`` unsupported, so C35 excuses that name.
+TOKEN_ONLY_PROFILES: Mapping[str, tuple[str, ...]] = {
+    "full": ("token", "chaos"),
+    "oauth-only": ("token", "chaos"),
+    "no-chaos": ("token", "chaos"),
+    "chaos-demo": ("token", "chaos"),
+    "no-faults": ("token",),
+}
+
+
+def unsupported_roles_vendor(tmp_path: Path) -> FakeVendor:
+    """The D-010 shape: two roles mapped to ``None``, each with a reason, and
+    the core-gated one (``webhooks``) also in ``not_supported`` (the default)."""
+    directory = tmp_path / "profiles"
+    directory.mkdir()
+    for name, caps in TOKEN_ONLY_PROFILES.items():
+        (directory / f"{name}.json").write_text(json.dumps({"capabilities": list(caps)}), encoding="utf-8")
+    return FakeVendor(
+        profile_dir=directory,
+        base_dir=tmp_path,
+        capabilities=(capability("token"), capability("chaos", kind="behavior")),
+        roles={"auth": "token", "chaos": "chaos", "orders": None, "webhooks": None},
+        not_supported_roles={"orders": UNSUPPORTED_ROLE_REASON, "webhooks": UNSUPPORTED_ROLE_REASON},
+    )
 
 
 # ---------------------------------------------------------------------------

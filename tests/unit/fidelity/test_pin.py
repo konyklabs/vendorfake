@@ -16,7 +16,8 @@ from typing import Any
 import httpx
 import pytest
 
-from tests.unit.fidelity.test_extract import MODELED, URL, blob, synthetic
+from tests.unit.fidelity.test_extract import MODELED, SOURCE, URL, blob, synthetic
+from vendorfake.fidelity.extract import cut_digests, cut_extract, render_json
 from vendorfake.fidelity.pin import Pin, PinnedSource, fetch, read_pin, refresh, verify, write_pin
 from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource
 
@@ -107,16 +108,57 @@ def test_unchanged_upstream_on_a_later_day_is_byte_identical_and_keeps_the_pinne
     assert read_pin(pinned / PIN_FILE).sources[0].fetched == "2026-09-02"
 
 
-def test_check_detects_a_changed_upstream_byte_and_writes_nothing(pinned: Path) -> None:
-    before = ((pinned / EXTRACT_FILE).read_bytes(), (pinned / PIN_FILE).read_bytes())
+def prose_edited() -> dict[str, Any]:
     document = synthetic()
-    document["info"]["description"] = "prose, edited"  # stripped: the extract itself does not change
-    result = refresh(pinned, DECLARATION, MODELED, fetcher=fetcher_for(document), fetched="2026-09-03", check=True)
-    assert result.changed_upstream is True
+    document["info"]["description"] = "prose, edited"  # stripped: the cut does not change
+    return document
+
+
+def test_check_detects_a_changed_upstream_byte_and_writes_nothing(pinned: Path) -> None:
+    """A byte-only move is a re-pin chore, not a change (konyklabs/roadmap#178):
+    the deliberate contract change -- ``changed_upstream`` used to be true here."""
+    before = ((pinned / EXTRACT_FILE).read_bytes(), (pinned / PIN_FILE).read_bytes())
+    result = refresh(
+        pinned, DECLARATION, MODELED, fetcher=fetcher_for(prose_edited()), fetched="2026-09-03", check=True
+    )
+    assert result.changed_upstream is False
     assert result.changed_extract is False
+    assert result.moved == (URL,)
+    assert result.changed is False
     assert "changed sha256" in result.diff_summary
+    assert "cut; the source rows moved" in result.diff_summary
     assert "check mode: nothing written" in result.diff_summary
     assert ((pinned / EXTRACT_FILE).read_bytes(), (pinned / PIN_FILE).read_bytes()) == before
+
+
+def test_a_version_only_bump_is_a_move_not_a_cut_change(pinned: Path) -> None:
+    document = synthetic()
+    document["info"]["version"] = "2.4.0"
+    result = refresh(pinned, DECLARATION, MODELED, fetcher=fetcher_for(document), fetched="2026-09-03", check=True)
+    assert result.changed_extract is False
+    assert result.moved == (URL,)
+
+
+def test_writing_a_move_repins_and_is_never_called_a_hand_edit(pinned: Path) -> None:
+    document = prose_edited()
+    result = refresh(pinned, DECLARATION, MODELED, fetcher=fetcher_for(document), fetched="2026-09-03")
+    pin = read_pin(pinned / PIN_FILE)
+    assert pin.sources[0].sha256 == hashlib.sha256(blob(document)).hexdigest()
+    assert pin.sources[0].fetched == "2026-09-03"
+    assert pin.extract_sha256 == sha(pinned / EXTRACT_FILE)
+    assert "edited by hand" not in result.diff_summary
+    assert "wrote" in result.diff_summary
+    again = refresh(pinned, DECLARATION, MODELED, fetcher=fetcher_for(document), fetched="2026-09-04")
+    assert not again.changed and again.moved == ()
+
+
+def test_a_moved_cut_folds_the_move_into_changed_upstream(pinned: Path) -> None:
+    document = synthetic()
+    document["components"]["schemas"]["Money"]["properties"]["amount"]["type"] = "string"
+    result = refresh(pinned, DECLARATION, MODELED, fetcher=fetcher_for(document), fetched="2026-09-03", check=True)
+    assert result.changed_upstream and result.changed_extract
+    assert result.moved == ()
+    assert f"{EXTRACT_FILE}: schema ~ Money" in result.diff_summary
 
 
 def test_check_detects_a_changed_extract_and_names_the_schema(pinned: Path) -> None:
@@ -232,8 +274,15 @@ def test_verify_of_a_non_vendored_declaration_with_no_cache_passes_with_a_note(t
     assert "fetch" in result.diff_summary
 
 
-def test_verify_of_a_non_vendored_declaration_reads_the_cache_and_a_drift_note(tmp_path: Path) -> None:
-    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path
+def audited() -> dict[str, Any]:
+    """A cut change only ``GET /v1/widgets/{widget_id}`` reaches (through ``Audit``)."""
+    document = synthetic()
+    document["components"]["schemas"]["Audit"]["properties"]["at"] = {"type": "string"}
+    return document
+
+
+def test_verify_of_a_non_vendored_cache_cut_from_moved_bytes(tmp_path: Path) -> None:
+    from vendorfake.fidelity.cache import cache_path
 
     package = tmp_path / "pkg"
     package.mkdir()
@@ -241,21 +290,27 @@ def test_verify_of_a_non_vendored_declaration_reads_the_cache_and_a_drift_note(t
     refresh(package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=cache)
     result = verify(package, NOT_VENDORED, cache_dir=cache)
     assert not result.changed
-    assert (
-        f"matches {PIN_FILE} (cached at {cache_path(NOT_VENDORED.anchor, cache) / EXTRACT_FILE})" in result.diff_summary
-    )
-    # A cache cut at run time from moved upstream carries a DRIFT note: the pin does not describe it.
-    (cache_path(NOT_VENDORED.anchor, cache) / DRIFT_FILE).write_text(
-        json.dumps(
-            {
-                "schema": 1,
-                "rows": [{"url": URL, "pinned_sha256": "ab" * 32, "fetched_sha256": "cd" * 32, "fetched_bytes": 3}],
-            }
-        )
-    )
+    cached = cache_path(NOT_VENDORED.anchor, cache) / EXTRACT_FILE
+    assert f"matches {PIN_FILE} (cached at {cached})" in result.diff_summary
+    # A cache cut at run time from moved bytes whose cut is the pinned one: a chore, not a finding.
+    cached.write_text(render_json(cut_extract([(SOURCE, blob(prose_edited()))], MODELED, fetched="2026-12-25")))
     result = verify(package, NOT_VENDORED, cache_dir=cache)
-    assert result.changed_upstream
-    assert f"UPSTREAM MOVED: {URL} pinned {'ab' * 6} fetched {'cd' * 6}" in result.diff_summary
+    assert not result.changed
+    assert result.moved == (URL,)
+    assert f"upstream {URL}: moved (pinned " in result.diff_summary
+    assert "-- cut unchanged" in result.diff_summary
+    # A moved cut is a finding naming the operation.
+    cached.write_text(render_json(cut_extract([(SOURCE, blob(audited()))], MODELED, fetched="2026-12-25")))
+    result = verify(package, NOT_VENDORED, cache_dir=cache)
+    assert result.changed_extract and result.changed_upstream
+    assert result.moved == ()
+    assert f"{EXTRACT_FILE}: operation ~ GET /v1/widgets/{{widget_id}}" in result.diff_summary
+    # A pin with no cut (pinned before #178) and a cache that does not digest to it.
+    write_pin(package / PIN_FILE, replace(read_pin(package / PIN_FILE), cut_sha256="", operations=()))
+    cached.write_text(render_json(cut_extract([(SOURCE, blob(prose_edited()))], MODELED, fetched="2026-12-25")))
+    result = verify(package, NOT_VENDORED, cache_dir=cache)
+    assert result.changed
+    assert "records no cut digest" in result.diff_summary
 
 
 def test_verify_of_a_non_vendored_declaration_needs_the_pin_only(tmp_path: Path) -> None:
@@ -266,20 +321,106 @@ def test_verify_of_a_non_vendored_declaration_needs_the_pin_only(tmp_path: Path)
 
 def test_a_vendored_pin_carries_no_modeled_list_and_a_non_vendored_one_does(pinned: Path, tmp_path: Path) -> None:
     """Square's committed pin must stay byte-identical: ``modeled`` is written only where the cache needs it."""
-    assert "modeled" not in json.loads((pinned / PIN_FILE).read_text())
+    from vendorfake.fidelity.cache import cache_path
+
+    vendored = json.loads((pinned / PIN_FILE).read_text())
+    assert "modeled" not in vendored
+    assert "cut_sha256" not in vendored and "operations" not in vendored
     assert read_pin(pinned / PIN_FILE).modeled == ()
     package = tmp_path / "nv"
     package.mkdir()
     refresh(
         package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=tmp_path / "c"
     )
-    assert read_pin(package / PIN_FILE).modeled == tuple(f"{m} {p}" for m, p in MODELED)
+    pin = read_pin(package / PIN_FILE)
+    assert pin.modeled == tuple(f"{m} {p}" for m, p in MODELED)
+    cache_text = (cache_path(NOT_VENDORED.anchor, tmp_path / "c") / EXTRACT_FILE).read_text()
+    whole, operations = cut_digests(json.loads(cache_text))
+    assert pin.cut_sha256 == whole
+    assert dict(pin.operations) == operations
+    assert set(operations) == {"GET /v1/widgets/{widget_id}", "POST /v1/widgets"}
     # A second refresh on an unchanged upstream is byte-identical, modeled included.
     before = (package / PIN_FILE).read_bytes()
     result = refresh(
         package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-12-25", cache_dir=tmp_path / "c"
     )
     assert not result.changed and (package / PIN_FILE).read_bytes() == before
+
+
+def test_pin_round_trips_its_cut_and_reads_a_pin_without_one(tmp_path: Path) -> None:
+    pin = Pin(
+        sources=(PinnedSource(url=URL, sha256="ab" * 32, bytes=12, version="1.0", fetched="2026-09-02"),),
+        extract_sha256="cd" * 32,
+        modeled=("GET /a",),
+        cut_sha256="ef" * 32,
+        operations=(("GET /a", "01" * 32),),
+    )
+    write_pin(tmp_path / PIN_FILE, pin)
+    assert read_pin(tmp_path / PIN_FILE) == pin
+    assert json.loads((tmp_path / PIN_FILE).read_text())["operations"] == {"GET /a": "01" * 32}
+    (tmp_path / PIN_FILE).write_text('{"schema": 1, "sources": [], "extract_sha256": "cd"}')
+    bare = read_pin(tmp_path / PIN_FILE)
+    assert bare.cut_sha256 == "" and bare.operations == ()
+
+
+def test_a_cold_cache_check_judges_the_cut_from_the_pin(tmp_path: Path) -> None:
+    """The weekly drift job's case: no cache on the runner, so the pin alone says what the cut was."""
+    package = tmp_path / "pkg"
+    package.mkdir()
+    refresh(
+        package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=tmp_path / "c"
+    )
+    cold = tmp_path / "empty"
+    result = refresh(
+        package,
+        NOT_VENDORED,
+        MODELED,
+        fetcher=fetcher_for(prose_edited()),
+        fetched="2026-09-03",
+        check=True,
+        cache_dir=cold,
+    )
+    assert result.moved == (URL,)
+    assert result.changed_extract is False
+    assert f"{EXTRACT_FILE}: new" not in result.diff_summary
+    result = refresh(
+        package, NOT_VENDORED, MODELED, fetcher=fetcher_for(audited()), fetched="2026-09-03", check=True, cache_dir=cold
+    )
+    assert result.changed_extract is True
+    assert f"{EXTRACT_FILE}: operation ~ GET /v1/widgets/{{widget_id}}" in result.diff_summary
+    assert "operation ~ POST /v1/widgets" not in result.diff_summary
+
+
+def test_a_pre_178_non_vendored_pin_is_changed_once_and_migrated_by_a_write(tmp_path: Path) -> None:
+    package = tmp_path / "pkg"
+    package.mkdir()
+    cache = tmp_path / "c"
+    refresh(package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-02", cache_dir=cache)
+    write_pin(package / PIN_FILE, replace(read_pin(package / PIN_FILE), cut_sha256="", operations=()))
+    result = refresh(
+        package,
+        NOT_VENDORED,
+        MODELED,
+        fetcher=fetcher_for(synthetic()),
+        fetched="2026-09-03",
+        check=True,
+        cache_dir=cache,
+    )
+    assert result.changed_extract is True
+    assert "records no cut digest" in result.diff_summary
+    assert "edited by hand" not in result.diff_summary
+    refresh(package, NOT_VENDORED, MODELED, fetcher=fetcher_for(synthetic()), fetched="2026-09-03", cache_dir=cache)
+    assert read_pin(package / PIN_FILE).cut_sha256 != ""
+    clean = refresh(
+        package,
+        NOT_VENDORED,
+        MODELED,
+        fetcher=fetcher_for(synthetic()),
+        fetched="2026-09-04",
+        check=True,
+        cache_dir=cache,
+    )
+    assert not clean.changed and clean.moved == ()
 
 
 def test_refresh_hands_the_declarations_extension_map_and_error_schema_to_the_cut(tmp_path: Path) -> None:

@@ -169,6 +169,13 @@ re-exported through `vendorfake.registry` are pinned.
 Adding a member to `VendorDefinition` is a breaking change for a third-party
 vendor and is announced as one.
 
+`not_supported_roles` (role -> reason) is the one optional member: it is read
+with `getattr(definition, "not_supported_roles", {})`, so a vendor without it
+is unchanged. `roles` may map a role to `None` only when `not_supported_roles`
+names that role (D-010); `create_unit(capabilities=[<that role>])` refuses
+with the reason, and a core-gated role mapped to `None` must also be in
+`not_supported` or the unit does not start.
+
 ### The control plane
 
 Every `/__unit/*` route, its query parameters, and the JSON bodies it accepts
@@ -185,6 +192,10 @@ unauthorized`, before routing. The root of a process mounting several vendors
 refuses its own `/__unit/*` paths the same way, with a 401 whose JSON body
 carries only `message`. `GET /__unit/info` carries
 `control: {token_required}` and never the token. Unset, nothing changes.
+
+`GET /__unit/info` carries `vendor.not_supported_roles` beside `vendor.roles`
+(`{}` when the vendor declares none); a `vendor.roles` value is `null` only
+for a role named there. Additive, not breaking.
 
 ### The command line
 

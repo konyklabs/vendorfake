@@ -245,7 +245,22 @@ def test_info_publishes_empty_roles_for_a_vendor_that_predates_the_property() ->
     real defect ("add ``VendorDefinition.roles``") against a live unit.
     """
     api, _ = _api(vendor=cast("FakeVendor", VendorWithoutRoles(_vendor())))
-    assert api.get("/__unit/info").json()["vendor"]["roles"] == {}
+    body = api.get("/__unit/info").json()
+    assert body["vendor"]["roles"] == {}
+    assert body["vendor"]["not_supported_roles"] == {}
+
+
+def test_info_publishes_not_supported_roles_beside_roles() -> None:
+    api, _ = _api(
+        vendor=_vendor(
+            roles={"auth": "orders", "orders": None, "webhooks": "webhooks", "chaos": "chaos"},
+            not_supported_roles={"orders": "x"},
+        )
+    )
+    body = api.get("/__unit/info").json()
+    assert body["vendor"]["not_supported_roles"] == {"orders": "x"}
+    assert "orders" in body["vendor"]["roles"]
+    assert body["vendor"]["roles"]["orders"] is None
 
 
 def test_info_omits_an_absent_signer_rather_than_sending_null() -> None:

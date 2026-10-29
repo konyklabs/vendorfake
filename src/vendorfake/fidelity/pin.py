@@ -4,9 +4,10 @@ FOR: making vendor drift a diff. ``pin.json`` records, per upstream document,
 the sha256 of the exact bytes fetched, their length, the document's own
 version string and the date they were fetched -- plus the sha256 of the
 committed ``extract.json``. ``refresh`` fetches again, cuts again, and reports
-whether the upstream changed, whether the extract changed, or both; in check
-mode it writes nothing, so CI can fail on drift without ever touching the
-tree.
+whether the upstream changed, whether the extract changed, or both; a pinned
+source whose bytes moved while the cut stayed is a re-pin chore, never a change
+(konyklabs/roadmap#178); in check mode it writes nothing, so CI can fail on
+drift without ever touching the tree.
 
 INVARIANT: **the fetcher is a parameter.** Everything below the default
 ``fetch`` is testable with bytes in hand; no unit test reaches the network, and
@@ -41,7 +42,7 @@ from typing import Any
 
 import httpx
 
-from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
+from vendorfake.fidelity.extract import cut_digests, cut_extract, render_json, sha256_hex
 from vendorfake.fidelity.types import EXTRACT_FILE, PIN_FILE, FidelityDeclaration, SpecSource, route_key
 
 __all__ = [
@@ -109,6 +110,9 @@ class Pin:
     #: reproduced at run time from the pin alone (konyklabs/roadmap#56). A
     #: vendored pin leaves it empty: the committed extract already says.
     modeled: tuple[str, ...] = ()
+    #: The cut's digest and one per kept operation (konyklabs/roadmap#178); empty on a vendored pin, like ``modeled``.
+    cut_sha256: str = ""
+    operations: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def of(cls, doc: Mapping[str, Any]) -> Pin:
@@ -118,6 +122,8 @@ class Pin:
             sources=tuple(PinnedSource.of(row) for row in doc.get("sources", ())),
             extract_sha256=str(doc["extract_sha256"]),
             modeled=tuple(str(key) for key in doc.get("modeled", ())),
+            cut_sha256=str(doc.get("cut_sha256", "")),
+            operations=tuple(sorted((str(key), str(value)) for key, value in doc.get("operations", {}).items())),
         )
 
     @classmethod
@@ -127,10 +133,13 @@ class Pin:
         """The pin for an extract as :func:`~vendorfake.fidelity.extract.render_json` rendered it."""
         meta = document.get("x-vendorfake", {})
         rows = meta.get("sources", ()) if isinstance(meta, Mapping) else ()
+        cut_sha256, operations = cut_digests(document) if modeled else ("", {})
         return cls(
             sources=tuple(PinnedSource.of(row) for row in rows),
             extract_sha256=sha256_hex(extract_text.encode("utf-8")),
             modeled=tuple(route_key(method, spec_path) for method, spec_path in modeled),
+            cut_sha256=cut_sha256,
+            operations=tuple(sorted(operations.items())),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -141,6 +150,9 @@ class Pin:
         }
         if self.modeled:
             doc["modeled"] = list(self.modeled)
+        if self.cut_sha256:
+            doc["cut_sha256"] = self.cut_sha256
+            doc["operations"] = dict(self.operations)
         return doc
 
     def source(self, url: str) -> PinnedSource | None:
@@ -202,6 +214,8 @@ class RefreshResult:
     diff_summary: str
     #: Declared sources that could not be fetched; when non-empty nothing was cut or written.
     failures: tuple[SourceFailure, ...] = ()
+    #: Pinned sources whose bytes moved with the cut unchanged: a re-pin chore, not a change (konyklabs/roadmap#178).
+    moved: tuple[str, ...] = ()
 
     @property
     def changed(self) -> bool:
@@ -245,7 +259,7 @@ def refresh(
     ``failures`` with a line of its own; the cut is skipped and nothing is
     written, ``check`` or not.
     """
-    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path
+    from vendorfake.fidelity.cache import cache_path
 
     extract_dir = anchor_dir if declaration.vendored else cache_path(declaration.anchor, cache_dir)
     extract_path = extract_dir / EXTRACT_FILE
@@ -276,19 +290,21 @@ def refresh(
 
     lines: list[str] = []
     changed_upstream = False
+    moved: list[str] = []
     for row in document["x-vendorfake"]["sources"]:
         pinned = old_pin.source(row["url"]) if old_pin is not None else None
         if pinned is not None and pinned.sha256 == row["sha256"]:
             row["fetched"] = pinned.fetched
             lines.append(f"upstream {row['url']}: unchanged (sha256 {row['sha256'][:12]}, fetched {pinned.fetched})")
             continue
-        changed_upstream = True
         if pinned is None:
+            changed_upstream = True
             lines.append(
                 f"upstream {row['url']}: new pin (sha256 {row['sha256'][:12]}, {row['bytes']} bytes, "
                 f"version {row['version']!r}, fetched {row['fetched']})"
             )
         else:
+            moved.append(row["url"])
             lines.append(
                 f"upstream {row['url']}: changed sha256 {pinned.sha256[:12]} -> {row['sha256'][:12]}, "
                 f"{pinned.bytes} -> {row['bytes']} bytes, version {pinned.version!r} -> {row['version']!r}"
@@ -301,35 +317,50 @@ def refresh(
 
     new_text = render_json(document)
     new_pin = Pin.from_extract(document, new_text, modeled=() if declaration.vendored else modeled)
+    cut_sha256, operations = cut_digests(document)
 
-    # "The extract changed" means what the validator sees changed -- operations
-    # and schemas -- not that the embedded source row moved with the upstream.
-    # An upstream prose edit is therefore reported as changed_upstream alone,
-    # which is the useful distinction: the pin moves, nothing validated moves.
-    changed_extract = old_text is None or _content(json.loads(old_text)) != _content(document)
-    if old_text is None:
-        lines.append(f"{EXTRACT_FILE}: new ({len(new_text.encode('utf-8'))} bytes)")
-    elif changed_extract:
+    # "The extract changed" means the cut changed -- what the validator sees --
+    # never that a source row or ``info`` moved with the upstream (konyklabs/roadmap#178).
+    changed_extract = _pinned_cut(old_pin, old_text, vendored=declaration.vendored) != cut_sha256
+    if changed_extract and moved:
+        changed_upstream, moved = True, []
+    if not changed_extract:
+        lines.append(f"{EXTRACT_FILE}: unchanged" + (" (cut; the source rows moved)" if moved else ""))
+    elif old_pin is not None and not declaration.vendored and not old_pin.cut_sha256:
+        lines.append(f"{PIN_FILE}: records no cut digest (pinned before konyklabs/roadmap#178) -- `pin` writes one")
+    elif old_pin is not None and old_pin.operations:
+        lines.extend(_operation_diff(dict(old_pin.operations), operations))
+    elif old_text is not None:
         lines.extend(_extract_diff(json.loads(old_text), document, old_text, new_text))
     else:
-        lines.append(f"{EXTRACT_FILE}: unchanged")
-    if old_pin is not None and old_text is not None and sha256_hex(old_text.encode("utf-8")) != old_pin.extract_sha256:
+        lines.append(f"{EXTRACT_FILE}: new ({len(new_text.encode('utf-8'))} bytes)")
+    if (
+        declaration.vendored
+        and old_pin is not None
+        and old_text is not None
+        and sha256_hex(old_text.encode("utf-8")) != old_pin.extract_sha256
+    ):
         changed_extract = True
         lines.append(f"{PIN_FILE}: extract_sha256 does not match the committed {EXTRACT_FILE} (edited by hand?)")
-    elif old_pin is not None and old_pin != new_pin and not changed_upstream and not changed_extract:
-        # Same bytes and same extract can only disagree with the pin if the pin was edited by hand.
+    elif (
+        old_pin is not None
+        and not changed_upstream
+        and not changed_extract
+        and not moved
+        and (old_pin.sources, old_pin.extract_sha256, old_pin.modeled)
+        != (new_pin.sources, new_pin.extract_sha256, new_pin.modeled)
+    ):
+        # Same bytes and same cut can only disagree with the pin if the pin was edited by hand.
         changed_upstream = True
-        lines.append(f"{PIN_FILE}: rows differ from what the committed {EXTRACT_FILE} says (edited by hand?)")
+        lines.append(f"{PIN_FILE}: rows differ from what the extract says (edited by hand?)")
 
-    if not check and (changed_upstream or changed_extract):
+    if not check and (changed_upstream or changed_extract or moved):
         extract_dir.mkdir(parents=True, exist_ok=True)
         extract_path.write_text(new_text, encoding="utf-8")
         write_pin(pin_path, new_pin)
         if declaration.vendored:
             lines.append(f"wrote {extract_path.name} and {pin_path.name}")
         else:
-            # The pin now describes these bytes; a DRIFT note from an earlier run-time cut is settled.
-            (extract_dir / DRIFT_FILE).unlink(missing_ok=True)
             lines.append(f"wrote {pin_path.name} beside the declaration and {extract_path.name} to {extract_dir}")
     elif check:
         lines.append("check mode: nothing written")
@@ -338,6 +369,7 @@ def refresh(
         changed_upstream=changed_upstream,
         changed_extract=changed_extract,
         diff_summary="\n".join(lines),
+        moved=tuple(moved),
     )
 
 
@@ -399,13 +431,29 @@ def _unfetched(
     )
 
 
-def _content(document: Mapping[str, Any]) -> dict[str, Any]:
-    """The extract minus its source rows: what is compared to decide ``changed_extract``."""
-    content = dict(document)
-    meta = content.get("x-vendorfake")
-    if isinstance(meta, Mapping):
-        content["x-vendorfake"] = {key: value for key, value in meta.items() if key != "sources"}
-    return content
+def _pinned_cut(old_pin: Pin | None, old_text: str | None, *, vendored: bool) -> str | None:
+    """The digest of the cut the pin describes: recorded in a non-vendored pin, cut from a committed extract that digests to a vendored one; ``None`` when neither can say."""
+    if old_pin is None:
+        return None
+    if not vendored:
+        return old_pin.cut_sha256 or None
+    if old_text is None or sha256_hex(old_text.encode("utf-8")) != old_pin.extract_sha256:
+        return None
+    return cut_digests(json.loads(old_text))[0]
+
+
+def _operation_diff(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:
+    """The operations whose digest moved between two cuts; one line when the cut moved outside every one of them."""
+    out = [f"{EXTRACT_FILE}: operation + {key}" for key in sorted(after.keys() - before.keys())]
+    out += [f"{EXTRACT_FILE}: operation - {key}" for key in sorted(before.keys() - after.keys())]
+    out += [
+        f"{EXTRACT_FILE}: operation ~ {key}"
+        for key in sorted(before.keys() & after.keys())
+        if before[key] != after[key]
+    ]
+    return out or [
+        f"{EXTRACT_FILE}: cut changed outside every modeled operation (openapi, the error schema or a ledger)"
+    ]
 
 
 def _extract_diff(old: Mapping[str, Any], new: Mapping[str, Any], old_text: str, new_text: str) -> list[str]:
@@ -447,21 +495,12 @@ def _extract_diff(old: Mapping[str, Any], new: Mapping[str, Any], old_text: str,
 def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Path | str | None = None) -> RefreshResult:
     """The offline half of ``refresh``: is what is committed self-consistent?
 
-    No network. This is what a pull-request run asks -- the extract on disk
-    is the one the pin describes, and the pin describes the sources the
-    declaration names -- and nothing more. Whether *upstream* has moved is a
-    scheduled question (D-006: drift is a filed issue, not a red PR -- for a
-    vendored extract; a non-vendored one validates against the cached cut and,
-    once that is evicted, the fresh document), and a
-    check that fetched here would make every vendor release fail every open
-    pull request at once.
-
-    For a non-vendored declaration the extract on disk is the cached one, and
-    an empty cache is a pass with a note: offline cannot fetch, and the design
-    accepts that. A cache cut from moved upstream (a ``DRIFT`` file beside it)
-    is reported as upstream change, since the pin does not describe it.
+    No network: whether upstream moved is a scheduled question (D-006). A vendored
+    extract must digest to the pin. A non-vendored cache is judged by its cut
+    (konyklabs/roadmap#178): source rows that moved with the pin's cut are a re-pin
+    chore (``moved``); a moved cut is a finding naming the operations.
     """
-    from vendorfake.fidelity.cache import DRIFT_FILE, cache_path, drift_rows
+    from vendorfake.fidelity.cache import cache_path
 
     lines: list[str] = []
     changed_extract = False
@@ -483,25 +522,48 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Pat
                 False,
                 f"no cache at {extract_path}: the pin cannot be verified offline -- run `vendorfake-fidelity fetch` first",
             )
-        for drifted in drift_rows(extract_dir):
-            changed_upstream = True
-            lines.append(f"{DRIFT_FILE} in {extract_dir}: {drifted.line}")
     if not extract_path.is_file() or not pin_path.is_file():
         missing = [name for name, path in ((EXTRACT_FILE, extract_path), (PIN_FILE, pin_path)) if not path.is_file()]
         return RefreshResult(True, True, f"missing under {anchor_dir}: {', '.join(missing)} -- run `pin` once")
     pin = read_pin(pin_path)
     text = extract_path.read_text(encoding="utf-8")
     actual = sha256_hex(text.encode("utf-8"))
-    if actual != pin.extract_sha256:
-        changed_extract = True
-        lines.append(
-            f"{EXTRACT_FILE}: sha256 {actual[:12]} does not match {PIN_FILE}'s {pin.extract_sha256[:12]} (edited by hand?)"
-        )
     document = json.loads(text)
-    embedded = Pin.from_extract(document, text)
-    if embedded.sources != pin.sources:
-        changed_extract = True
-        lines.append(f"{EXTRACT_FILE}: its x-vendorfake.sources rows disagree with {PIN_FILE}")
+    moved: tuple[str, ...] = ()
+    if actual != pin.extract_sha256 and not declaration.vendored and pin.cut_sha256:
+        cut_sha256, operations = cut_digests(document)
+        rows = {row["url"]: row["sha256"] for row in document["x-vendorfake"]["sources"]}
+        pinned_rows = {row.url: row.sha256 for row in pin.sources}
+        moved = tuple(url for url, sha in rows.items() if url in pinned_rows and pinned_rows[url] != sha)
+        same = cut_sha256 == pin.cut_sha256
+        for url in moved:
+            lines.append(
+                f"upstream {url}: moved (pinned {pinned_rows[url][:12]}, cached cut from {rows[url][:12]})"
+                + (" -- cut unchanged" if same else "")
+            )
+        if same and not moved:
+            lines.append(
+                f"{EXTRACT_FILE}: cut matches {PIN_FILE}; bytes differ outside the cut -- run `vendorfake-fidelity pin`"
+            )
+        elif not same:
+            changed_extract, changed_upstream, moved = True, bool(moved), ()
+            lines.extend(_operation_diff(dict(pin.operations), operations))
+    else:
+        if actual != pin.extract_sha256:
+            changed_extract = True
+            lines.append(
+                f"{EXTRACT_FILE}: sha256 {actual[:12]} does not match {PIN_FILE}'s {pin.extract_sha256[:12]} "
+                f"(edited by hand?)"
+            )
+            if not declaration.vendored:
+                lines.append(
+                    f"{PIN_FILE}: records no cut digest (pinned before konyklabs/roadmap#178) -- "
+                    f"run `vendorfake-fidelity pin`"
+                )
+        embedded = Pin.from_extract(document, text)
+        if embedded.sources != pin.sources:
+            changed_extract = True
+            lines.append(f"{EXTRACT_FILE}: its x-vendorfake.sources rows disagree with {PIN_FILE}")
     meta = document.get("x-vendorfake", {})
     stubbed = tuple(meta.get("stubbed", ())) if isinstance(meta, Mapping) else ()
     for name in sorted(set(stubbed) - set(declaration.stubs_accepted)):
@@ -525,4 +587,4 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Pat
             )
         where = "" if declaration.vendored else f" (cached at {extract_path})"
         lines.append(f"{EXTRACT_FILE}: matches {PIN_FILE}{where}")
-    return RefreshResult(changed_upstream, changed_extract, "\n".join(lines))
+    return RefreshResult(changed_upstream, changed_extract, "\n".join(lines), moved=moved)
