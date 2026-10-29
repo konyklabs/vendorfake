@@ -3214,6 +3214,66 @@
         },
         "type": "object"
       },
+      "Channel": {
+        "properties": {
+          "created_at": {
+            "readOnly": true,
+            "type": "string"
+          },
+          "id": {
+            "readOnly": true,
+            "type": "string"
+          },
+          "merchant_id": {
+            "readOnly": true,
+            "type": "string"
+          },
+          "name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "reference": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reference"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelStatus"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "updated_at": {
+            "readOnly": true,
+            "type": "string"
+          },
+          "version": {
+            "readOnly": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ChannelStatus": {
+        "enum": [
+          "ACTIVE",
+          "INACTIVE"
+        ],
+        "type": "string"
+      },
       "ClearpayDetails": {
         "properties": {
           "email_address": {
@@ -5434,6 +5494,26 @@
           "objects": {
             "items": {
               "$ref": "#/components/schemas/CatalogObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ListChannelsResponse": {
+        "properties": {
+          "channels": {
+            "items": {
+              "$ref": "#/components/schemas/Channel"
+            },
+            "type": "array"
+          },
+          "cursor": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Error"
             },
             "type": "array"
           }
@@ -8793,6 +8873,46 @@
         ],
         "type": "string"
       },
+      "Reference": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReferenceType"
+              },
+              {
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ReferenceType": {
+        "enum": [
+          "UNKNOWN_TYPE",
+          "LOCATION",
+          "FIRST_PARTY_INTEGRATION",
+          "OAUTH_APPLICATION",
+          "ONLINE_SITE",
+          "ONLINE_CHECKOUT",
+          "INVOICE",
+          "GIFT_CARD",
+          "GIFT_CARD_MARKETPLACE",
+          "RECURRING_SUBSCRIPTION",
+          "ONLINE_BOOKING_FLOW",
+          "SQUARE_ASSISTANT",
+          "CASH_LOCAL",
+          "POINT_OF_SALE",
+          "KIOSK"
+        ],
+        "type": "string"
+      },
       "Refund": {
         "properties": {
           "additional_recipients": {
@@ -10399,6 +10519,65 @@
         }
       }
     },
+    "/v2/channels": {
+      "get": {
+        "operationId": "ListChannels",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "reference_type",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ReferenceType"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reference_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ChannelStatus"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListChannelsResponse"
+                }
+              }
+            },
+            "description": "200"
+          }
+        }
+      }
+    },
     "/v2/inventory/changes/batch-create": {
       "post": {
         "operationId": "BatchChangeInventory",
@@ -11196,6 +11375,7 @@
       "DELETE /v2/webhooks/subscriptions/{subscription_id}",
       "GET /v2/catalog/list",
       "GET /v2/catalog/object/{object_id}",
+      "GET /v2/channels",
       "GET /v2/inventory/{catalog_object_id}",
       "GET /v2/locations",
       "GET /v2/loyalty/programs/{program_id}",
@@ -11230,7 +11410,7 @@
     "namespaced": {},
     "rewritten": {
       "extensions": {},
-      "nullable_ref": 218
+      "nullable_ref": 221
     },
     "schema": 1,
     "sources": [
