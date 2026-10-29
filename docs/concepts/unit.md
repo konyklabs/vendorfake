@@ -9,7 +9,7 @@ a property of a unit, not a separate thing to wire up.
 
 | Term | What it is |
 |---|---|
-| **vendor** | Which API is faked: `square`, `clover`, `toast`, `lightspeed`. `vendorfake vendors` lists what is installed. |
+| **vendor** | Which API is faked: `square`, `clover`, `toast`, `lightspeed`, `lightspeed-k`. `vendorfake vendors` lists what is installed. |
 | **profile** | A named JSON document choosing which capabilities are on, the seed document, the clock mode, retry timing and the request-log capacity. [Below](#profile). |
 | **capability** | One named slice of a vendor's surface a profile can switch on or off. **Role** is the vendor-neutral spelling. [Below](#capabilities-and-roles). |
 | **seed** | The scenario a unit starts with: ids, credentials, an order or two, already there. [Seed](seed.md). |
@@ -217,7 +217,7 @@ the same on whichever handle `unit()`, `async_unit()` or `served()` returned.
   route by its `operation_id` rather than a hand-typed path. Every vendor
   also ships an `<vendor>.paths` module (`vendorfake.square.paths`,
   `vendorfake.clover.paths`, `vendorfake.toast.paths`,
-  `vendorfake.lightspeed.paths`) of `UPPER_SNAKE` constants for the same
+  `vendorfake.lightspeed.paths`, `vendorfake.lightspeed_k.paths`) of `UPPER_SNAKE` constants for the same
   purpose at import time.
 - `driver.clock()` — the clock's mode and current instant.
 

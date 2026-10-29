@@ -7,6 +7,17 @@ fidelity leg and review round that came with it.
 
 ### Features
 
+* **lightspeed-k:** a fifth vendor, Lightspeed Restaurant K-Series on V1
+  authentication (D-016, konyklabs/roadmap#179): `GET /oauth/authorize` (a
+  stand-in that approves), `POST /oauth/token` (the code exchange from the
+  query string and the single-use refresh from a form body, HTTP Basic client
+  auth, a `devp-v2` client refused), and the Order and Pay reads
+  `GET /o/op/data/businesses`, `GET /o/op/1/menu/list` and
+  `GET /o/op/2/menu/load/{menuId}` under `orders-api`. Six profiles, one seeded
+  business, location and V2 menu, `LightspeedKSeed`/`LightspeedKSeedOverlay`,
+  and the unofficial statement at `GET /__unit/info`. Fidelity is fetched,
+  never committed (`vendored: false`). Under `--strict`, a contract the target
+  declares inapplicable is no longer reported as never observed.
 * **fidelity:** the schema dialect follows the extract: an OpenAPI 3.1
   document is validated as JSON Schema 2020-12 (`const`, type lists with
   `null`, one validator for requests and responses), a 3.0 one as before. A
