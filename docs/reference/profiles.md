@@ -32,12 +32,12 @@ Every profile every vendor ships.
 
 | Profile | Capabilities | Seed | Summary |
 | --- | --- | --- | --- |
-| `chaos-demo` | auth, order_and_pay, chaos | seed/default.seed.json | Every capability on a virtual clock with a preloaded fault set: a mid-flow token expiry on the second V2 menu load and the documented 503 envelope on the third. |
-| `full` | auth, order_and_pay, chaos | seed/default.seed.json | Every capability on. The default profile. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
-| `no-chaos` | auth, order_and_pay, chaos | seed/default.seed.json | Identical to full: this vendor declares no webhooks.chaos to switch off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
-| `no-faults` | auth, order_and_pay | seed/default.seed.json | The V1 token endpoint and the three Order and Pay reads with fault injection switched off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
+| `chaos-demo` | auth, order_and_pay, webhooks, chaos, webhooks.chaos | seed/default.seed.json | Every capability on a virtual clock with a preloaded fault set: a mid-flow token expiry on the second V2 menu load, the documented 503 envelope on the third, and the first SUCCESS notification delivered twice. |
+| `full` | auth, order_and_pay, webhooks, chaos, webhooks.chaos | seed/default.seed.json | Every capability on. The default profile. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
+| `no-chaos` | auth, order_and_pay, webhooks, chaos | seed/default.seed.json | Every capability but delivery faults: request faults stay armable, order notifications are delivered as sent. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
+| `no-faults` | auth, order_and_pay, webhooks | seed/default.seed.json | The V1 token endpoint, Order and Pay with the to-go order, and order notifications, with fault injection switched off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token. |
 | `oauth-only` | auth, chaos | seed/default.seed.json | The V1 token lifecycle alone: the authorize stand-in and POST /oauth/token, with request faults. |
-| `orders-only` | order_and_pay, chaos | seed/default.seed.json | The three Order and Pay reads with request faults and no token endpoint: authenticate with the seeded bearer. |
+| `orders-only` | order_and_pay, chaos | seed/default.seed.json | Order and Pay alone, the to-go order included, with request faults and no token endpoint: authenticate with the seeded bearer. No notification is delivered. |
 
 
 ## Square

@@ -1,9 +1,10 @@
 # Lightspeed Restaurant K-Series (V1 authentication)
 
 The fifth vendor, identifier `lightspeed-k`, and the first whose identifier
-differs from its module (`vendorfake.lightspeed_k`). Slice 1 of D-016: the V1
-token lifecycle and three Order and Pay reads. Lightspeed's other Restaurant
-series are not modelled.
+differs from its module (`vendorfake.lightspeed_k`). D-016's first two slices:
+the V1 token lifecycle, three Order and Pay reads, the to-go order, the webhook
+endpoint CRUD and the order notifications delivered to it. Lightspeed's other
+Restaurant series are not modelled.
 
 !!! warning "Unofficial"
     Built from Lightspeed's public documentation only, without sandbox or
@@ -14,7 +15,7 @@ series are not modelled.
 
 ## What is modelled
 
-Five routes on one merchant account:
+Ten routes and one delivery on one merchant account:
 
 | Route | Operation | Fidelity |
 |---|---|---|
@@ -23,6 +24,25 @@ Five routes on one merchant account:
 | `GET /o/op/data/businesses` | `apeLookupBusinesses` | validated against `source.json` |
 | `GET /o/op/1/menu/list` | `apeLoadMenus` | validated against `source.json` |
 | `GET /o/op/2/menu/load/{menuId}` | `apeGetMenuByIdV2` | validated against `source.json` |
+| `POST /o/op/1/order/toGo` | `apePlaceToGoOrder` | validated against `source.json` |
+| `PUT /o/wh/1/webhook` | `apeCreateWebhookOo` | validated against `source.json` |
+| `POST /o/wh/1/webhook` | `apeUpdateWebhookOo` | validated against `source.json` |
+| `GET /o/wh/1/webhook/{endpointId}` | `apeGetWebhookOo` | validated against `source.json` |
+| `DELETE /o/wh/1/webhook/{endpointId}` | `apeDeleteWebhookEndpoint` | validated against `source.json` |
+| delivery: `POST <your url>` | `webhooks["apeOrder notification"]` | asserted in a unit test; the fidelity cut carries no `webhooks` entries yet |
+
+## Consumer calls
+
+The six calls an online-ordering consumer makes, and which are modelled:
+
+| # | Call | Modelled |
+|---|---|---|
+| 1 | the V1 token (`POST /oauth/token`) | yes |
+| 2 | the businesses (`GET /o/op/data/businesses`) | yes |
+| 3 | the menu (`GET /o/op/1/menu/list`, `GET /o/op/2/menu/load/{menuId}`) | yes |
+| 4 | the to-go order (`POST /o/op/1/order/toGo`) | yes |
+| 5 | the webhook registration (`PUT /o/wh/1/webhook`) | yes |
+| 6 | the tax breakdown | no: slice 3 |
 
 V1 authentication is the documented legacy path: "As of November 10, 2025 all
 newly created API clients are V2 by default. Existing V1 clients will continue
@@ -69,6 +89,64 @@ $ curl -s 'http://127.0.0.1:8125/o/op/1/menu/list?businessLocationId=10000000010
 {"status":401,"error":"Unauthorized","message":"An Authorization: bearer header is required."}
 ```
 
+## Order notifications
+
+An order names its endpoint (`endpointId`, case sensitive), and every change of
+the order's status is delivered there, from the journal: the handler stores the
+order and answers `{"status": "ok"}`, and the notification follows. An endpoint
+registered with `withBasicAuth: true` receives `Authorization: Basic
+base64(username:password)` on every delivery; one registered without it
+receives no `Authorization` header. A SKU on no menu at the location is a POS
+refusal: the order is stored as `FAILURE` and its notification says why.
+
+Produced against `vendorfake serve --vendor lightspeed-k --port 8125` on `full`,
+with a loopback receiver on port 8126; `$T` is `Authorization: bearer
+unit-lightspeed-k-access-token-full`. The order id and account identifier differ
+per unit.
+
+```console
+$ curl -s -X PUT http://127.0.0.1:8125/o/wh/1/webhook -H "$T" -H "content-type: application/json" -d '{"endpointId":"MY-ENDPOINT","url":"http://127.0.0.1:8126/hooks","withBasicAuth":true,"username":"unit-k-user","password":"unit-k-password"}'
+{"endpointId":"MY-ENDPOINT","url":"http://127.0.0.1:8126/hooks","withBasicAuth":true,"username":"unit-k-user","password":"unit-k-password","provideAccount":false,"expandTransactions":false,"expandPayments":false,"subscribeTo":[]}
+$ curl -s -X POST http://127.0.0.1:8125/o/op/1/order/toGo -H "$T" -H "content-type: application/json" -d '{"businessLocationId":100000000101,"thirdPartyReference":"unit-k-order-1","endpointId":"MY-ENDPOINT","customerInfo":{"firstName":"Jane"},"items":[{"quantity":2,"sku":"UNITK-001"}],"takeAway":true}'
+{"status":"ok"}
+$ curl -s -X POST http://127.0.0.1:8125/o/op/1/order/toGo -H "$T" -H "content-type: application/json" -d '(the same body)'
+{"status":"fail","msg":"reference has already been used unit-k-order-1"}
+```
+
+The receiver got, with `Authorization: Basic dW5pdC1rLXVzZXI6dW5pdC1rLXBhc3N3b3Jk`:
+
+```json
+{"thirdPartyReference":"unit-k-order-1","businessLocationId":100000000101,"status":"SUCCESS","ikentooAccountIdentifier":"A55515.2","type":"ORDER"}
+```
+
+A `FAILURE` notification is `{"status": "FAILURE", "reason": ..., "thirdPartyReference": ...}`.
+Neither shape carries an event id, as against the real vendor: deduplicate on
+`thirdPartyReference` plus `status`.
+
+**The POS stand-in.** Nothing in the unit moves an order past `SUCCESS`; the
+POS operator does, through the control plane's journalled write. Each change to
+a documented status is delivered; any other value is logged and delivers
+nothing:
+
+```console
+$ curl -s -X POST http://127.0.0.1:8125/__unit/state/update -H "content-type: application/json" -d '{"collection":"orders","id":"1ef588f6-3a07-4c3a-8f11-7bda6659cc03","patch":{"status":"READY_FOR_PICKUP"}}'
+{"collection":"orders","id":"1ef588f6-3a07-4c3a-8f11-7bda6659cc03","version":2,"journal_seq":8}
+```
+
+The order id comes from `POST /__unit/state/page {"collection": "orders"}`. The
+receiver then got the same body with `"status":"READY_FOR_PICKUP"`.
+
+**Retry schedule (JUDGMENT).** K-Series documents none. A delivery not answered
+2xx within 10 s is retried after 60 s, 5 min, 15 min and 1 h, four retries in
+all, compressed by `time_scale = 1/6000` (the first retry 10 ms after the
+failure) unless a profile says otherwise.
+
+!!! warning "The Basic credential is visible"
+    The password is echoed by `PUT`, `POST` and `GET`, and the header appears
+    at `GET /__unit/webhooks/deliveries`, in the manifest's
+    `webhooks.signature_keys` and in the subscriber list at
+    `GET /__unit/webhooks/subscriptions`. Never register a real credential.
+
 ## Documented
 
 All pages fetched 2026-10-29.
@@ -87,6 +165,16 @@ All pages fetched 2026-10-29.
 | An account can have several business locations, referenced by `businessLocationId` | [business locations](https://api-portal.lsk.lightspeed.app/guides/definitions/business-locations) |
 | List the menus, copy the `ikentooMenuId`, load the menu | [online-ordering tutorial](https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics) |
 | `GET /o/op/1/menu/load/{menuId}` deprecated and V2 added on 2026-05-15 | [changes](https://api-docs.lsk.lightspeed.app/changes) |
+| The to-go validations: `businessLocationId`, `thirdPartyReference` (1..48, unique), `endpointId` and `customerInfo.firstName` (1..128) required; `items[].quantity` and `items[].sku` (≤25); `payment.paymentAmount`; `collectionCode` ≤8; `maxTimeToAttemptOrderDeliverToPos` ≥60000; the two ISO times "must be in the future" | `source.json` |
+| A 200 "doesn't necessarily mean that it has been sent to the POS. This must be confirmed via the webhook" | tutorial |
+| The tutorial's to-go body carries `takeAway: true`, which the schema does not name; with no `additionalProperties: false` it is accepted and ignored | tutorial, `source.json` |
+| A reused `thirdPartyReference` is 409 `{"status": "fail", "msg": "reference has already been used <ref>"}` under `*/*` | `source.json` |
+| `endpointId` is case sensitive; `url` required; `withBasicAuth`, `provideAccount`, `expandTransactions`, `expandPayments` default false; `subscribeTo[].resource` is `order`, `payment`, `item` or `order_api` | `source.json` |
+| An update omitting `provideAccount`, `expandTransactions` or `expandPayments` resets them to their defaults | `source.json` |
+| An unknown endpoint is 404 `endpoint ID not found for <id>`; a delete answers 200 "Webhook deleted" | `source.json` |
+| With `withBasicAuth`, "a username and password ... to authenticate the requests being sent to your endpoint": Basic is the only delivery authentication | tutorial |
+| The notification shapes: the `failure` example; the others `apeBaseWebhookInformation` plus `status`, `type: ORDER`; `ikentooAccountIdentifier` shaped `A17700.3`; the status enum `SUCCESS, FAILURE, IN_DELIVERY, READY_FOR_PICKUP, CLOSED, ABANDONED, CANCELLED` | `source.json` webhooks |
+| Order `FAILURE`, `READY_FOR_PICKUP` and `CANCELLED` are always sent; `order: DELIVERED` is subscribable | `source.json` `apeEventResource` |
 
 ## Judgment
 
@@ -105,12 +193,30 @@ All pages fetched 2026-10-29.
 | One unit is one merchant account: every token sees every seeded business | no binding is documented |
 | `richContent=false` (the default) strips `itemRichData`; `accountProfile` is accepted and ignored | the parameter descriptions |
 | Seeded values: ids, names, prices and tax rates | obvious placeholders |
+| The retry schedule (60 s, 5 min, 15 min, 1 h; 10 s timeout) and the `x-vendorfake-*` retry headers | K-Series documents none |
+| Every order status change is delivered to the order's endpoint whatever `subscribeTo` holds; `SUCCESS` included, though neither list names it | the tutorial's confirmation webhooks |
+| An unknown SKU is a `FAILURE` order, with reason `Unknown SKU <sku> at business location <id>` | the tutorial's "problem with the order" |
+| A `FAILURE` order frees its reference: only an order that reached the POS spends it | the tutorial: such an order "will need to be corrected and sent again" |
+| An `endpointId` naming no registration is accepted, and nothing is delivered | nothing documented |
+| A second `PUT` for an existing id is 400 `invalid_value` on `endpointId`; `withBasicAuth` without both credentials is 400 `missing_field` | nothing documented |
+| An update or delete of an unknown id is the GET's 404 | the one documented 404 |
+| Every other member an update omits is kept from the stored endpoint | the reset note names only three |
+| The password is echoed | the schema includes it |
+| Routing travels in the event type, `order:<STATUS>:<endpointId percent-encoded>`; a registration subscribes to its own `order:*:<id>` only | the core's matcher |
+| No HTTPS rule on `url`, beyond refusing a link-local host | none is documented |
+| 404 for an unknown business location on the to-go order | the reads' choice |
 
 ## Unverified
 
 - Whether the real V1 endpoint tolerates parameters in the other place (the
   exchange in the body, the refresh in the query).
 - Whether `timestamp` and `path` appear on a real 4xx from the reads.
+- Whether the real API lets a reference be reused after a `FAILURE`, and what it
+  does with an `endpointId` naming no registration.
+- What the real API answers to a second `PUT` for an existing `endpointId`.
+- The contents of the tutorial's second confirmation webhook, shown only as a
+  screenshot: this unit sends one notification per status change.
+- Whether a 2xx other than 200 is accepted as delivered (this unit accepts any).
 
 ## Differences from X-Series
 
@@ -121,10 +227,13 @@ All pages fetched 2026-10-29.
 
 ## Deferred
 
-The V1 menu load (deprecated 2026-05-15), V2 authentication (OpenID Connect),
-the V1-to-V2 token exchange and `GET /oauth/userinfo` (slice 3), to-go and local
-orders and webhooks (slice 2), the tax breakdown, `accountProfile` pricing, rate
+Slice 3: the tax breakdown, V2 authentication (OpenID Connect), the V1-to-V2
+token exchange and `GET /oauth/userinfo`. Not planned: the V1 menu load
+(deprecated 2026-05-15), local orders, the `/business-locations` webhook
+operations and payment, item and order_api notifications, the `account`
+snapshot, `subscribeTo` filtering, `order: DELIVERED`, scheduled dispatch,
+`maxTimeToAttemptOrderDeliverToPos` elapsing, `accountProfile` pricing, rate
 limits, per-token location binding.
 
-Two consumer facts are still owed before slice 2: which menu load the consumer
-calls, and whether its client id starts with `devp-v2`.
+Two consumer facts are still owed: which menu load the consumer calls, and
+whether its client id starts with `devp-v2`.

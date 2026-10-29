@@ -11,3 +11,8 @@ Every route lightspeed-k's surface serves -- vendor-facing only. The `/__unit/*`
 | GET | `/o/op/data/businesses` | apeLookupBusinesses | order_and_pay | Every business and business location the access token sees (one merchant account per unit). |
 | GET | `/o/op/1/menu/list` | apeLoadMenus | order_and_pay | The menus of one business location: menuName and ikentooMenuId. |
 | GET | `/o/op/2/menu/load/{menuId}` | apeGetMenuByIdV2 | order_and_pay | One menu in its V2 shape; richContent=true keeps itemRichData, accountProfile is ignored. |
+| POST | `/o/op/1/order/toGo` | apePlaceToGoOrder | order_and_pay | A takeaway or delivery order; 200 {status: ok} means received, and the outcome arrives as a notification at the endpoint it names. The example orders an unknown SKU, so the POS refuses it and its reference stays free. |
+| PUT | `/o/wh/1/webhook` | apeCreateWebhookOo | webhooks | Register an order-notification endpoint by endpointId (case sensitive), optionally Basic. |
+| POST | `/o/wh/1/webhook` | apeUpdateWebhookOo | webhooks | Update an endpoint; provideAccount, expandTransactions and expandPayments reset when omitted. |
+| GET | `/o/wh/1/webhook/{endpointId}` | apeGetWebhookOo | webhooks | One endpoint as registered, password included. |
+| DELETE | `/o/wh/1/webhook/{endpointId}` | apeDeleteWebhookEndpoint | webhooks | Delete an endpoint; later orders naming it deliver to nobody. |
