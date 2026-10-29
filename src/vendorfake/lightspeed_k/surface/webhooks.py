@@ -7,7 +7,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr
 
 from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
@@ -40,7 +40,7 @@ class EventResource(BaseModel):
 class WebhookEndpointRequest(BaseModel):
     model_config = _BODY
 
-    endpointId: StrictStr
+    endpointId: StrictStr = Field(min_length=1)  # JUDGMENT: the document sets no minLength; "" names no entity
     url: StrictStr
     withBasicAuth: StrictBool = False
     username: StrictStr | None = None

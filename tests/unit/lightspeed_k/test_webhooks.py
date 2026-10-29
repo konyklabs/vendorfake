@@ -170,3 +170,52 @@ def test_the_routes_are_absent_on_orders_only(profile_harness: Callable[..., Ite
     for h in profile_harness("orders-only"):
         assert register(h).status in (404, 501)
         assert h.get(webhook_path(ENDPOINT)).status in (404, 501)
+
+
+# DOCUMENTED source.json: all four operations declare security [{OAuth2: [orders-api]}]
+CALLS = (
+    ("PUT", WEBHOOK, {"endpointId": ENDPOINT, "url": URL}),
+    ("POST", WEBHOOK, {"endpointId": ENDPOINT, "url": "https://receiver.example.test/other"}),
+    ("GET", webhook_path(ENDPOINT), None),
+    ("DELETE", webhook_path(ENDPOINT), None),
+)
+
+
+def call(h: Harness, method: str, path: str, body: Any, headers: dict[str, str]) -> Any:
+    if method in ("PUT", "POST"):
+        return getattr(h, method.lower())(path, body, headers=headers)
+    return getattr(h, method.lower())(path, headers=headers)
+
+
+@pytest.mark.parametrize(("method", "path", "body"), CALLS, ids=[f"{m} {p}" for m, p, _ in CALLS])
+def test_every_endpoint_route_needs_an_orders_api_bearer(h: Harness, method: str, path: str, body: Any) -> None:
+    assert register(h, withBasicAuth=True, username="user", password="pass").status == 200
+    anonymous = call(h, method, path, body, {})
+    assert anonymous.status == 401, anonymous.text
+    assert "pass" not in anonymous.text
+    forbidden = call(h, method, path, body, h.read_auth)
+    assert forbidden.status == 403, forbidden.text
+    assert forbidden.json()["unit_error"]["kind"] == "forbidden_scope"
+    assert "pass" not in forbidden.text
+    entity = stored(h)
+    assert entity is not None
+    assert entity["notification_url"] == URL and entity["signature_key"] == "user:pass"
+
+
+def test_post_refuses_a_link_local_url_and_keeps_the_stored_one(h: Harness) -> None:
+    assert register(h).status == 200
+    res = h.post(WEBHOOK, {"endpointId": ENDPOINT, "url": "http://169.254.169.254/latest/meta-data"})
+    assert res.status == 400, res.text
+    assert res.json()["unit_error"]["kind"] == "invalid_value"
+    assert res.json()["unit_error"]["field"] == "url"
+    entity = stored(h)
+    assert entity is not None and entity["notification_url"] == URL
+
+
+@pytest.mark.parametrize("method", ["PUT", "POST"])
+def test_an_empty_endpoint_id_is_400_on_endpoint_id(h: Harness, method: str) -> None:
+    res = call(h, method, WEBHOOK, {"endpointId": "", "url": URL}, h.auth)
+    assert res.status == 400, res.text
+    assert res.json()["unit_error"]["kind"] == "invalid_value"
+    assert res.json()["unit_error"]["field"] == "endpointId"
+    assert stored(h, "") is None

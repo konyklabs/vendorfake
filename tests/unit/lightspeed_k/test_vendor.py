@@ -82,3 +82,12 @@ def test_every_route_is_under_oauth_order_and_pay_or_webhooks() -> None:
         "apeGetWebhookOo",
         "apeDeleteWebhookEndpoint",
     ]
+
+
+def test_every_order_and_pay_and_webhook_route_needs_an_orders_api_bearer() -> None:
+    # DOCUMENTED source.json: every /o/ operation declares security [{OAuth2: [orders-api]}]
+    guarded = [route for route in VENDOR.routes if route.path.startswith("/o/")]
+    assert len(guarded) == 8
+    for route in guarded:
+        assert route.auth == "bearer", route.key
+        assert tuple(route.scopes) == ("orders-api",), route.key
