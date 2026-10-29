@@ -10,7 +10,7 @@ import pytest
 
 import vendorfake
 from tests.fakes import UNSUPPORTED_ROLE_REASON, FakeVendor, VendorWithoutRoles, capability, unsupported_roles_vendor
-from vendorfake.registry import VENDOR_ENV_VAR, available_vendors, create_unit, resolve_vendor
+from vendorfake.registry import VENDOR_ENV_VAR, _targets, available_vendors, create_unit, resolve_vendor
 
 
 def _profile_dir(tmp_path: Path, document: dict[str, object], name: str = "test") -> Path:
@@ -46,7 +46,8 @@ def test_available_vendors_never_advertises_a_name_that_would_not_load() -> None
     import importlib.util
 
     for name in available_vendors():
-        assert importlib.util.find_spec(f"vendorfake.{name}") is not None
+        module = _targets()[name].split(":", 1)[0]
+        assert importlib.util.find_spec(module) is not None
 
 
 def test_a_vendor_definition_may_be_passed_directly(tmp_path: Path) -> None:
