@@ -443,6 +443,14 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `tests/unit/test_docs_pins.py` holds it to `__version__`
   (konyklabs/roadmap#180).
 
+## [0.10.0](https://github.com/konyklabs/vendorfake/compare/v0.9.0...v0.10.0) (2026-10-29)
+
+
+### Features
+
+* **lightspeed-k:** tax breakdown priced from the seeded menu (konyklabs/roadmap[#184](https://github.com/konyklabs/vendorfake/issues/184)) ([5a10abe](https://github.com/konyklabs/vendorfake/commit/5a10abe8261679657efb9e9ca386fd4ea2fe912c))
+* **lightspeed-k:** to-go order, webhook registration and order-notification delivery (konyklabs/roadmap[#183](https://github.com/konyklabs/vendorfake/issues/183)) ([fe3c9ec](https://github.com/konyklabs/vendorfake/commit/fe3c9ecbccef175c6f0ead5c6164510e4afc6266))
+
 ## [0.9.0](https://github.com/konyklabs/vendorfake/compare/v0.8.0...v0.9.0) (2026-10-29)
 
 
