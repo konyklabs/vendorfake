@@ -202,6 +202,16 @@ if [ "$QUICK" -eq 0 ]; then
   step "example (pytest)"  _example_step
 fi
 
+# The compose consumer example, built from the release archive its
+# Dockerfile pins (konyklabs/roadmap#180): the install path a machine with
+# no checkout uses. Exit 3 is Docker absent or its daemon down -- SKIP, as
+# the fidelity fetch is without network. Anything else, a 404 archive
+# included, is a FAIL. On the release commit the tag can lag the push by a
+# minute: re-run.
+if [ "$QUICK" -eq 0 ]; then
+  skippable_step "example (compose)" bash tools/verify_compose_example.sh
+fi
+
 # The conformance suite through its own entry points, which pytest does not
 # exercise: the framework-free CLI a container healthcheck calls, and the
 # pytest plugin an installed wheel exposes. `--strict` makes any skip that
