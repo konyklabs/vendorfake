@@ -1,4 +1,4 @@
-"""Lightspeed Restaurant K-Series on V1 authentication, slice 1 of D-016, as a vendorfake vendor.
+"""Lightspeed Restaurant K-Series on V1 authentication (D-016), as a vendorfake vendor.
 ``VENDOR`` is a fresh definition on every access, through :func:`__getattr__`."""
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from vendorfake.lightspeed_k.capabilities import (
 from vendorfake.lightspeed_k.config import LightspeedKConfig, resolve_lightspeed_k_config
 from vendorfake.lightspeed_k.entities import COL
 from vendorfake.lightspeed_k.errors import LIGHTSPEED_K_ERROR_TABLE, LightspeedKErrorShaper
+from vendorfake.lightspeed_k.events import LightspeedKEventMapper
 from vendorfake.lightspeed_k.ids import LightspeedKIds
+from vendorfake.lightspeed_k.signer import LightspeedKBasicSigner, verify_basic_auth
 from vendorfake.lightspeed_k.vendor import (
     LIGHTSPEED_K_ROLES,
     VENDOR_NAME,
@@ -34,12 +36,15 @@ __all__ = [
     "VENDOR",
     "VENDOR_NAME",
     "LightspeedKAuth",
+    "LightspeedKBasicSigner",
     "LightspeedKConfig",
     "LightspeedKErrorShaper",
+    "LightspeedKEventMapper",
     "LightspeedKIds",
     "LightspeedKVendor",
     "create_lightspeed_k_vendor",
     "resolve_lightspeed_k_config",
+    "verify_basic_auth",
 ]
 
 

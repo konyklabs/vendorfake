@@ -637,6 +637,7 @@ def _lightspeed_k(vendor_config: Mapping[str, object]) -> LightspeedKSeed:
     import base64
 
     from vendorfake.lightspeed_k.config import LightspeedKConfig
+    from vendorfake.lightspeed_k.events import LIGHTSPEED_K_EVENT_TYPES
     from vendorfake.lightspeed_k.paths import OAUTH_TOKEN
     from vendorfake.lightspeed_k.seed import constants as c
 
@@ -657,6 +658,7 @@ def _lightspeed_k(vendor_config: Mapping[str, object]) -> LightspeedKSeed:
         item_skus=c.SEED_ITEM_SKUS,
         token_path=OAUTH_TOKEN,
         basic_auth="Basic " + base64.b64encode(f"{config.client_id}:{config.client_secret}".encode()).decode(),
+        event_types=LIGHTSPEED_K_EVENT_TYPES,
     )
 
 

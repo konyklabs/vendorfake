@@ -51,6 +51,12 @@ def test_every_constant_names_something_the_document_contains() -> None:
     assert expected == c.SEED_BASIC_AUTH
 
 
+def test_the_unknown_sku_is_on_no_seeded_menu() -> None:
+    skus = {entry.get("sku") for menu in _document()["menus"] for entry in _entries(menu["menuEntryGroups"])}
+    assert c.SEED_UNKNOWN_SKU not in skus
+    assert c.SEED_EXAMPLE_ENDPOINT_ID
+
+
 def test_every_menu_entry_carries_its_type() -> None:
     entries = _entries(_document()["menus"][0]["menuEntryGroups"])
     assert entries and all(isinstance(entry.get("@type"), str) for entry in entries)

@@ -46,6 +46,12 @@
     "business_id": "100000000001",
     "business_location_id": "100000000101",
     "menu_id": "100000000201",
-    "sku_a": "UNITK-001"
+    "sku_a": "UNITK-001",
+    "endpoint_id": "UNIT-K-ENDPOINT",
+    "webhook_url": "https://receiver.example.test/hooks",
+    "basic_user": "unit-k-user",
+    "basic_password": "unit-k-password",
+    "unknown_sku": "UNITK-404",
+    "third_party_reference": "unit-k-order-1"
   }
 }

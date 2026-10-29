@@ -7,6 +7,10 @@ fidelity leg and review round that came with it.
 
 ### Features
 
+* **lightspeed-k:** slice 2 of D-016 (konyklabs/roadmap#183): `POST /o/op/1/order/toGo`, the webhook endpoint
+  CRUD under `/o/wh/1/webhook`, order notifications delivered from the journal to the endpoint an order names
+  with HTTP Basic when registered with it, and a JUDGMENT retry schedule; the `webhooks` role is declared, so
+  C07, C09, C16, C18, C21 and C29 now run on this vendor.
 * **lightspeed-k:** a fifth vendor, Lightspeed Restaurant K-Series on V1
   authentication (D-016, konyklabs/roadmap#179): `GET /oauth/authorize` (a
   stand-in that approves), `POST /oauth/token` (the code exchange from the

@@ -441,7 +441,7 @@ def lightspeed_k_target(
     transports: tuple[str, ...] = ("inprocess", "http"),
     out_of_process: tuple[str, ...] = (OUT_OF_PROCESS_TRANSPORT,),
 ) -> ConformanceTarget:
-    """The fifth vendor. No ``path_params``: slice 1 has no tenant path segment."""
+    """The fifth vendor. No ``path_params``: no tenant path segment."""
     return ConformanceTarget(
         name=LIGHTSPEED_K_VENDOR,
         open_client=functools.partial(open_client, vendor=LIGHTSPEED_K_VENDOR),

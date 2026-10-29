@@ -21,9 +21,25 @@ def test_the_table_covers_every_core_error_kind_with_a_provenance() -> None:
         assert 400 <= row.status < 600 and row.title and row.message, kind
 
 
-def test_unavailable_is_the_one_documented_row() -> None:
+def test_unavailable_and_conflict_are_the_documented_rows() -> None:
     documented = {kind for kind, row in LIGHTSPEED_K_ERROR_TABLE.items() if row.provenance == "documented"}
-    assert documented == {UnitErrorKind.UNAVAILABLE}
+    assert documented == {UnitErrorKind.UNAVAILABLE, UnitErrorKind.CONFLICT}
+
+
+def test_conflict_answers_envelope_c() -> None:
+    err = UnitError(UnitErrorKind.CONFLICT, detail="reference has already been used R1", field="thirdPartyReference")
+    shaped = LightspeedKErrorShaper().shape(err, fake_ctx(error_sidecar_mode="headers"))
+    assert shaped.status == 409
+    assert shaped.body == {"status": "fail", "msg": "reference has already been used R1"}
+    with_sidecar = LightspeedKErrorShaper().shape(err, fake_ctx())
+    assert with_sidecar.body["unit_error"]["status_provenance"] == "documented"
+
+
+def test_the_other_409_kinds_keep_envelope_a() -> None:
+    for kind in (UnitErrorKind.VERSION_CONFLICT, UnitErrorKind.IDEMPOTENCY_CONFLICT, UnitErrorKind.INVALID_TRANSITION):
+        shaped = LightspeedKErrorShaper().shape(UnitError(kind), fake_ctx(error_sidecar_mode="headers"))
+        assert shaped.status == 409
+        assert set(shaped.body) == {"status", "error", "message"}, kind
 
 
 def test_envelope_a_has_status_error_message_and_no_timestamp_or_path() -> None:

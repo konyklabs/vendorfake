@@ -1,9 +1,10 @@
 {
   "name": "no-chaos",
-  "summary": "Identical to full: this vendor declares no webhooks.chaos to switch off. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token.",
+  "summary": "Every capability but delivery faults: request faults stay armable, order notifications are delivered as sent. Seeds one business with one location, one V2 lunch menu, a full-scope token pair and a financial-api-only token.",
   "capabilities": [
     "auth",
     "order_and_pay",
+    "webhooks",
     "chaos"
   ],
   "seed": "seed/default.seed.json",

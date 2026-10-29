@@ -149,48 +149,44 @@ LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
 
 
 LIGHTSPEED_K_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
+    "C07": ("oauth-only",),
     "C08": ("no-faults",),
+    "C09": ("oauth-only", "orders-only"),
+    "C16": ("oauth-only", "orders-only"),
     "C17": ("oauth-only",),
+    "C18": ("oauth-only", "orders-only"),
+    "C21": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C27": ("no-faults",),
+    "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C37": ("no-faults",),
 }
 
-_LIGHTSPEED_K_NO_WEBHOOKS = (
-    "lightspeed-k declares role webhooks unsupported (slice 1 of D-016), so no profile enables the webhooks "
-    "capability and the {contract} contract can never be asked of this vendor until slice 2."
-)
 _LIGHTSPEED_K_NO_MAGIC = (
-    "K-Series documents no in-band fault trigger and slice 1's only mutating route is the token endpoint, so the "
-    "vendor declares magic=None and the {contract} contract can never be asked; faults are armed through "
-    "/__unit/chaos."
+    "K-Series documents no in-band fault trigger, so the vendor declares magic=None and the {contract} contract "
+    "can never be asked; faults are armed through /__unit/chaos."
 )
 _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY = (
-    "none of slice 1's operations documents an idempotency key, so no lightspeed-k route carries an "
-    "IdempotencySpec and the {contract} contract can never be asked of this vendor."
+    "no K-Series operation documents an idempotency key; thirdPartyReference uniqueness is a documented 409 "
+    "refusal, not a replay, as Toast's externalId is, so no lightspeed-k route carries an IdempotencySpec and the "
+    "{contract} contract can never be asked of this vendor."
 )
 
 LIGHTSPEED_K_INAPPLICABLE: Mapping[str, str] = {
-    "C07": (
-        "slice 1 serves no mutating route that publishes an example body: the token POST mints from a single-use "
-        "code or refresh token, which no published example can carry twice. Slice 2's to-go order makes the "
-        "journal contract askable and removes this entry."
-    ),
-    "C09": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery"),
     "C12": _LIGHTSPEED_K_NO_MAGIC.format(contract="one-shot trigger"),
-    "C13": "lightspeed-k declares no state machine: nothing in slice 1 has a lifecycle.",
+    "C13": (
+        "lightspeed-k declares no state machine: after SUCCESS an order's status is the POS operator's, driven "
+        "through POST /__unit/state/update; the mapper validates the documented status vocabulary and no vendor "
+        "route transitions an order."
+    ),
     "C14": _LIGHTSPEED_K_NO_MAGIC.format(contract="in-band trigger"),
-    "C16": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="signature"),
-    "C18": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="retry"),
     "C19": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="replay"),
-    "C21": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery-fault"),
     "C24": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
     "C25": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
     "C26": (
-        "every slice-1 list answers a bare, unpaged array (apeLookupBusinesses, apeLoadMenus); no route declares "
+        "every list answers a bare, unpaged array (apeLookupBusinesses, apeLoadMenus); no route declares "
         "a PaginationSpec."
     ),
-    "C29": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery-scope"),
 }
 
 
@@ -314,7 +310,7 @@ def lightspeed_target() -> ConformanceTarget:
 
 
 def lightspeed_k_target() -> ConformanceTarget:
-    """No ``path_params``: slice 1 has no tenant path segment; the ``{menuId}`` probe answers 400."""
+    """No ``path_params``: no tenant path segment; the ``{menuId}`` probe answers 400."""
     return target(
         "lightspeed-k",
         expected_skips=LIGHTSPEED_K_EXPECTED_SKIPS,

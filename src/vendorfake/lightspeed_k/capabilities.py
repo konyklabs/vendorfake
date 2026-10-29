@@ -1,4 +1,4 @@
-"""What this vendor can be asked to do, and the core-gated capabilities slice 1 excuses (D-016, D-010)."""
+"""What this vendor can be asked to do, and what it does not model (D-016, D-010)."""
 
 from __future__ import annotations
 
@@ -25,8 +25,15 @@ LIGHTSPEED_K_CAPABILITIES: tuple[CapabilityDecl, ...] = (
     CapabilityDecl(
         name="order_and_pay",
         summary=(
-            "Order and Pay reads under the orders-api scope: the businesses and locations the token sees, a "
-            "location's menus, and one menu in its V2 shape."
+            "Order and Pay under the orders-api scope: the businesses and locations the token sees, a "
+            "location's menus, one menu in its V2 shape, and the to-go order write."
+        ),
+    ),
+    CapabilityDecl(
+        name="webhooks",
+        summary=(
+            "Order-notification delivery from the journal to the endpoint an order names, HTTP Basic when "
+            "registered with it, endpoint CRUD under /o/wh/1/webhook, and a JUDGMENT retry schedule."
         ),
     ),
     CapabilityDecl(
@@ -34,17 +41,16 @@ LIGHTSPEED_K_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         summary="Request-scope fault injection: timeouts, server errors, the documented 503, token expiry.",
         kind="behavior",
     ),
+    CapabilityDecl(
+        name="webhooks.chaos",
+        summary="Delivery faults: duplication, reordering, dropped acknowledgements, delay.",
+        kind="behavior",
+        requires=("webhooks", "chaos"),
+    ),
 )
 
-_WEBHOOKS_REASON = (
-    "slice 1 of D-016 serves the V1 token lifecycle and three Order and Pay reads; webhook registration and "
-    "order-notification delivery arrive with slice 2 (konyklabs/roadmap#179)"
-)
-LIGHTSPEED_K_NOT_SUPPORTED: Mapping[str, str] = {
-    "webhooks": _WEBHOOKS_REASON,
-    "webhooks.chaos": "no webhook delivery exists to fault; see webhooks",
-}
-LIGHTSPEED_K_NOT_SUPPORTED_ROLES: Mapping[str, str] = {"webhooks": _WEBHOOKS_REASON}
+LIGHTSPEED_K_NOT_SUPPORTED: Mapping[str, str] = {}
+LIGHTSPEED_K_NOT_SUPPORTED_ROLES: Mapping[str, str] = {}
 
 LIGHTSPEED_K_NOT_MODELED: Mapping[str, str] = {
     "v2-oidc": "V2 authentication (OpenID Connect at auth.lsk-prod.app, the URLs source.json's securitySchemes "
@@ -55,8 +61,25 @@ LIGHTSPEED_K_NOT_MODELED: Mapping[str, str] = {
     "account-profile-pricing": "accountProfile is accepted and ignored: one price per item, whatever the profile.",
     "per-token-location-binding": "One unit is one merchant account: every token sees every seeded business.",
     "rate-limits": "K-Series documents no rate limit; nothing throttles.",
-    "error-envelope-timestamp-path": "apePaymentBadRequestError's timestamp and path are omitted: C10 compares the "
-    "two bindings' bytes, which a wall-clock instant never agrees on, and the shaper never sees the path.",
+    "error-envelope-timestamp-path": "apePaymentBadRequestError's timestamp and path are omitted, and so is the "
+    "to-go and webhook 400s' errors[]: C10 compares the two bindings' bytes, which a wall-clock instant never "
+    "agrees on, and the shaper never sees the path.",
+    "order-lifecycle-source": "No POS: after SUCCESS an order's READY_FOR_PICKUP, CANCELLED, IN_DELIVERY, CLOSED or "
+    "ABANDONED is driven with POST /__unit/state/update on collection orders, and each change is delivered.",
+    "account-snapshot": "provideAccount, expandTransactions and expandPayments are stored, echoed and reset; no "
+    "notification carries the account object.",
+    "order-delivered-event": "apeEventResource lists order: DELIVERED as subscribable; its meaning is not documented "
+    "and it is never emitted.",
+    "subscribe-to-filtering": "subscribeTo is stored and echoed; every order status change is delivered whatever it holds.",
+    "payment-item-order-api-notifications": "Only order notifications are delivered; payment, item and order_api "
+    "resources are accepted in subscribeTo and never emitted.",
+    "webhook-business-locations": "The three /business-locations webhook operations, needed only for item and "
+    "order_api notifications, are not served.",
+    "local-orders": "apeLocalOrder (dine-in) is not served.",
+    "scheduled-dispatch": "scheduledTimeForOrderAsIso8601 is validated and stored; the order still reaches the POS at once.",
+    "pos-delivery-timeout": "maxTimeToAttemptOrderDeliverToPos is validated (60000 minimum) and never elapses.",
+    "second-confirmation": "The tutorial's two confirmation webhooks exist only as screenshots; one notification is "
+    "sent per status change.",
     "prior-access-token-revocation": "A refresh leaves the previous access token valid until its own expiry: "
     "nothing on the V1 pages documents revoking it (D-010).",
 }

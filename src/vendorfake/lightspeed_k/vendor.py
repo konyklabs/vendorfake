@@ -1,4 +1,4 @@
-"""The lightspeed-k vendor definition: Lightspeed Restaurant K-Series, V1 authentication, slice 1 of D-016.
+"""The lightspeed-k vendor definition: Lightspeed Restaurant K-Series on V1 authentication (D-016).
 One instance per unit (``VENDOR`` is minted per access); ``hydrate`` re-resolves the config and reseeds ids."""
 
 from __future__ import annotations
@@ -29,10 +29,15 @@ from vendorfake.lightspeed_k.capabilities import (
 )
 from vendorfake.lightspeed_k.config import LightspeedKConfig, resolve_lightspeed_k_config
 from vendorfake.lightspeed_k.errors import LightspeedKErrorShaper
+from vendorfake.lightspeed_k.events import LightspeedKEventMapper
 from vendorfake.lightspeed_k.ids import LightspeedKIds
+from vendorfake.lightspeed_k.retry import lightspeed_k_retry_defaults
 from vendorfake.lightspeed_k.seed.hydrate import hydrate_lightspeed_k
+from vendorfake.lightspeed_k.signer import LightspeedKBasicSigner
 from vendorfake.lightspeed_k.surface.oauth import oauth_routes
 from vendorfake.lightspeed_k.surface.order_and_pay import order_and_pay_routes
+from vendorfake.lightspeed_k.surface.to_go import to_go_routes
+from vendorfake.lightspeed_k.surface.webhooks import webhook_routes
 
 __all__ = ["LIGHTSPEED_K_ROLES", "VENDOR_NAME", "LightspeedKVendor", "create_lightspeed_k_vendor"]
 
@@ -42,7 +47,7 @@ VENDOR_NAME = "lightspeed-k"
 LIGHTSPEED_K_ROLES: Mapping[str, str | None] = {
     "auth": "auth",
     "orders": "order_and_pay",
-    "webhooks": None,
+    "webhooks": "webhooks",
     "chaos": "chaos",
 }
 _VOLATILE_FIELDS: tuple[str, ...] = ("expires_at_ms", "created_at_ms", "used_at_ms")
@@ -52,7 +57,7 @@ _OPAQUE_FIELDS: tuple[str, ...] = ("document",)
 class LightspeedKVendor:
     """One lightspeed-k vendor, for one unit. Satisfies ``VendorDefinition``."""
 
-    __slots__ = ("_auth", "_base_config", "_config", "_errors", "_ids", "_routes")
+    __slots__ = ("_auth", "_base_config", "_config", "_errors", "_events", "_ids", "_routes", "_signer")
 
     def __init__(self, *, config: LightspeedKConfig | None = None, seed: int = 1) -> None:
         self._base_config = LightspeedKConfig() if config is None else config
@@ -60,6 +65,8 @@ class LightspeedKVendor:
         self._ids = LightspeedKIds(seed)
         self._errors = LightspeedKErrorShaper(sidecar=self._config.error_sidecar)
         self._auth = LightspeedKAuth(self)
+        self._signer = LightspeedKBasicSigner()
+        self._events = LightspeedKEventMapper()
         self._routes: tuple[Route, ...] | None = None
 
     @property
@@ -101,7 +108,7 @@ class LightspeedKVendor:
     @property
     def routes(self) -> Sequence[Route]:
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_and_pay_routes(self)
+            self._routes = oauth_routes(self) + order_and_pay_routes(self) + to_go_routes(self) + webhook_routes()
         return self._routes
 
     @property
@@ -114,11 +121,11 @@ class LightspeedKVendor:
 
     @property
     def signer(self) -> Signer | None:
-        return None
+        return self._signer
 
     @property
     def events(self) -> EventMapper | None:
-        return None
+        return self._events
 
     @property
     def magic(self) -> MagicTriggerSpec | None:
@@ -130,7 +137,7 @@ class LightspeedKVendor:
 
     @property
     def retry_defaults(self) -> ProfileDocument:
-        return ProfileDocument()
+        return lightspeed_k_retry_defaults()
 
     @property
     def volatile_fields(self) -> Sequence[str]:

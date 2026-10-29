@@ -22,6 +22,7 @@ class LightspeedKCollections:
     auth_codes: str = "auth_codes"
     tokens: str = "tokens"
     refresh_tokens: str = "refresh_tokens"
+    orders: str = "orders"
 
 
 COL = LightspeedKCollections()
