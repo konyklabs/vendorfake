@@ -431,6 +431,21 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `tests/unit/test_docs_pins.py` holds it to `__version__`
   (konyklabs/roadmap#180).
 
+## [0.9.0](https://github.com/konyklabs/vendorfake/compare/v0.8.0...v0.9.0) (2026-10-29)
+
+
+### Features
+
+* **conformance:** a vendor may declare a capability role unsupported, with a reason (konyklabs/roadmap[#139](https://github.com/konyklabs/vendorfake/issues/139)) ([169671c](https://github.com/konyklabs/vendorfake/commit/169671c63d90aa650fcfdd967fb0ca790284d051))
+* **examples:** compose consumer example pinned to a release archive, exercised by the self-test (konyklabs/roadmap[#180](https://github.com/konyklabs/vendorfake/issues/180)) ([573327e](https://github.com/konyklabs/vendorfake/commit/573327e2688f86632df15d89a0385f4970d29c5d))
+* **fidelity:** OpenAPI 3.1 dialect, */* bodies looked up as JSON, hyphen-safe target anchors (konyklabs/roadmap[#179](https://github.com/konyklabs/vendorfake/issues/179)) ([37e1169](https://github.com/konyklabs/vendorfake/commit/37e1169fb0eedf8aab6b0569773cc4aeb988b59a))
+* **lightspeed-k:** V1 token, authorize stand-in, businesses, menu list, menu V2 (konyklabs/roadmap[#179](https://github.com/konyklabs/vendorfake/issues/179)) ([7e42801](https://github.com/konyklabs/vendorfake/commit/7e428017d4b469f55cc0920d36158acd3ec6f8c7))
+
+
+### Bug Fixes
+
+* **fidelity:** pin consistency judges the cut, not the source bytes; a byte-only upstream move is a re-pin chore (konyklabs/roadmap[#178](https://github.com/konyklabs/vendorfake/issues/178)) ([c5966d4](https://github.com/konyklabs/vendorfake/commit/c5966d4c985d73dae1abc657ed99423334d4926e))
+
 ## [0.8.0](https://github.com/konyklabs/vendorfake/compare/v0.7.0...v0.8.0) (2026-10-29)
 
 

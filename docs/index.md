@@ -44,14 +44,14 @@ decided, the wire says so — see
 ## Sixty seconds to a first request
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.8.0"   # [serve] for `vendorfake serve`; in-process tests need no extra; x-release-please-version
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.9.0"   # [serve] for `vendorfake serve`; in-process tests need no extra; x-release-please-version
 vendorfake vendors                       # -> clover, lightspeed, lightspeed-k, square, toast
 vendorfake serve --vendor square         # http://127.0.0.1:8080
 ```
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.8.0"}  # x-release-please-version
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.9.0"}  # x-release-please-version
 ```
 
 The full walkthrough, including the container and the pytest fixtures, is
