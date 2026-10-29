@@ -1,6 +1,6 @@
 {
-  "cut_sha256": "9e84f6ed7c2f2223341c901baeba8e0c47a19f4bf3a79cb83d44918e5ed2774b",
-  "extract_sha256": "311822d10857c2475886ca63922f4b3415d6753569965851f5703f122d00adea",
+  "cut_sha256": "8359d67cc93736ae50a0dd031fe0cf843f3bd4877165f8f6d2c6076c4b1a8deb",
+  "extract_sha256": "16d9e5b71695bdae91904838422208af595c4831c47baa7b34eaac3514042b82",
   "modeled": [
     "DELETE /o/wh/1/webhook/{endpointId}",
     "GET /o/op/1/menu/list",
@@ -11,6 +11,7 @@
     "POST /o/op/1/order/toGo",
     "POST /o/wh/1/webhook",
     "POST /oauth/token",
+    "POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown",
     "PUT /o/wh/1/webhook"
   ],
   "operations": {
@@ -21,6 +22,7 @@
     "GET /o/wh/1/webhook/{endpointId}": "a7565cf96374d9c6ec7a025cd2d27b5088db633b0223fb8fe3f835856bcc28c9",
     "POST /o/op/1/order/toGo": "5b9cbdd20d610b2f7352650a8b7f2774643568731220b648c3770143609d7dd4",
     "POST /o/wh/1/webhook": "2ee0ba30503de3ccb19fb1b926ca14684cd3f9c2e29e0ae769610d079b16eb93",
+    "POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown": "23decd07c4da85bbf3e0c8a442ded69d4abdb0911a0a68983944579ca560ddec",
     "PUT /o/wh/1/webhook": "87e9c382a4433dd16c7621a2a9ec4a480c21ce889ff9bef98bdbc65146257b6b"
   },
   "schema": 1,
