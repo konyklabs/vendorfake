@@ -80,3 +80,11 @@ The image runs as a non-root user, listens on 8080, and carries a
 vendor set it refuses and lists what it found — it never guesses.
 `tools/verify_image_build.sh` is the build's own proof: it builds, serves each
 vendor, waits for the healthcheck, and fails if the Dockerfile names a vendor.
+
+A consumer that cannot clone this repository — a machine with no git access,
+no registry login and no token — installs from the release's source archive
+instead: [`examples/compose-consumer`](https://github.com/konyklabs/vendorfake/tree/main/examples/compose-consumer)
+is a Dockerfile that does `pip install "vendorfake[serve] @ https://github.com/konyklabs/vendorfake/archive/<tag>.tar.gz"`
+behind one `ARG VENDORFAKE_REF`, and a compose file with one Clover service
+on the `no-faults` profile, the health check above, and its port on
+loopback. `tools/verify_compose_example.sh` builds it in the self-test.
