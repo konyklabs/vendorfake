@@ -1,6 +1,6 @@
 {
   "cut_sha256": "8359d67cc93736ae50a0dd031fe0cf843f3bd4877165f8f6d2c6076c4b1a8deb",
-  "extract_sha256": "16d9e5b71695bdae91904838422208af595c4831c47baa7b34eaac3514042b82",
+  "extract_sha256": "3f03abef11027568cc1d73b68a568817170b8061b9e1968e7e7cc46e40b93696",
   "modeled": [
     "DELETE /o/wh/1/webhook/{endpointId}",
     "GET /o/op/1/menu/list",
@@ -30,7 +30,7 @@
     {
       "bytes": 956555,
       "fetched": "2026-10-29",
-      "sha256": "583a58b1402083674c38dd42254353dddc64d9a0abaa7cae45e11005918cfa38",
+      "sha256": "245a91f604b3f71f90409be186e84ea94b024fe2637fe82a1f952880c1ba0c83",
       "url": "https://api-docs.lsk.lightspeed.app/source.json",
       "version": "1.0.0"
     }
