@@ -15,7 +15,7 @@ from tests.unit.lightspeed_k.conftest import VIRTUAL
 from tests.unit.lightspeed_k.harness import LEDGER, LOCATION, SURFACE, Harness, harness, tax_breakdown_path
 from vendorfake.lightspeed_k.seed import constants as c
 from vendorfake.lightspeed_k.surface.order_and_pay import menu_item
-from vendorfake.lightspeed_k.surface.tax_breakdown import price, price_line, rate_string
+from vendorfake.lightspeed_k.surface.tax_breakdown import Pricing, price, price_line, rate_string
 
 PATH = tax_breakdown_path(LOCATION)
 ROUTE = "POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown"
@@ -129,6 +129,23 @@ def test_price_of_nothing_is_empty_arrays_and_zeros() -> None:
     assert price([]) == EMPTY
 
 
+# 1e300 overflows one line's cents; 7e15 of UNITK-001 fits as a line (8.75e18) but its gross (9.625e18) does not.
+OVERFLOWING_LINE = Decimal("1e300")
+OVERFLOWING_TOTAL = Decimal("7e15")
+
+
+def test_a_line_beyond_int64_cents_overflows_in_price_line() -> None:
+    with pytest.raises(OverflowError, match="line amount"):
+        price_line(12.5, OVERFLOWING_LINE, [10.0], False)
+
+
+def test_a_gross_beyond_int64_cents_overflows_in_price_though_its_line_fits() -> None:
+    assert price_line(12.5, OVERFLOWING_TOTAL, [10.0], False)[2] >= 2**63
+    line = Pricing("UNITK-001", OVERFLOWING_TOTAL, 12.5, (10.0,), ("10% VAT",), False)
+    with pytest.raises(OverflowError, match="order total"):
+        price([line])
+
+
 # --- the priced body -------------------------------------------------------------------------------------------------
 
 
@@ -223,9 +240,26 @@ def test_a_missing_sku_is_missing_field(h: Harness) -> None:
 
 
 @pytest.mark.parametrize(
+    ("payload", "field"),
+    [
+        (items({"sku": "U" * 26}), "items.0.sku"),
+        (items({"sku": "UNITK-001", "subItems": [{"sku": "U" * 26}]}), "items.0.subItems.0.sku"),
+    ],
+)
+def test_a_sku_over_25_characters_is_refused_by_validation(h: Harness, payload: dict[str, Any], field: str) -> None:
+    body = refused(h.post(PATH, payload), 400, "invalid_value")
+    assert [(e["field"], e["type"]) for e in body["unit_error"]["errors"]] == [(field, "string_too_long")]
+    assert "rejectedValue" not in body["apiSubExceptions"][0]
+
+
+def test_a_sku_of_25_characters_passes_validation_and_reaches_the_menu(h: Harness) -> None:
+    body = refused(h.post(PATH, items({"sku": "U" * 25})), 400, "invalid_value")
+    assert body["apiSubExceptions"][0]["rejectedValue"] == "U" * 25
+
+
+@pytest.mark.parametrize(
     "line",
     [
-        {"sku": "U" * 26},
         {"sku": "UNITK-001", "quantity": "2"},
         {"sku": "UNITK-001", "quantity": True},
         {"sku": "UNITK-001", "quantity": 0},
@@ -258,8 +292,9 @@ def test_an_unknown_sub_item_sku_names_its_path(h: Harness) -> None:
     assert body["apiSubExceptions"][0]["field"] == "items.0.subItems.0.sku"
 
 
-def test_a_total_beyond_int64_cents_is_invalid_value(h: Harness) -> None:
-    body = refused(h.post(PATH, items({"sku": "UNITK-001", "quantity": 1e300})), 400, "invalid_value")
+@pytest.mark.parametrize("quantity", [float(OVERFLOWING_LINE), float(OVERFLOWING_TOTAL)], ids=["line", "total"])
+def test_a_line_or_total_beyond_int64_cents_is_invalid_value(h: Harness, quantity: float) -> None:
+    body = refused(h.post(PATH, items({"sku": "UNITK-001", "quantity": quantity})), 400, "invalid_value")
     assert body["unit_error"]["field"] == "items"
 
 
