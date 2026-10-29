@@ -26,7 +26,8 @@ LIGHTSPEED_K_CAPABILITIES: tuple[CapabilityDecl, ...] = (
         name="order_and_pay",
         summary=(
             "Order and Pay under the orders-api scope: the businesses and locations the token sees, a "
-            "location's menus, one menu in its V2 shape, and the to-go order write."
+            "location's menus, one menu in its V2 shape, the to-go order write, and the tax breakdown of a proposed "
+            "order priced from the seeded menu."
         ),
     ),
     CapabilityDecl(
@@ -54,11 +55,18 @@ LIGHTSPEED_K_NOT_SUPPORTED_ROLES: Mapping[str, str] = {}
 
 LIGHTSPEED_K_NOT_MODELED: Mapping[str, str] = {
     "v2-oidc": "V2 authentication (OpenID Connect at auth.lsk-prod.app, the URLs source.json's securitySchemes "
-    "names) is D-016 slice 3; a devp-v2 client id is refused with reason v2_client_id.",
-    "token-exchange": "The V1-to-V2 token-exchange grant is slice 3.",
-    "userinfo": "GET /oauth/userinfo is slice 3.",
+    "names) is deferred until a consumer asks (konyklabs/roadmap#184); a devp-v2 client id is refused with reason "
+    "v2_client_id.",
+    "token-exchange": "The V1-to-V2 token-exchange grant is deferred until a consumer asks (konyklabs/roadmap#184).",
+    "userinfo": "GET /oauth/userinfo is deferred until a consumer asks (konyklabs/roadmap#184).",
     "menu-v1-load": "GET /o/op/1/menu/load/{menuId}, deprecated 2026-05-15 (changes, #dbf0c552), is not served.",
-    "account-profile-pricing": "accountProfile is accepted and ignored: one price per item, whatever the profile.",
+    "account-profile-pricing": "accountProfile on the menu load and accountProfileCode on the tax breakdown are "
+    "accepted and ignored: one price per item, whatever the profile.",
+    "tax-code-name": "The seeded menu carries no tax code or tax name, so taxLines omit taxCode and taxName.",
+    "conditional-tax-rules": "conditionalTaxRules is false on the seeded menu and no rule changes a rate; the "
+    "breakdown reads taxes[].percentage and taxIncludedInPrice only.",
+    "modifier-pricing": "subItems on the tax breakdown are priced as menu items at their own productPrice; "
+    "menuModifierGroups are not read and the to-go order's modifiers are not priced.",
     "per-token-location-binding": "One unit is one merchant account: every token sees every seeded business.",
     "rate-limits": "K-Series documents no rate limit; nothing throttles.",
     "error-envelope-timestamp-path": "apePaymentBadRequestError's timestamp and path are omitted, and so is the "

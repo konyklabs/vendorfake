@@ -45,12 +45,14 @@ VENDORS: tuple[tuple[str, Callable[[], VendorDefinition], object], ...] = (
 
 
 def _upper_snake(operation_id: str) -> str:
-    """``ObtainToken`` -> ``OBTAIN_TOKEN``; ``MenusV3Get`` -> ``MENUS_V3_GET``.
+    """``ObtainToken`` -> ``OBTAIN_TOKEN``; ``MenusV3Get`` -> ``MENUS_V3_GET``;
+    ``tax-preview-apiTaxBreakdown`` -> ``TAX_PREVIEW_API_TAX_BREAKDOWN``.
 
     The same three-pass boundary insertion an ordinary camelCase-to-snake_case
     converter uses, run once more before upper-casing so a run of capitals
     (``V3``) does not get a boundary inserted before every letter in it.
     """
+    operation_id = operation_id.replace("-", "_")
     s1 = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", operation_id)
     s2 = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1)
     s3 = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", s2)

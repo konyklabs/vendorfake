@@ -36,6 +36,7 @@ from vendorfake.lightspeed_k.seed.hydrate import hydrate_lightspeed_k
 from vendorfake.lightspeed_k.signer import LightspeedKBasicSigner
 from vendorfake.lightspeed_k.surface.oauth import oauth_routes
 from vendorfake.lightspeed_k.surface.order_and_pay import order_and_pay_routes
+from vendorfake.lightspeed_k.surface.tax_breakdown import tax_breakdown_routes
 from vendorfake.lightspeed_k.surface.to_go import to_go_routes
 from vendorfake.lightspeed_k.surface.webhooks import webhook_routes
 
@@ -108,7 +109,13 @@ class LightspeedKVendor:
     @property
     def routes(self) -> Sequence[Route]:
         if self._routes is None:
-            self._routes = oauth_routes(self) + order_and_pay_routes(self) + to_go_routes(self) + webhook_routes()
+            self._routes = (
+                oauth_routes(self)
+                + order_and_pay_routes(self)
+                + to_go_routes(self)
+                + webhook_routes()
+                + tax_breakdown_routes(self)
+            )
         return self._routes
 
     @property

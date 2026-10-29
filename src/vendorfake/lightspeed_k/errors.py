@@ -16,9 +16,18 @@ from vendorfake.core.kernel.shaping import (
 from vendorfake.core.kernel.types import ShapedError, UnitContext, UnitError, UnitErrorKind, UnitRequest
 from vendorfake.core.util.json import compact
 
-__all__ = ["LIGHTSPEED_K_ERROR_TABLE", "OAUTH_ERROR_INFO_KEY", "LightspeedKErrorMapping", "LightspeedKErrorShaper"]
+__all__ = [
+    "ENVELOPE_INFO_KEY",
+    "LIGHTSPEED_K_ERROR_TABLE",
+    "OAUTH_ERROR_INFO_KEY",
+    "STATUS_STRING_ENVELOPE",
+    "LightspeedKErrorMapping",
+    "LightspeedKErrorShaper",
+]
 
 OAUTH_ERROR_INFO_KEY = "oauth_error"
+ENVELOPE_INFO_KEY = "envelope"
+STATUS_STRING_ENVELOPE = "status_string"
 _ENVELOPE_NOTE = (
     "Lightspeed documents only 'a 4xx error will be returned'; this body is the Order and Pay tag's one named "
     "error component (apePaymentBadRequestError) without timestamp and path, generalised to every refusal."
@@ -116,7 +125,8 @@ LIGHTSPEED_K_ERROR_TABLE: dict[UnitErrorKind, LightspeedKErrorMapping] = {
         "Service unavailable.",
         "503 and its body {status:'503', timestamp, message, apiSubExceptions} are declared on apeGetMenuByIdV2 "
         "(source.json, fetched 2026-10-29); this unit answers that envelope, without timestamp, for every 503. "
-        "The fault that produces it is this project's.",
+        "The fault that produces it is this project's. The tax breakdown's own 400 and 404 answer the same envelope, "
+        "with one apiSubExceptions entry naming the field.",
     ),
     UnitErrorKind.INTERNAL: _M(500, "judgment", "Internal Server Error", "Internal server error."),
 }
@@ -142,9 +152,11 @@ class LightspeedKErrorShaper:
             body = {"error": oauth, "error_description": detail}
             if oauth == "invalid_client":
                 headers["www-authenticate"] = "Basic"
-        elif err.kind is UnitErrorKind.UNAVAILABLE:
-            # DOCUMENTED source.json
-            body = {"status": str(mapping.status), "message": detail, "apiSubExceptions": []}
+        elif err.kind is UnitErrorKind.UNAVAILABLE or info.get(ENVELOPE_INFO_KEY) == STATUS_STRING_ENVELOPE:
+            # DOCUMENTED source.json: the */* envelope of apeGetMenuByIdV2's 503, tax-preview-apiTaxBreakdown's 400/403/404/503
+            keyed = info.get(ENVELOPE_INFO_KEY) == STATUS_STRING_ENVELOPE and err.field
+            subs = [compact({"field": err.field, "rejectedValue": info.get("rejected_value"), "message": detail})]
+            body = {"status": str(mapping.status), "message": detail, "apiSubExceptions": subs if keyed else []}
         elif err.kind is UnitErrorKind.CONFLICT:
             # DOCUMENTED source.json: apePlaceToGoOrder 409 under */*
             body = {"status": "fail", "msg": detail}

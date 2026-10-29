@@ -19,7 +19,7 @@ from pydantic import (
 )
 
 from vendorfake.core.kernel.reply import json_
-from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitContext, UnitError, UnitErrorKind
+from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
 from vendorfake.lightspeed_k.entities import COL
 from vendorfake.lightspeed_k.paths import APE_PLACE_TO_GO_ORDER
@@ -29,7 +29,7 @@ from vendorfake.lightspeed_k.seed.constants import (
     SEED_UNKNOWN_SKU,
 )
 from vendorfake.lightspeed_k.surface.common import BEARER_AUTH, SCOPE_ORDERS, LightspeedKDeps, validate_body
-from vendorfake.lightspeed_k.surface.order_and_pay import known_location
+from vendorfake.lightspeed_k.surface.order_and_pay import known_location, menu_item
 
 __all__ = ["CAPABILITY", "EXAMPLE_TO_GO", "LightspeedKToGoSurface", "ToGoOrderRequest", "to_go_routes"]
 
@@ -124,21 +124,6 @@ class ToGoOrderRequest(BaseModel):
         return value
 
 
-def _has_sku(entries: Any, sku: str) -> bool:
-    return isinstance(entries, list) and any(
-        isinstance(entry, dict)
-        and ((entry.get("@type") == "menuItem" and entry.get("sku") == sku) or _has_sku(entry.get("menuEntry"), sku))
-        for entry in entries
-    )
-
-
-def _sku_known(ctx: UnitContext, location: int, sku: str) -> bool:
-    return any(
-        location in row["business_location_ids"] and _has_sku(row["document"].get("menuEntryGroups"), sku)
-        for row in ctx.store.collection(COL.menus).all()
-    )
-
-
 class LightspeedKToGoSurface:
     """The to-go order write, bound to one vendor's id stream."""
 
@@ -181,7 +166,7 @@ class LightspeedKToGoSurface:
                 info={"envelope": "to_go_conflict"},
             )
         # JUDGMENT tutorial: a SKU on no menu at the location is a "problem with the order", refused by the POS
-        unknown = next((line.sku for line in order.items if not _sku_known(ctx, location, line.sku)), None)
+        unknown = next((line.sku for line in order.items if menu_item(ctx, location, line.sku) is None), None)
         ids = self._deps.ids
         row = {
             "id": ids.uuid(),
