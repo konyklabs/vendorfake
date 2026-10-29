@@ -24,7 +24,8 @@ STAND_IN = "Stand-in (the real consent screen is on api.lsk.lightspeed.app)"
 _V2_TOKEN_URL = "https://auth.lsk-prod.app/realms/k-series/protocol/openid-connect/token"
 _V2_DETAIL = (
     f"client_id starts with {V2_CLIENT_PREFIX!r}, a V2 API client; V2 authentication (OpenID Connect, "
-    f"{_V2_TOKEN_URL}) is not modelled yet (D-016 slice 3). This unit serves V1 authentication only."
+    f"{_V2_TOKEN_URL}) is deferred until a consumer asks (konyklabs/roadmap#184). "
+    "This unit serves V1 authentication only."
 )
 _GRANT_CODE = "authorization_code"
 _GRANT_REFRESH = "refresh_token"
