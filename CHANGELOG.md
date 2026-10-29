@@ -18,6 +18,22 @@ fidelity leg and review round that came with it.
   `subscribe(url, ["IM:*"], key)` works. `I:*` does not match `IM:`; subscribe to
   both. The internal `KEY_*` constants in `vendorfake.clover.events` are gone
   (konyklabs/roadmap#175).
+* **conformance:** a vendor may declare a capability role unsupported, with a
+  reason (D-010, konyklabs/roadmap#139). `VendorDefinition.not_supported_roles`
+  (role -> reason) is optional and read with `getattr`, so no third-party
+  vendor breaks; `roles` may map a role to `None` only when it is named there.
+  `GET /__unit/info` publishes `vendor.not_supported_roles` beside
+  `vendor.roles` (additive). C34 keeps its id, is renamed in `manifest.json`
+  ("...or is declared unsupported with a reason"), accepts a documented
+  absence, still refuses a missing or undeclared mapping and never stringifies
+  `None`. C35 requires `oauth-only`/`orders-only` only when the vendor supports
+  `auth`/`orders`, reporting the rest as excused by declaration -- this narrows
+  D-007's shared profile-name contract -- and refuses an excused name that is
+  shipped anyway. `create_unit(capabilities=[<role>])` (and every binding
+  through `resolve_capabilities`) refuses an unsupported role with its reason.
+  Unit construction refuses a core-gated role mapped to `None` that is not also
+  in `not_supported`. Mutant M59 pins the no-reason case. Every shipped vendor
+  is unchanged.
 * **lightspeed:** a fourth vendor -- **Lightspeed Retail X-Series, API
   2026-07** (konyklabs/roadmap#94). Thirty-seven routes on one retailer: the
   token endpoint (`POST /api/1.0/token`) with both documented grants, a

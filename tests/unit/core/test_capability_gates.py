@@ -170,3 +170,29 @@ def test_every_gate_site_names_something_that_actually_exists() -> None:
             assert hasattr(target, attribute), f"{gate.gated_at} stops resolving at {attribute!r}"
             target = getattr(target, attribute)
         assert callable(target), f"{gate.gated_at} resolves to something that is not callable"
+
+
+def test_a_null_core_gated_role_excused_in_not_supported_is_fine() -> None:
+    report = check_capability_declarations(
+        (CapabilityDecl(name="chaos", summary="x", kind="behavior"),),
+        {"webhooks": "r", "webhooks.chaos": "r"},
+        roles={"webhooks": None, "chaos": "chaos"},
+    )
+    assert report.ok, report.problems
+    assert report.unexcused_roles == ()
+
+
+def test_a_null_core_gated_role_missing_from_not_supported_is_a_disagreement() -> None:
+    report = check_capability_declarations(COMPLETE, {}, roles={"chaos": None})
+    assert report.unexcused_roles == ("chaos",)
+    assert len(report.problems) == 1
+    assert "not_supported" in report.problems[0]
+    assert "'chaos'" in report.problems[0]
+    with pytest.raises(UnitError) as caught:
+        assert_capability_declarations(COMPLETE, {}, roles={"chaos": None})
+    assert caught.value.kind is UnitErrorKind.INVALID_VALUE
+
+
+def test_a_null_role_that_is_not_core_gated_is_not_constructions_business() -> None:
+    report = check_capability_declarations(COMPLETE, {}, roles={"orders": None})
+    assert report.ok, report.problems

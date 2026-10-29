@@ -130,7 +130,7 @@ class VendorOverlay:
         errors: ErrorShaper | None = None,
         auth: AuthAdapter | None = None,
         hydrate: Callable[[VendorDefinition, UnitContext, object], None] | None = None,
-        roles: Mapping[str, str] | None = None,
+        roles: Mapping[str, str | None] | None = None,
     ) -> None:
         self._inner = inner
         self._auth = auth
@@ -209,8 +209,12 @@ class VendorOverlay:
         return self._inner.not_supported
 
     @property
-    def roles(self) -> Mapping[str, str]:
+    def roles(self) -> Mapping[str, str | None]:
         return self._roles
+
+    @property
+    def not_supported_roles(self) -> Mapping[str, str]:
+        return getattr(self._inner, "not_supported_roles", {})
 
     @property
     def volatile_fields(self) -> Sequence[str]:
