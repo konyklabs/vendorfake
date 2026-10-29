@@ -8,9 +8,13 @@ services:
   clover:
     build:
       context: .
+      # No value here on purpose: the list form passes VENDORFAKE_REF only
+      # when the shell sets it, so the Dockerfile's ARG default is the one
+      # pin. A `KEY: ${KEY:-vX.Y.Z}` default would always be passed and
+      # silently override a bump made in the Dockerfile.
+      # VENDORFAKE_REF=refs/heads/<branch> docker compose build --no-cache
       args:
-        # Overridable from the shell: VENDORFAKE_REF=refs/heads/<branch> docker compose build --no-cache
-        VENDORFAKE_REF: ${VENDORFAKE_REF:-v0.8.0}  # x-release-please-version
+        - VENDORFAKE_REF
     environment:
       VENDORFAKE_VENDOR: clover
       # Happy paths only. `full` (the default) and `chaos-demo` carry chaos

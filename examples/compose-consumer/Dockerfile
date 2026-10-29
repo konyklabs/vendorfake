@@ -5,7 +5,9 @@
 # no token can build it. One image, every installed vendor; VENDORFAKE_VENDOR
 # chooses at run time, the same as the repository's own Dockerfile.
 #
-# VENDORFAKE_REF is the one place to bump. A tag normally. To consume a
+# VENDORFAKE_REF is the one place to bump: compose.yaml lists the arg with
+# no value, so compose passes it only when the shell sets it and otherwise
+# this default governs. A tag normally. To consume a
 # branch before its tag, `refs/heads/<branch>` or a commit sha also resolve
 # (https://github.com/konyklabs/vendorfake/archive/<ref>.tar.gz); then
 # `vendorfake.__version__` reports the previous release (docs/start/install.md,

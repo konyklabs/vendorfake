@@ -379,8 +379,9 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   a loopback port. `tools/verify_compose_example.sh` builds it and asserts
   `/__unit/health` names the vendor, the profile and the pinned version;
   a `skippable_step` of the full self-test and a step of the `image` CI
-  job. The pins ride release-please's extra-files and
-  `tests/unit/test_docs_pins.py` holds them to `__version__`
+  job. The Dockerfile's ARG is the one pin (compose passes the arg only
+  when the shell sets it); it rides release-please's extra-files and
+  `tests/unit/test_docs_pins.py` holds it to `__version__`
   (konyklabs/roadmap#180).
 
 ## [0.8.0](https://github.com/konyklabs/vendorfake/compare/v0.7.0...v0.8.0) (2026-10-29)

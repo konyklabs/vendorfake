@@ -11,9 +11,13 @@ suite that only wants happy paths should run.
     # -> {"status":"ok","vendor":"clover","profile":"no-faults", ...}
     docker compose down -v
 
-`VENDORFAKE_REF` in the Dockerfile is the one place to bump; the release
-process keeps it on the current tag. `VENDORFAKE_REF=refs/heads/<branch>
-docker compose build --no-cache` consumes a branch before its tag.
+`ARG VENDORFAKE_REF` in the Dockerfile is the one place to bump; the
+release process keeps it on the current tag. `compose.yaml` lists the arg
+without a value, so compose passes it only when your shell sets it:
+`VENDORFAKE_REF=refs/heads/<branch> docker compose build --no-cache`
+consumes a branch before its tag. Keep it that way if you copy the file --
+a `VENDORFAKE_REF: ${VENDORFAKE_REF:-vX.Y.Z}` default would be passed on
+every build and override whatever the Dockerfile says.
 
 ## Your app service
 
