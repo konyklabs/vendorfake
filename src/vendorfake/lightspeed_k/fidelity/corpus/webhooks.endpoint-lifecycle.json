@@ -6,7 +6,7 @@
     "url": "https://api-docs.lsk.lightspeed.app/source.json",
     "fetched": "2026-10-29",
     "provenance": "documented",
-    "note": "apeCreateWebhookOo, apeUpdateWebhookOo ('if provideAccount, expandTransactions, or expandPayments an update leaves out go back to their defaults (the document says so on the update operation)'), apeGetWebhookOo (404 example 'endpoint ID not found for MISSING-ENDPOINT') and apeDeleteWebhookEndpoint (200 'Webhook deleted'). That username survives the update is this unit's judgment; the reset is the documented fact asserted."
+    "note": "apeCreateWebhookOo, apeUpdateWebhookOo (the three flags provideAccount, expandTransactions and expandPayments fall back to their defaults when an update leaves them out, as the document states on that operation), apeGetWebhookOo (404 example 'endpoint ID not found for MISSING-ENDPOINT') and apeDeleteWebhookEndpoint (200 'Webhook deleted'). That username survives the update is this unit's judgment; the reset is the documented fact asserted."
   },
   "routes": [
     "PUT /o/wh/1/webhook",
