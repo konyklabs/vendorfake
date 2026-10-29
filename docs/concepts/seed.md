@@ -378,9 +378,9 @@ on the [Lightspeed page](../vendors/lightspeed.md).
 | Read-only bearer | `unit-lightspeed-k-access-token-financial` — `financial-api` only, so every Order and Pay read answers 403 to it |
 | Tenant, and how requests name it | business `100000000001` ("Unit K Bistro"), location `100000000101` (`businessLocationId` in the menu-list **query**) |
 | Catalog | V2 menu `100000000201` ("Unit Lunch Menu"): group `Mains` with Unit Burger `UNITK-001` (12.50) and Unit Lemonade `UNITK-002` (4.00) |
-| Orders and payments | none in slice 1 |
-| Webhooks | none: the `webhooks` role is declared unsupported |
-| Event types | none |
+| Orders and payments | none seeded; `POST /o/op/1/order/toGo` stores each order in collection `orders`, the request body (`payment` included) under `request` |
+| Webhooks | none seeded; register an endpoint with `PUT /o/wh/1/webhook` (role `webhooks`, an `orders-api` bearer). `UNIT-K-EXAMPLE-ENDPOINT` is only the id the route examples name, never registered |
+| Event types | one per order status, `order:<STATUS>:*`: `SUCCESS`, `FAILURE`, `IN_DELIVERY`, `READY_FOR_PICKUP`, `CLOSED`, `ABANDONED`, `CANCELLED` |
 
 The ids are sequential twelve-digit integers by kind: `…0001` the business,
 `…0101` the location, `…0201` the menu, `…0301` the menu group. The surface,
