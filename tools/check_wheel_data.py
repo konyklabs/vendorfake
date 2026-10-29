@@ -107,6 +107,20 @@ REQUIRED = (
     "vendorfake/lightspeed/fidelity/corpus/webhooks.create.duplicate-409.json",
     "vendorfake/lightspeed/fidelity/corpus/webhooks.delivery.signature-header.json",
     "vendorfake/lightspeed/fidelity/corpus/webhooks.retry.schedule.json",
+    "vendorfake/lightspeed_k/profiles/full.json",
+    "vendorfake/lightspeed_k/profiles/no-chaos.json",
+    "vendorfake/lightspeed_k/profiles/no-faults.json",
+    "vendorfake/lightspeed_k/profiles/oauth-only.json",
+    "vendorfake/lightspeed_k/profiles/orders-only.json",
+    "vendorfake/lightspeed_k/profiles/chaos-demo.json",
+    "vendorfake/lightspeed_k/seed/default.seed.json",
+    "vendorfake/lightspeed_k/fidelity/declaration.json",
+    "vendorfake/lightspeed_k/fidelity/pin.json",
+    "vendorfake/lightspeed_k/fidelity/corpus/auth.bearer.missing.json",
+    "vendorfake/lightspeed_k/fidelity/corpus/auth.token.code-exchange-query.json",
+    "vendorfake/lightspeed_k/fidelity/corpus/auth.token.refresh-single-use.json",
+    "vendorfake/lightspeed_k/fidelity/corpus/auth.token.v2-client-refused.json",
+    "vendorfake/lightspeed_k/fidelity/corpus/orderandpay.first-journey.json",
 )
 
 

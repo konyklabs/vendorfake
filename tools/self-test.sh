@@ -88,6 +88,7 @@ TARGETS=(
   "clover=tests.conformance.harness:clover_target"
   "toast=tests.conformance.harness:toast_target"
   "lightspeed=tests.conformance.harness:lightspeed_target"
+  "lightspeed-k=tests.conformance.harness:lightspeed_k_target"
 )
 
 # Fidelity to the vendor (D-006), the targets. Only vendors with a fidelity
@@ -106,9 +107,11 @@ FIDELITY_TARGETS=(
   # Apache 2.0), so both steps run offline, on `--quick` as well as on a full
   # run, and neither depends on the vendor's site answering.
   "lightspeed=vendorfake.testing.fidelity:lightspeed_target"
+  "lightspeed-k=vendorfake.testing.fidelity:lightspeed_k_target"
 )
 FIDELITY_FETCH_TARGETS=(
   "toast=vendorfake.testing.fidelity:toast_target"
+  "lightspeed-k=vendorfake.testing.fidelity:lightspeed_k_target"
 )
 
 step "ruff check"        uv run ruff check .
