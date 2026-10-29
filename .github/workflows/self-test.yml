@@ -98,3 +98,6 @@ jobs:
 
       - name: Build and verify the image
         run: bash tools/verify_image_build.sh
+
+      - name: Build and verify the compose consumer example
+        run: bash tools/verify_compose_example.sh
