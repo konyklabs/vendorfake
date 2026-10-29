@@ -20,7 +20,7 @@ FROM python:3.13-slim-bookworm
 # so the block form is used; BuildKit was observed to strip a trailing
 # `# ...` from an ARG value, but nothing here relies on that.
 # x-release-please-start-version
-ARG VENDORFAKE_REF=v0.9.0
+ARG VENDORFAKE_REF=v0.10.0
 # x-release-please-end
 
 RUN groupadd --system --gid 10001 vendorfake \
