@@ -26,6 +26,7 @@ Every route clover's surface serves -- vendor-facing only. The `/__unit/*` contr
 | POST | `/v3/merchants/{mId}/items/{itemId}` | UpdateItem | inventory | Sparse update of an item (POST); flipping `available` is the sold-out path. |
 | GET | `/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers` | GetModifiers | inventory | The modifiers of one modifier group. |
 | GET | `/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}` | GetModifier | inventory | One modifier, with its `available` flag. |
+| POST | `/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers/{modId}` | UpdateModifier | inventory | Sparse update of a modifier (POST); `available` is its stock flag; id and modifierGroup in the body are ignored. |
 | GET | `/v3/merchants/{mId}` | GetMerchant | merchant | The merchant record: id, name, owner and address. |
 | GET | `/v3/merchants/{mId}/employees` | GetEmployees | merchant | Employees: id, name, nickname, role. |
 | GET | `/v3/merchants/{mId}/tenders` | GetTenders | merchant | Tenders: id, label, labelKey, enabled, visible, opensCashDrawer, editable. |

@@ -18,9 +18,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_every_key_list_derives_from_event_keys() -> None:
-    assert ALL_EVENT_KEYS == tuple(EVENT_KEYS.values())
+    assert tuple(EVENT_KEYS.values()) == ALL_EVENT_KEYS
     assert "IM" in ALL_EVENT_KEYS
-    assert CLOVER_EVENT_TYPES == tuple(f"{k}:{change}" for k in ALL_EVENT_KEYS for change in CHANGE_TYPES)
+    assert tuple(f"{k}:{change}" for k in ALL_EVENT_KEYS for change in CHANGE_TYPES) == CLOVER_EVENT_TYPES
     assert RegisterSubscriptionRequest.model_validate({"url": "https://x.test"}).eventKeys == ALL_EVENT_KEYS
 
 
@@ -45,5 +45,5 @@ def test_the_seed_page_row_names_every_key() -> None:
     start = text.index("### Clover")
     end = text.index("\n### ", start + 1)
     (row,) = [line for line in text[start:end].splitlines() if line.startswith("| Event types |")]
-    keys = row.split(" × ", 1)[0]  # the key list; the prose after it names `IM:` again
+    keys = row.split(" \u00d7 ", 1)[0]  # the key list; the prose after it names `IM:` again
     assert re.findall(r"`([A-Z]+):`", keys) == list(ALL_EVENT_KEYS), f"{page}: the Clover 'Event types' row: {row}"

@@ -5,9 +5,10 @@ CreateItem/GetItems/GetItem/UpdateItem ``/v3/merchants/{mId}/items[/{itemId}]``
 (https://docs.clover.com/dev/reference/inventorycreateitem,
 https://docs.clover.com/dev/reference/inventorygetitems,
 https://docs.clover.com/dev/reference/inventoryupdateitem); GetModifiers/
-GetModifier ``/v3/merchants/{mId}/modifier_groups/{modGroupId}/modifiers[/{modId}]``
+GetModifier/UpdateModifier ``...modifier_groups/{modGroupId}/modifiers[/{modId}]``
 (https://docs.clover.com/dev/reference/modifiergetmodifiersbygroup,
-https://docs.clover.com/dev/docs/manage-item-modifiers-availability).
+https://docs.clover.com/dev/docs/manage-item-modifiers-availability,
+https://docs.clover.com/dev/reference/modifierupdatemodifier).
 
 DOCUMENTED: create requires ``name`` and ``price``; update is ``POST`` and
 sparse; the list is the ``{"elements": [...]}`` envelope with ``limit``
@@ -17,8 +18,8 @@ item's groups as ``modifierGroups.elements[]``; a modifier carries
 ``price`` in cents.
 
 JUDGMENT, labelled at its site: the 404 bodies are this package's envelope;
-modifier groups and modifiers are read-only seed data here
-(``CLOVER_NOT_MODELED``).
+modifier groups are read-only seed data, and a modifier is updatable but
+not creatable or deletable (``CLOVER_NOT_MODELED``).
 """
 
 from __future__ import annotations
@@ -28,7 +29,13 @@ from typing import Any
 
 from vendorfake.clover.entities import COL, ItemEntity
 from vendorfake.clover.model.common import validate_body
-from vendorfake.clover.model.inventory import ITEM_EXPANDABLE, ItemCreateRequest, ItemPatchRequest, project_item
+from vendorfake.clover.model.inventory import (
+    ITEM_EXPANDABLE,
+    ItemCreateRequest,
+    ItemPatchRequest,
+    ModifierPatchRequest,
+    project_item,
+)
 from vendorfake.clover.surface.common import (
     CloverDeps,
     elements,
@@ -56,6 +63,9 @@ CAPABILITY = "inventory"
 
 _CANNOT_BE_CLEARED = frozenset({"name", "price"})
 """Required on create (documented), and therefore not clearable on update."""
+
+_MODIFIER_REQUIRED = frozenset({"name"})
+"""JUDGMENT: ``price`` and ``available`` fall back to their documented defaults; ``name`` has none."""
 
 
 class CloverInventorySurface:
@@ -130,6 +140,16 @@ class CloverInventorySurface:
                 scopes=("INVENTORY_R",),
                 operation_id="GetModifier",
                 summary="One modifier, with its `available` flag.",
+            ),
+            Route(
+                method="POST",
+                path=f"{base}/modifier_groups/{{modGroupId}}/modifiers/{{modId}}",
+                capability=CAPABILITY,
+                handler=self.update_modifier,
+                auth="bearer",
+                scopes=("INVENTORY_W",),
+                operation_id="UpdateModifier",
+                summary="Sparse update of a modifier (POST); `available` is its stock flag; id and modifierGroup in the body are ignored.",
             ),
         )
 
@@ -225,16 +245,33 @@ class CloverInventorySurface:
 
     def get_modifier(self, args: HandlerArgs) -> ReplyInit:
         require_merchant(args)
-        group_id = _require_group(args)
-        modifier_id = args.params["modId"]
-        stored = args.ctx.store.collection(COL.modifiers).get(modifier_id)
-        if stored is None or _group_of(stored) != group_id:
-            raise UnitError(
-                UnitErrorKind.NOT_FOUND,
-                detail=f"Modifier {modifier_id} was not found in modifier group {group_id}.",
-                field="modId",
-            )
-        return json_(_project_modifier(stored))
+        return json_(_project_modifier(_require_modifier(args)))
+
+    def update_modifier(self, args: HandlerArgs) -> ReplyInit:
+        """JUDGMENT: scope as UpdateItem (the page names none); answers the GET shape; a null resets a field."""
+        require_merchant(args)
+        request = validate_body(ModifierPatchRequest, args.body())
+        current = _require_modifier(args)
+        for name in request.model_fields_set:
+            if getattr(request, name) is None and name in _MODIFIER_REQUIRED:
+                raise UnitError(
+                    UnitErrorKind.INVALID_VALUE,
+                    detail=f"{name} cannot be cleared; a modifier keeps its {name}.",
+                    field=name,
+                )
+
+        def mutate(draft: Entity) -> None:
+            for name in request.model_fields_set:
+                value = getattr(request, name)
+                if value is None:
+                    draft.pop(name, None)
+                else:
+                    draft[name] = value
+
+        updated = args.ctx.store.collection(COL.modifiers).update(
+            str(current["id"]), mutate, meta={"operation_id": "UpdateModifier"}
+        )
+        return json_(_project_modifier(updated))
 
     # -- shared --------------------------------------------------------------
 
@@ -282,6 +319,19 @@ def _require_group(args: HandlerArgs) -> str:
     return group_id
 
 
+def _require_modifier(args: HandlerArgs) -> Entity:
+    group_id = _require_group(args)
+    modifier_id = args.params["modId"]
+    stored = args.ctx.store.collection(COL.modifiers).get(modifier_id)
+    if stored is None or _group_of(stored) != group_id:
+        raise UnitError(
+            UnitErrorKind.NOT_FOUND,
+            detail=f"Modifier {modifier_id} was not found in modifier group {group_id}.",
+            field="modId",
+        )
+    return stored
+
+
 def _group_of(modifier: Mapping[str, Any]) -> str | None:
     group = modifier.get("modifierGroup")
     return str(group.get("id")) if isinstance(group, Mapping) and group.get("id") is not None else None
@@ -295,7 +345,7 @@ def _project_modifier(entity: Mapping[str, Any]) -> dict[str, Any]:
             "id": entity.get("id"),
             "name": entity.get("name"),
             "alternateName": entity.get("alternateName"),
-            "price": entity.get("price"),
+            "price": entity.get("price", 0),
             "available": entity.get("available", True),
             "modifierGroup": entity.get("modifierGroup"),
         }
