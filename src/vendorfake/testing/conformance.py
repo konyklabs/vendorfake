@@ -25,11 +25,14 @@ __all__ = [
     "CLOVER_INAPPLICABLE",
     "LIGHTSPEED_EXPECTED_SKIPS",
     "LIGHTSPEED_INAPPLICABLE",
+    "LIGHTSPEED_K_EXPECTED_SKIPS",
+    "LIGHTSPEED_K_INAPPLICABLE",
     "OUT_OF_PROCESS_TRANSPORT",
     "PROFILES",
     "TOAST_EXPECTED_SKIPS",
     "TOAST_INAPPLICABLE",
     "clover_target",
+    "lightspeed_k_target",
     "lightspeed_target",
     "open_with_seed_overlay",
     "square_target",
@@ -142,6 +145,52 @@ LIGHTSPEED_INAPPLICABLE: Mapping[str, str] = {
     "C19": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="replay"),
     "C24": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
     "C25": _LIGHTSPEED_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
+}
+
+
+LIGHTSPEED_K_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
+    "C08": ("no-faults",),
+    "C17": ("oauth-only",),
+    "C27": ("no-faults",),
+    "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
+    "C37": ("no-faults",),
+}
+
+_LIGHTSPEED_K_NO_WEBHOOKS = (
+    "lightspeed-k declares role webhooks unsupported (slice 1 of D-016), so no profile enables the webhooks "
+    "capability and the {contract} contract can never be asked of this vendor until slice 2."
+)
+_LIGHTSPEED_K_NO_MAGIC = (
+    "K-Series documents no in-band fault trigger and slice 1's only mutating route is the token endpoint, so the "
+    "vendor declares magic=None and the {contract} contract can never be asked; faults are armed through "
+    "/__unit/chaos."
+)
+_LIGHTSPEED_K_NO_IDEMPOTENCY_KEY = (
+    "none of slice 1's operations documents an idempotency key, so no lightspeed-k route carries an "
+    "IdempotencySpec and the {contract} contract can never be asked of this vendor."
+)
+
+LIGHTSPEED_K_INAPPLICABLE: Mapping[str, str] = {
+    "C07": (
+        "slice 1 serves no mutating route that publishes an example body: the token POST mints from a single-use "
+        "code or refresh token, which no published example can carry twice. Slice 2's to-go order makes the "
+        "journal contract askable and removes this entry."
+    ),
+    "C09": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery"),
+    "C12": _LIGHTSPEED_K_NO_MAGIC.format(contract="one-shot trigger"),
+    "C13": "lightspeed-k declares no state machine: nothing in slice 1 has a lifecycle.",
+    "C14": _LIGHTSPEED_K_NO_MAGIC.format(contract="in-band trigger"),
+    "C16": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="signature"),
+    "C18": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="retry"),
+    "C19": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="replay"),
+    "C21": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery-fault"),
+    "C24": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="key-scope"),
+    "C25": _LIGHTSPEED_K_NO_IDEMPOTENCY_KEY.format(contract="mismatch"),
+    "C26": (
+        "every slice-1 list answers a bare, unpaged array (apeLookupBusinesses, apeLoadMenus); no route declares "
+        "a PaginationSpec."
+    ),
+    "C29": _LIGHTSPEED_K_NO_WEBHOOKS.format(contract="delivery-scope"),
 }
 
 
@@ -261,6 +310,15 @@ def lightspeed_target() -> ConformanceTarget:
         "lightspeed",
         expected_skips=LIGHTSPEED_EXPECTED_SKIPS,
         inapplicable=LIGHTSPEED_INAPPLICABLE,
+    )
+
+
+def lightspeed_k_target() -> ConformanceTarget:
+    """No ``path_params``: slice 1 has no tenant path segment; the ``{menuId}`` probe answers 400."""
+    return target(
+        "lightspeed-k",
+        expected_skips=LIGHTSPEED_K_EXPECTED_SKIPS,
+        inapplicable=LIGHTSPEED_K_INAPPLICABLE,
     )
 
 

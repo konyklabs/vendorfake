@@ -226,3 +226,10 @@ def test_a_refresh_rejected_rule_answers_envelope_a_and_leaves_the_token_usable(
     assert faulted.json()["error"] == "Unauthorized"
     assert faulted.headers["vendorfake-fault"] == "refresh_rejected"
     assert h.refresh().status == 200
+
+
+def test_a_malformed_json_body_is_invalid_json_before_client_auth(h: Harness) -> None:
+    res = h.api.post(TOKEN, "{not json", headers={"content-type": "application/json"})
+    assert res.status == 400
+    assert res.json()["error"] == "invalid_request"
+    assert res.json()["unit_error"]["kind"] == "invalid_json"

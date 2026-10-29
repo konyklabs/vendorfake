@@ -163,7 +163,13 @@ class _Ledger:
     @property
     def unobserved(self) -> tuple[str, ...]:
         """Run-bound contracts every case of which skipped: the run never looked."""
-        return tuple(sorted(cid for cid in self.run_bound if self.outcomes.get(cid) == {Outcome.SKIP}))
+        return tuple(
+            sorted(
+                cid
+                for cid in self.run_bound
+                if self.outcomes.get(cid) == {Outcome.SKIP} and cid not in self.inapplicable
+            )
+        )
 
     def problems(self) -> tuple[str, ...]:
         if not (self.armed and self.complete):

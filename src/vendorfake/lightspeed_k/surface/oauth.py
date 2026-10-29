@@ -150,8 +150,8 @@ class LightspeedKOAuthSurface:
         return redirect(_with_query(redirect_uri, {"code": code, "state": state}))
 
     def token(self, args: HandlerArgs) -> ReplyInit:
+        body = _body(args)
         client_id = self._client(args)
-        body = _readable_body(args)
         grant_type = args.query("grant_type") or _text(body.get("grant_type"))
         if not grant_type:
             raise _missing("grant_type")
@@ -309,11 +309,16 @@ def oauth_routes(deps: LightspeedKDeps) -> tuple[Route, ...]:
     return LightspeedKOAuthSurface(deps).routes()
 
 
-def _readable_body(args: HandlerArgs) -> Mapping[str, Any]:
+def _body(args: HandlerArgs) -> Mapping[str, Any]:
     try:
         return args.body()
-    except UnitError:
-        return {}
+    except UnitError as exc:
+        raise UnitError(
+            exc.kind,
+            detail=exc.detail,
+            field=exc.field,
+            info={"reason": "unreadable_body", OAUTH_ERROR_INFO_KEY: "invalid_request"},
+        ) from exc
 
 
 def _text(value: Any) -> str:
