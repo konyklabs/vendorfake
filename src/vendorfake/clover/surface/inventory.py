@@ -10,16 +10,18 @@ GetModifier/UpdateModifier ``...modifier_groups/{modGroupId}/modifiers[/{modId}]
 https://docs.clover.com/dev/docs/manage-item-modifiers-availability,
 https://docs.clover.com/dev/reference/modifierupdatemodifier).
 
-DOCUMENTED: create requires ``name`` and ``price``; update is ``POST`` and
-sparse; the list is the ``{"elements": [...]}`` envelope with ``limit``
+DOCUMENTED: create requires ``name`` and ``price``; an item update is
+``POST`` and sparse; a modifier update is ``POST`` and cannot change the
+modifier's group; the list is the ``{"elements": [...]}`` envelope with ``limit``
 (default 100, max 1000) and ``offset``; ``expand=modifierGroups`` shows an
 item's groups as ``modifierGroups.elements[]``; a modifier carries
 ``available`` ("True (default) -- the modifier stock is available") and
 ``price`` in cents.
 
 JUDGMENT, labelled at its site: the 404 bodies are this package's envelope;
-modifier groups are read-only seed data, and a modifier is updatable but
-not creatable or deletable (``CLOVER_NOT_MODELED``).
+a modifier update is sparse and refuses a negative ``price`` (its page states
+neither); modifier groups are read-only seed data, and a modifier is updatable
+but not creatable or deletable (``CLOVER_NOT_MODELED``).
 """
 
 from __future__ import annotations

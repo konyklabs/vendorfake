@@ -112,8 +112,10 @@ class ItemPatchRequest(BaseModel):
 
 
 class ModifierPatchRequest(BaseModel):
-    """Sparse update (https://docs.clover.com/dev/reference/modifierupdatemodifier). JUDGMENT:
-    ``id`` and ``modifierGroup`` are undeclared, so ignored -- the group is fixed once created."""
+    """DOCUMENTED: the group cannot change once created
+    (https://docs.clover.com/dev/reference/modifierupdatemodifier). JUDGMENT, as the page states
+    neither: the update is sparse (only the fields sent change) and ``price`` is ``ge=0``;
+    ``id`` and ``modifierGroup`` are undeclared, so ignored rather than refused."""
 
     model_config = _REQUEST
 
