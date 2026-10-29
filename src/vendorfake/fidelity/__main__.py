@@ -26,7 +26,8 @@ a test run, and ``pin --check`` is what fails on it. ``3`` is the named skip
 :mod:`vendorfake.fidelity.pin`'s third invariant): ``5`` when a source is
 ``GONE`` and ``4`` when one is ``UNREACHABLE`` and none is gone -- neither
 shares a number with the usage error (``2``) or the named skip (``3``).
-Either way nothing is written.
+Either way nothing is written. ``6`` is ``pin --check``'s and ``--offline``'s verdict for upstream bytes that moved
+while the cut did not, only under ``--fail-on-move``; without the flag that chore is ``0`` (konyklabs/roadmap#178).
 """
 
 from __future__ import annotations
@@ -64,6 +65,8 @@ RefreshFn = Callable[..., Any]
 """``refresh(anchor_dir, declaration, modeled, *, check, fetched)`` from
 ``vendorfake.fidelity.pin``; injectable so a test never touches the network."""
 
+_MOVED = "pin: upstream moved, cut unchanged{where} -- {n} source(s); a re-pin chore: run `vendorfake-fidelity pin`"
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vendorfake-fidelity")
@@ -82,13 +85,19 @@ def _parser() -> argparse.ArgumentParser:
     pin.add_argument(
         "--check",
         action="store_true",
-        help="write nothing; exit 1 if upstream or the extract changed, 5 if a source is gone (404/410), "
-        "4 if one is unreachable",
+        help="write nothing; exit 1 if the cut changed (a byte-only upstream move is 0, or 6 under --fail-on-move), "
+        "5 if a source is gone (404/410), 4 if one is unreachable",
     )
     pin.add_argument(
         "--offline",
         action="store_true",
         help="implies --check; no fetch -- only that the committed extract and pin agree with each other and the declaration",
+    )
+    pin.add_argument(
+        "--fail-on-move",
+        dest="fail_on_move",
+        action="store_true",
+        help="with --check or --offline: exit 6 when upstream bytes moved but the cut did not (a re-pin chore; 0 without this flag)",
     )
 
     fetch = sub.add_parser(
@@ -171,8 +180,8 @@ def _dispatch(
 
     if args.command == "pin":
         if args.offline:
-            return _pin_offline(target)
-        return _pin(target, check=bool(args.check), refresh=refresh)
+            return _pin_offline(target, fail_on_move=bool(args.fail_on_move))
+        return _pin(target, check=bool(args.check), refresh=refresh, fail_on_move=bool(args.fail_on_move))
     if args.command == "fetch":
         return _fetch(target, fetcher=fetcher)
     if args.command == "webhooks":
@@ -267,7 +276,7 @@ def _select(cases: Sequence[Case], ids: Sequence[str] | None) -> tuple[Case, ...
     return tuple(by_id[case_id] for case_id in ids)
 
 
-def _pin(target: FidelityTarget, *, check: bool, refresh: RefreshFn | None) -> int:
+def _pin(target: FidelityTarget, *, check: bool, refresh: RefreshFn | None, fail_on_move: bool) -> int:
     if refresh is None:
         from vendorfake.fidelity.pin import refresh as _refresh
 
@@ -303,14 +312,21 @@ def _pin(target: FidelityTarget, *, check: bool, refresh: RefreshFn | None) -> i
             f"nothing was compared for them{unwritten}"
         )
         return 4
+    moved = tuple(getattr(result, "moved", ()))
     if check:
-        print("pin: up to date" if not changed else "pin: CHANGED -- run `vendorfake-fidelity pin` and review the diff")
-        return 1 if changed else 0
-    print("pin: written" if changed else "pin: unchanged")
+        if changed:
+            print("pin: CHANGED -- run `vendorfake-fidelity pin` and review the diff")
+            return 1
+        if moved:
+            print(_MOVED.format(where="", n=len(moved)))
+            return 6 if fail_on_move else 0
+        print("pin: up to date")
+        return 0
+    print("pin: written" if changed or moved else "pin: unchanged")
     return 0
 
 
-def _pin_offline(target: FidelityTarget) -> int:
+def _pin_offline(target: FidelityTarget, *, fail_on_move: bool) -> int:
     from vendorfake.fidelity.pin import verify
 
     declaration: FidelityDeclaration = load_declaration(target.anchor)
@@ -318,12 +334,15 @@ def _pin_offline(target: FidelityTarget) -> int:
         raise Unavailable(f"{target.anchor}: no cached extract to verify the pin against offline; run fetch first")
     result = verify(Path(str(resources.files(target.anchor))), declaration)
     print(result.diff_summary)
-    print(
-        "pin: consistent (offline)"
-        if not result.changed
-        else "pin: INCONSISTENT -- run `vendorfake-fidelity pin` and review the diff"
-    )
-    return 1 if result.changed else 0
+    moved = tuple(getattr(result, "moved", ()))
+    if result.changed:
+        print("pin: INCONSISTENT -- run `vendorfake-fidelity pin` and review the diff")
+        return 1
+    if moved:
+        print(_MOVED.format(where=" (offline)", n=len(moved)))
+        return 6 if fail_on_move else 0
+    print("pin: consistent (offline)")
+    return 0
 
 
 def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None) -> int:

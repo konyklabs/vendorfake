@@ -19,11 +19,9 @@ import pytest
 from tests.unit.fidelity.test_extract import MODELED, SOURCE, URL, blob, synthetic
 from vendorfake.fidelity.cache import (
     CACHE_ENV_VAR,
-    DRIFT_FILE,
     cache_path,
     cache_root,
     cached_extract,
-    drift_rows,
     populate,
 )
 from vendorfake.fidelity.extract import cut_extract, render_json, sha256_hex
@@ -127,7 +125,7 @@ def test_miss_fetches_cuts_and_caches_and_writes_nothing_under_the_package(
     cached = cache / name / EXTRACT_FILE
     assert cached.is_file()
     assert sha256_hex(cached.read_bytes()) == read_pin(package / PIN_FILE).extract_sha256
-    assert not (cache / name / DRIFT_FILE).exists()
+    assert result.cut_matches is True
     assert err.getvalue() == ""
     # The package is untouched: the extract is nowhere under it.
     assert listing(package) == before
@@ -177,7 +175,7 @@ def test_a_cache_that_does_not_match_the_pin_is_recut(
 # ---------------------------------------------------------------------------
 
 
-def test_drift_still_cuts_from_the_fresh_bytes_writes_drift_and_says_so_on_stderr(
+def test_drift_still_cuts_from_the_fresh_bytes_and_says_so_on_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
 ) -> None:
     name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
@@ -204,11 +202,10 @@ def test_drift_still_cuts_from_the_fresh_bytes_writes_drift_and_says_so_on_stder
         "version": "2.3.4",
         "fetched": "2026-12-25",
     }
-    drift = json.loads((cache / name / DRIFT_FILE).read_text())
-    assert drift["rows"] == [
-        {"url": URL, "pinned_sha256": pinned_sha, "fetched_sha256": fresh_sha, "fetched_bytes": len(blob(moved))}
-    ]
-    assert [row.line for row in drift_rows(cache / name)] == [line]
+    assert [row.line for row in result.drift] == [line]
+    assert result.drift[0].pinned_sha256 == pinned_sha and result.drift[0].fetched_sha256 == fresh_sha
+    assert result.cut_matches is False and "the cut changed" in result.summary
+    assert sorted(p.name for p in (cache / name).iterdir()) == [EXTRACT_FILE]
     assert "UPSTREAM MOVED" in result.summary
     # Nothing under the package moved.
     assert not (tmp_path / "pkg" / name / EXTRACT_FILE).exists()
@@ -223,14 +220,13 @@ def test_drift_is_recut_on_every_call_until_repinned_and_settles_once_the_pin_mo
     moved["info"]["version"] = "2.4.0"
     fetcher = counting_fetcher(moved)
     populate(name, declaration_for(name), fetcher=fetcher, fetched="2026-12-25", stderr=io.StringIO())
-    populate(name, declaration_for(name), fetcher=fetcher, fetched="2026-12-25", stderr=io.StringIO())
+    result = populate(name, declaration_for(name), fetcher=fetcher, fetched="2026-12-25", stderr=io.StringIO())
     assert fetcher.calls == [URL, URL]
-    assert (cache / name / DRIFT_FILE).exists()
+    assert result.cut_matches is True and "cut unchanged -- a re-pin chore" in result.summary
     # Re-pin against the moved document: the drift note is settled and the next call is a hit.
     write_pin(tmp_path / "pkg" / name / PIN_FILE, pin_for(moved))
     result = populate(name, declaration_for(name), fetcher=fetcher, stderr=io.StringIO())
     assert result.hit is False and result.drift == ()
-    assert not (cache / name / DRIFT_FILE).exists()
     assert populate(name, declaration_for(name), fetcher=fetcher).hit is True
     assert fetcher.calls == [URL, URL, URL]
 
@@ -260,7 +256,15 @@ def test_matching_bytes_whose_cut_no_longer_digests_to_the_pin_is_reported_not_h
     result = populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()), stderr=err)
     assert result.drift == () and result.extract_differs is True
     assert "EXTRACT DIFFERS" in err.getvalue() and "re-run `vendorfake-fidelity pin`" in err.getvalue()
-    assert not (cache / name / DRIFT_FILE).exists()
+    assert result.cut_matches is None
+
+
+def test_a_pin_with_a_cut_and_matching_bytes_reports_cut_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
+) -> None:
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    result = populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()), stderr=io.StringIO())
+    assert result.cut_matches is True
 
 
 # ---------------------------------------------------------------------------
