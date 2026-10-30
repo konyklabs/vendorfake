@@ -31,7 +31,7 @@ Eleven routes and one delivery on one merchant account:
 | `GET /o/wh/1/webhook/{endpointId}` | `apeGetWebhookOo` | validated against `source.json` |
 | `DELETE /o/wh/1/webhook/{endpointId}` | `apeDeleteWebhookEndpoint` | validated against `source.json` |
 | `POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown` | `tax-preview-apiTaxBreakdown` | validated against `source.json` |
-| delivery: `POST <your url>` | `webhooks["apeOrder notification"]` | asserted in a unit test; the fidelity cut carries no `webhooks` entries yet |
+| delivery: `POST <your url>` | `webhooks["apeOrder notification"]` | validated against `source.json`: every delivery body a corpus case produces |
 
 ## Consumer calls
 
@@ -64,6 +64,21 @@ first fidelity run on a cold cache needs the network:
 python -m vendorfake.fidelity fetch  --target vendorfake.testing.fidelity:lightspeed_k_target
 python -m vendorfake.fidelity report --target vendorfake.testing.fidelity:lightspeed_k_target
 ```
+
+The declaration names the document's `apeOrder notification` webhooks entry,
+so the cut carries it and the report checks each order notification the corpus
+causes against it: the status-change body from the tutorial's to-go order and
+the refusal body from an order for an unknown SKU. On `full`, as run on
+2026-10-29:
+
+```
+delivery: webhooks["apeOrder notification"] validated: 2
+```
+
+The schema types the members and holds `status` to its enum; which members
+each body carries is asserted in `tests/unit/lightspeed_k/test_events.py`.
+The to-go case registers its endpoint without HTTP Basic, so the validated
+deliveries carry no `authorization` header.
 
 ## First journey
 

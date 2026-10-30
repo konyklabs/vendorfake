@@ -337,6 +337,7 @@ def populate(
         extension_map=declaration.extension_map,
         error_schema=declaration.error_schema,
         annotations=declaration.annotations,
+        webhooks=[hook.name for hook in declaration.webhooks],
     )
     drift: list[DriftRow] = []
     for row in document["x-vendorfake"]["sources"]:

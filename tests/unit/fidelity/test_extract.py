@@ -924,3 +924,141 @@ def test_an_annotation_whose_patterns_capture_nothing_is_refused_at_load() -> No
         Annotation.of({"name": "scopes", "select": "Requires: (.+)", "item": "`[^`]+`"})
     with pytest.raises(ValueError, match="not a regular expression"):
         Annotation.of({"name": "scopes", "select": "Requires: ([)"})
+
+
+# ---------------------------------------------------------------------------
+# Webhooks entries (konyklabs/roadmap#185): an OpenAPI 3.1 document's top-level
+# section of outbound deliveries, kept only for the names a declaration gives.
+# ---------------------------------------------------------------------------
+
+
+def webhooked_document() -> dict[str, Any]:
+    document = synthetic()
+    document["components"]["schemas"]["Notice"] = {
+        "type": "object",
+        "description": "prose",
+        "properties": {"reference": {"type": "string"}, "price": {"$ref": "#/components/schemas/Money"}},
+    }
+    document["webhooks"] = {
+        "widget changed": {
+            "summary": "prose",
+            "post": {
+                "operationId": "widgetChanged",
+                "summary": "prose",
+                "description": "prose",
+                "tags": ["Widgets"],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "allOf": [
+                                    {"$ref": "#/components/schemas/Notice"},
+                                    {
+                                        "type": "object",
+                                        "properties": {"state": {"$ref": "#/components/schemas/WidgetState"}},
+                                    },
+                                ]
+                            },
+                            "examples": {"one": {"value": {"state": "OPEN"}}},
+                        }
+                    },
+                },
+                "responses": {"200": {"description": "prose"}},
+            },
+        },
+        "widget removed": {
+            "post": {
+                "operationId": "widgetRemoved",
+                "requestBody": {
+                    "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Unreachable"}}}
+                },
+                "responses": {"200": {"description": "prose"}},
+            }
+        },
+    }
+    return document
+
+
+def test_declaring_no_webhooks_leaves_the_cut_byte_identical() -> None:
+    """A document that has a webhooks section, cut for a declaration naming none, is the cut it always was."""
+    without = render_json(cut_extract([(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02"))
+    with_empty = render_json(
+        cut_extract([(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02", webhooks=[])
+    )
+    assert without == with_empty
+    parsed = json.loads(without)
+    assert "webhooks" not in parsed
+    assert not {"webhooks_modeled", "webhooks_missing"} & set(parsed["x-vendorfake"])
+    # Same cut as the document with no webhooks section at all: only the source row's digest of the bytes differs.
+    plain = cut_extract([(SOURCE, blob(synthetic()))], MODELED, fetched="2026-09-02")
+    assert cut_digests(parsed) == cut_digests(plain)
+
+
+def test_a_named_webhooks_entry_is_cut_like_an_operation_with_the_schemas_it_reaches() -> None:
+    cut = cut_extract(
+        [(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02", webhooks=["widget changed"]
+    )
+    assert cut["webhooks"] == {
+        "widget changed": {
+            "post": {
+                "operationId": "widgetChanged",
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "allOf": [
+                                    {"$ref": "#/components/schemas/Notice"},
+                                    {
+                                        "type": "object",
+                                        "properties": {"state": {"$ref": "#/components/schemas/WidgetState"}},
+                                    },
+                                ]
+                            }
+                        }
+                    },
+                },
+                "responses": {"200": {"description": "200"}},
+            }
+        }
+    }
+    schemas = cut["components"]["schemas"]
+    assert schemas["Notice"] == {
+        "type": "object",
+        "properties": {"reference": {"type": "string"}, "price": {"$ref": "#/components/schemas/Money"}},
+    }
+    assert {"Money", "WidgetState"} <= set(schemas)
+    assert "Unreachable" not in schemas  # the unnamed entry's schema stays out
+    meta = cut["x-vendorfake"]
+    assert (meta["webhooks_modeled"], meta["webhooks_missing"]) == (["widget changed"], [])
+    assert {"summary", "tags", "examples"} <= set(meta["stripped"])
+    assert Extract(cut).webhook("widget changed") is not None
+    assert Extract(cut).webhook("widget removed") is None
+
+
+def test_a_webhooks_name_no_source_defines_is_listed_missing_rather_than_crashing() -> None:
+    cut = cut_extract([(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02", webhooks=["nope"])
+    assert cut["webhooks"] == {}
+    assert (cut["x-vendorfake"]["webhooks_modeled"], cut["x-vendorfake"]["webhooks_missing"]) == ([], ["nope"])
+    no_section = cut_extract([(SOURCE, blob(synthetic()))], MODELED, fetched="2026-09-02", webhooks=["nope"])
+    assert no_section["x-vendorfake"]["webhooks_missing"] == ["nope"]
+
+
+def test_a_kept_webhooks_entry_has_its_own_digest_and_a_schema_change_names_only_it() -> None:
+    def digests(document: dict[str, Any]) -> dict[str, str]:
+        cut = cut_extract([(SOURCE, blob(document))], MODELED, fetched="2026-09-02", webhooks=["widget changed"])
+        return cut_digests(cut)[1]
+
+    before = digests(webhooked_document())
+    assert "WEBHOOK widget changed" in before
+    assert "WEBHOOK widget removed" not in before
+    changed = webhooked_document()
+    changed["components"]["schemas"]["Notice"]["properties"]["reference"]["type"] = "integer"
+    after = digests(changed)
+    assert sorted(key for key in before if before[key] != after[key]) == ["WEBHOOK widget changed"]
+    # A schema the entry and an operation both reach moves both.
+    shared = webhooked_document()
+    shared["components"]["schemas"]["WidgetState"]["enum"] = ["OPEN"]
+    moved = digests(shared)
+    assert "WEBHOOK widget changed" in {key for key in before if before[key] != moved[key]}

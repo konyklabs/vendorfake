@@ -351,3 +351,48 @@ def test_a_non_json_media_type_is_still_no_schema() -> None:
     text_op = STAR.operation("GET", "/v1/text")
     assert text_op is not None
     assert text_op.response_schema(200) is None
+
+
+# ---------------------------------------------------------------------------
+# Webhooks rows (konyklabs/roadmap#185).
+# ---------------------------------------------------------------------------
+
+_GOOD = {"schema": 1, "sources": [{"kind": "openapi3", "url": "https://x/spec.json"}]}
+
+
+@pytest.mark.parametrize(
+    ("rows", "needle"),
+    [
+        ([{"name": "order notice"}], "'reason' is a required property"),
+        ([{"name": "", "reason": "r"}], "should be non-empty"),
+        ([{"name": "order notice", "reason": "r", "topic": "x"}], "Additional properties"),
+        ([{"name": "a", "reason": "r"}, {"name": "a", "reason": "r"}], "non-unique elements"),
+        ([{"name": "a", "reason": "r", "event_types": []}], "should be non-empty"),
+    ],
+)
+def test_the_declaration_schema_refuses_a_malformed_webhooks_row(rows: list[dict[str, Any]], needle: str) -> None:
+    with pytest.raises(ValueError, match=needle):
+        validate_declaration({**_GOOD, "webhooks": rows}, where="t")
+
+
+def test_several_webhooks_rows_each_need_event_types_or_the_declaration_is_refused() -> None:
+    rows = [{"name": "a", "reason": "r", "event_types": ["order.*"]}, {"name": "b", "reason": "r"}]
+    validate_declaration({**_GOOD, "webhooks": rows}, where="t")  # the schema allows it; the loader does not
+    with pytest.raises(ValueError, match="every row needs event_types"):
+        FidelityDeclaration.of("t", {**_GOOD, "webhooks": rows})
+
+
+def test_a_delivery_maps_to_the_one_entry_or_to_the_first_whose_globs_cover_it() -> None:
+    one = FidelityDeclaration.of("t", {**_GOOD, "webhooks": [{"name": "a", "reason": "r"}]})
+    assert one.webhook_for("anything:at:all") == one.webhooks[0]
+    rows = [
+        {"name": "orders", "reason": "r", "event_types": ["order:*"]},
+        {"name": "refunds", "reason": "r", "event_types": ["refund.created", "refund.updated"]},
+    ]
+    several = FidelityDeclaration.of("t", {**_GOOD, "webhooks": rows})
+    assert [hook.name for hook in several.webhooks] == ["orders", "refunds"]
+    assert several.webhook_for("order:SUCCESS:E1") is not None
+    assert several.webhook_for("order:SUCCESS:E1").name == "orders"  # type: ignore[union-attr]
+    assert several.webhook_for("refund.updated").name == "refunds"  # type: ignore[union-attr]
+    assert several.webhook_for("payment.created") is None
+    assert FidelityDeclaration.of("t", _GOOD).webhooks == ()

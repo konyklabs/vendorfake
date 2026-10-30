@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from vendorfake.fidelity.types import Annotation, SpecSource, route_key, template_shape
+from vendorfake.fidelity.types import Annotation, SpecSource, route_key, template_shape, webhook_key
 
 
 class _StrictSafeLoader(yaml.SafeLoader):
@@ -154,8 +154,24 @@ def _schema_refs(node: Any, into: set[str]) -> None:
             _schema_refs(item, into)
 
 
+def _reached(node: Any, schemas: Mapping[str, Any]) -> dict[str, Any]:
+    """Every schema ``node`` reaches through ``#/components/schemas/`` references, by name."""
+    reached: dict[str, Any] = {}
+    pending: set[str] = set()
+    _schema_refs(node, pending)
+    while pending:
+        name = pending.pop()
+        if name in reached:
+            continue
+        reached[name] = schemas.get(name, {})
+        found: set[str] = set()
+        _schema_refs(reached[name], found)
+        pending |= found - reached.keys()
+    return reached
+
+
 def cut_digests(document: Mapping[str, Any]) -> tuple[str, dict[str, str]]:
-    """The cut's identity (konyklabs/roadmap#178): one digest of the extract minus ``info``, the source rows and the stripped-key ledger -- the three things nothing validates -- and one per kept operation over it, the schemas it reaches and its annotation values."""
+    """The cut's identity (konyklabs/roadmap#178): one digest of the extract minus ``info``, the source rows and the stripped-key ledger -- the three things nothing validates -- and one per kept operation over it, the schemas it reaches and its annotation values. A kept ``webhooks`` entry gets one too, keyed ``WEBHOOK <name>``."""
     meta = document.get("x-vendorfake", {})
     cut = {key: value for key, value in document.items() if key != "info"}
     cut["x-vendorfake"] = {key: value for key, value in meta.items() if key not in ("sources", "stripped")}
@@ -165,20 +181,12 @@ def cut_digests(document: Mapping[str, Any]) -> tuple[str, dict[str, str]]:
     for path, item in document.get("paths", {}).items():
         for method, operation in item.items():
             key = route_key(method, path)
-            reached: dict[str, Any] = {}
-            pending: set[str] = set()
-            _schema_refs(operation, pending)
-            while pending:
-                name = pending.pop()
-                if name in reached:
-                    continue
-                reached[name] = schemas.get(name, {})
-                found: set[str] = set()
-                _schema_refs(reached[name], found)
-                pending |= found - reached.keys()
             noted = {name: values[key] for name, values in annotations.items() if key in values}
-            payload = {"operation": operation, "schemas": reached, "annotations": noted}
+            payload = {"operation": operation, "schemas": _reached(operation, schemas), "annotations": noted}
             operations[key] = sha256_hex(render_json(payload).encode("utf-8"))
+    for name, entry in document.get("webhooks", {}).items():
+        payload = {"operation": entry, "schemas": _reached(entry, schemas), "annotations": {}}
+        operations[webhook_key(name)] = sha256_hex(render_json(payload).encode("utf-8"))
     return sha256_hex(render_json(cut).encode("utf-8")), operations
 
 
@@ -656,6 +664,33 @@ def _merge_schemas(
     return schemas, namespaced, renames
 
 
+def _cut_webhooks(
+    cut: _Cut, loaded: Sequence[_Loaded], names: Sequence[str], roots: dict[int, set[str]]
+) -> tuple[dict[str, Any], dict[str, int], list[str]]:
+    """The named ``webhooks`` entries, each keeping only its cut ``post``, looked up by exact key in declaration order of the sources; their references join that source's roots. Also returns where each came from and the names no source defines."""
+    hooks: dict[str, Any] = {}
+    origin: dict[str, int] = {}
+    missing: list[str] = []
+    for name in dict.fromkeys(names):
+        for position, item in enumerate(loaded):
+            section = item.document.get("webhooks")
+            entry = _resolve_local(item.document, section.get(name)) if isinstance(section, Mapping) else None
+            if not isinstance(entry, Mapping) or not isinstance(entry.get("post"), Mapping):
+                continue
+            raw = entry["post"]
+            for key in entry:
+                if key != "post":
+                    cut.drop(key)
+            operation = _cut_operation(cut, item.document, raw)
+            hooks[name] = {"post": operation}
+            origin[name] = position
+            _schema_refs(operation, roots.setdefault(position, set()))
+            break
+        else:
+            missing.append(name)
+    return hooks, origin, missing
+
+
 def cut_extract(
     sources: Sequence[tuple[SpecSource, bytes]],
     modeled: Sequence[tuple[str, str]],
@@ -664,10 +699,11 @@ def cut_extract(
     extension_map: Mapping[str, str] | None = None,
     error_schema: str | None = None,
     annotations: Sequence[Annotation] = (),
+    webhooks: Sequence[str] = (),
 ) -> dict[str, Any]:
     """The scoped extract, as a plain document ready for :func:`render_json`.
 
-    ``modeled`` is ``(METHOD, spec_path)`` pairs with any declaration alias already applied, spelled as the unit spells it. ``fetched`` is the ISO date the caller obtained the bytes, passed in rather than read from a clock so the function stays pure. ``extension_map`` and ``error_schema`` are the declaration's; ``annotations`` are its :class:`~vendorfake.fidelity.types.Annotation` rows, read out of each kept operation's ``description`` before the prose is stripped.
+    ``modeled`` is ``(METHOD, spec_path)`` pairs with any declaration alias already applied, spelled as the unit spells it. ``fetched`` is the ISO date the caller obtained the bytes, passed in rather than read from a clock so the function stays pure. ``extension_map`` and ``error_schema`` are the declaration's; ``annotations`` are its :class:`~vendorfake.fidelity.types.Annotation` rows, read out of each kept operation's ``description`` before the prose is stripped. ``webhooks`` names the entries of a document's top-level ``webhooks`` section to keep, each cut like an operation; naming none leaves the cut byte-identical.
     """
     if not sources:
         raise ValueError("cut_extract needs at least one spec source")
@@ -708,11 +744,17 @@ def cut_extract(
         else:
             missing.append(route_key(method_upper, spec_path))
 
+    hooks, hook_origin, hooks_missing = _cut_webhooks(cut, loaded, webhooks, roots)
+
     schemas, namespaced, renames = _merge_schemas(cut, loaded, roots, error_schema)
     for (out_path, method_lower), position in origin.items():
         rename = renames.get(position)
         if rename:
             paths[out_path][method_lower] = _rewrite_refs(paths[out_path][method_lower], _namespacing(rename))
+    for name, position in hook_origin.items():
+        rename = renames.get(position)
+        if rename:
+            hooks[name] = _rewrite_refs(hooks[name], _namespacing(rename))
 
     first_document = loaded[0].document
     upstream_info = _info(first_document)
@@ -741,12 +783,19 @@ def cut_extract(
         metadata["annotations"] = {
             annotation.name: dict(sorted(annotated.get(annotation.name, {}).items())) for annotation in annotations
         }
+    sections: dict[str, Any] = {}
+    if webhooks:
+        # The annotations rule again: present only when declared, and a name nothing defines is listed, not dropped.
+        sections["webhooks"] = dict(sorted(hooks.items()))
+        metadata["webhooks_modeled"] = sorted(hooks)
+        metadata["webhooks_missing"] = sorted(hooks_missing)
 
     return {
         "openapi": str(first_document.get("openapi")),
         "info": info,
         "paths": {path: dict(sorted(item.items())) for path, item in sorted(paths.items())},
         "components": {"schemas": dict(sorted(schemas.items()))},
+        **sections,
         "x-vendorfake": {
             "schema": EXTRACT_SCHEMA,
             "sources": source_rows,

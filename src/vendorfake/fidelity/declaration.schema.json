@@ -216,6 +216,39 @@
         }
       }
     },
+    "webhooks": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "The entries of the document's top-level webhooks section this unit delivers. The cut carries each named entry and the schemas it reaches, and the corpus runner checks every delivery body against the entry it maps to. With several rows, every row needs event_types, the globs that map a delivery's event type onto it.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The entry's key exactly as the document spells it."
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "event_types": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
     "stubs_accepted": {
       "type": "array",
       "items": {

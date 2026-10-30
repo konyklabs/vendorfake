@@ -1,6 +1,6 @@
 {
-  "cut_sha256": "8359d67cc93736ae50a0dd031fe0cf843f3bd4877165f8f6d2c6076c4b1a8deb",
-  "extract_sha256": "3f03abef11027568cc1d73b68a568817170b8061b9e1968e7e7cc46e40b93696",
+  "cut_sha256": "804e27c5722d69f3bf5136ce68510c6717e36118d0d9b1830a0ae9fe5cd93b86",
+  "extract_sha256": "820c4348c087ab9686c3fdaf4384ea93624cf628cf41ba3207760b98bb08403a",
   "modeled": [
     "DELETE /o/wh/1/webhook/{endpointId}",
     "GET /o/op/1/menu/list",
@@ -23,7 +23,8 @@
     "POST /o/op/1/order/toGo": "5b9cbdd20d610b2f7352650a8b7f2774643568731220b648c3770143609d7dd4",
     "POST /o/wh/1/webhook": "2ee0ba30503de3ccb19fb1b926ca14684cd3f9c2e29e0ae769610d079b16eb93",
     "POST /tp/v1/business-locations/{businessLocationId}/tax-breakdown": "23decd07c4da85bbf3e0c8a442ded69d4abdb0911a0a68983944579ca560ddec",
-    "PUT /o/wh/1/webhook": "87e9c382a4433dd16c7621a2a9ec4a480c21ce889ff9bef98bdbc65146257b6b"
+    "PUT /o/wh/1/webhook": "87e9c382a4433dd16c7621a2a9ec4a480c21ce889ff9bef98bdbc65146257b6b",
+    "WEBHOOK apeOrder notification": "c2f5e4e730faf8824737b50979d792eead9232bfa5df0a3344ae264e5043cb84"
   },
   "schema": 1,
   "sources": [
@@ -34,5 +35,8 @@
       "url": "https://api-docs.lsk.lightspeed.app/source.json",
       "version": "1.0.0"
     }
+  ],
+  "webhooks": [
+    "apeOrder notification"
   ]
 }

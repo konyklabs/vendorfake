@@ -33,7 +33,7 @@ from vendorfake.core.kernel.router import Match, Router
 from vendorfake.core.kernel.types import UnitRequest, UnitResponse
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.transport.inprocess import InProcessClient, InProcessResponse
-from vendorfake.fidelity.types import Operation, Surface, route_key
+from vendorfake.fidelity.types import Operation, Surface, route_key, webhook_key
 
 __all__ = [
     "COUNTERS",
@@ -64,6 +64,8 @@ Counter = Literal[
     "skipped_non_json",
     "request_validated",
     "request_deviated",
+    "delivery_validated",
+    "delivery_unmatched",
 ]
 COUNTERS: tuple[Counter, ...] = (
     "validated",
@@ -76,11 +78,16 @@ COUNTERS: tuple[Counter, ...] = (
     "skipped_non_json",
     "request_validated",
     "request_deviated",
+    "delivery_validated",
+    "delivery_unmatched",
 )
-"""Every outcome one call can have, in the order the report prints them. ``skipped_non_json`` is an operation route whose body had no JSON to check; ``unmatched`` is a request the router answered with its own 404 or 405, so there is no route to classify. The last two are about the *request* and so are counted alongside a call's outcome rather than instead of it."""
+"""Every outcome one call can have, in the order the report prints them. ``skipped_non_json`` is an operation route whose body had no JSON to check; ``unmatched`` is a request the router answered with its own 404 or 405, so there is no route to classify. The two ``request_`` counters are about the *request* and so are counted alongside a call's outcome rather than instead of it. The two ``delivery_`` counters are about outbound webhook deliveries: a body checked against its declared ``webhooks`` entry, or a delivery no entry covers."""
+
+DELIVERY_UNMATCHED_PREFIX = "DELIVERY "
+"""The ledger key prefix of a delivery no declared ``webhooks`` entry covers, followed by its event type."""
 
 
-Subject = Literal["response body", "request body"]
+Subject = Literal["response body", "request body", "delivery body"]
 """Which half of the exchange a violation is about. Carried in the message, never in a deviation: a deviation names a pointer and a keyword, and those are already unambiguous."""
 
 
@@ -109,6 +116,8 @@ class FidelityViolation(AssertionError):
         against = f" against {self.operation_key}" if self.operation_key else ""
         noun = "error" if len(self.errors) == 1 else "errors"
         count = f"({len(self.errors)} {noun}):"
+        if self.subject == "delivery body":
+            return f"{self.route_key} sent a delivery body that fails{against} {count}"
         if self.subject == "request body":
             # The unit accepted it; the vendor's own schema would not have.
             return f"{self.route_key} accepted a request body that fails{against} and answered {self.status} {count}"
@@ -159,6 +168,11 @@ class LedgerRow:
     #: Request-body schema errors a declared deviation absorbed.
     request_deviated: int = 0
 
+    #: Delivery bodies checked against a declared ``webhooks`` entry; the key is ``WEBHOOK <name>``.
+    delivery_validated: int = 0
+    #: Deliveries no declared entry covers; the key is ``DELIVERY <event type>``.
+    delivery_unmatched: int = 0
+
     @property
     def calls(self) -> int:
         return self.validated + self.excused + self.internal + self.undeclared + self.unmatched + self.skipped_non_json
@@ -201,8 +215,9 @@ class Ledger:
     def summary(self) -> str:
         """One line: every counter's total and the number of routes touched."""
         parts = ", ".join(f"{self.total(counter)} {counter.replace('_', ' ')}" for counter in COUNTERS)
-        noun = "route" if len(self._rows) == 1 else "routes"
-        return f"fidelity: {parts} over {len(self._rows)} {noun}"
+        routes = [key for key in self._rows if not key.startswith((webhook_key(""), DELIVERY_UNMATCHED_PREFIX))]
+        noun = "route" if len(routes) == 1 else "routes"
+        return f"fidelity: {parts} over {len(routes)} {noun}"
 
 
 def _dialect(document: Mapping[str, Any]) -> tuple[Any, Any, Any, Any]:
@@ -219,6 +234,7 @@ class ResponseValidator:
 
     __slots__ = (
         "_built",
+        "_delivery_validators",
         "_format_checker",
         "_ledger",
         "_read_cls",
@@ -261,6 +277,8 @@ class ResponseValidator:
         self._undeclared_status: set[tuple[str, int]] = set()
         #: One per unit route: a ``requestBody`` schema does not vary with the status.
         self._request_validators: dict[str, Any] = {}
+        #: One per declared ``webhooks`` entry, built on its first delivery.
+        self._delivery_validators: dict[str, Any] = {}
         self._built = 0
 
     @property
@@ -310,6 +328,52 @@ class ResponseValidator:
             if self._validate_requests:
                 self._validate_request(key, classified.operation, request, response)
             self._validate(key, classified.operation, response)
+
+    def observe_delivery(self, name: str, body: Any, *, headers: Mapping[str, str] | None = None) -> None:
+        """One outbound delivery's parsed JSON body, against the ``requestBody`` schema of the ``webhooks`` entry ``name`` in the extract, in the write direction because the unit is the sender. Only an unscoped deviation can absorb an error here: a scoped one names HTTP routes. ``headers`` are the delivery's own, quoted when the body fails."""
+        key = webhook_key(name)
+        if name not in self._delivery_validators:
+            operation = self._surface.extract.webhook(name)
+            schema = operation.request_schema() if operation is not None else None
+            pointer = _webhook_schema_pointer(self._surface.extract.document, name, schema)
+            self._delivery_validators[name] = (
+                None
+                if pointer is None
+                else self._write_cls(
+                    {"$ref": f"{EXTRACT_URI}#{pointer}"}, registry=self._registry, format_checker=self._format_checker
+                )
+            )
+        validator = self._delivery_validators[name]
+        text = json.dumps(body, sort_keys=True)
+        if validator is None:
+            # A declared entry the cut does not carry checks nothing, which is a failure rather than a pass.
+            raise FidelityViolation(
+                key,
+                operation_key=f"webhooks[{name!r}]",
+                status=0,
+                errors=(f"(root): the extract carries no JSON requestBody schema for webhooks entry {name!r}",),
+                body_excerpt=_excerpt(text),
+                subject="delivery body",
+            )
+        errors, absorbed = self._collect(validator, body, key)
+        if errors:
+            sent = ", ".join(f"{k}: {v}" for k, v in sorted((headers or {}).items()) if k.lower() != "authorization")
+            raise FidelityViolation(
+                key,
+                operation_key=f"webhooks[{name!r}]",
+                status=0,
+                errors=sorted(errors),
+                body_excerpt=_excerpt(text) + (f"; headers: {sent}" if sent else ""),
+                subject="delivery body",
+            )
+        self._ledger.record(key, "delivery_validated")
+        for label in absorbed:
+            self._ledger.record(key, "deviated")
+            self._ledger.absorb(label)
+
+    def unmatched_delivery(self, event_type: str) -> None:
+        """A delivery whose event type no declared ``webhooks`` entry covers: counted, never skipped silently."""
+        self._ledger.record(f"{DELIVERY_UNMATCHED_PREFIX}{event_type}", "delivery_unmatched")
 
     # -- validation ---------------------------------------------------------
 
@@ -651,6 +715,22 @@ def _schema_pointer(document: Mapping[str, Any], operation: Operation, schema: M
                         "schema",
                     )
                     return "/" + "/".join(quote(_escape(str(segment)), safe="~") for segment in segments)
+    return None
+
+
+def _webhook_schema_pointer(document: Mapping[str, Any], name: str, schema: Mapping[str, Any] | None) -> str | None:
+    """Where a ``webhooks`` entry's ``requestBody`` schema sits in ``document``, found by identity like :func:`_request_schema_pointer`."""
+    hooks = document.get("webhooks")
+    item = hooks.get(name) if isinstance(hooks, Mapping) and schema is not None else None
+    post = item.get("post") if isinstance(item, Mapping) else None
+    body = post.get("requestBody") if isinstance(post, Mapping) else None
+    content = body.get("content") if isinstance(body, Mapping) else None
+    if not isinstance(content, Mapping):
+        return None
+    for media, spec in content.items():
+        if isinstance(spec, Mapping) and spec.get("schema") is schema:
+            segments = ("webhooks", name, "post", "requestBody", "content", media, "schema")
+            return "/" + "/".join(quote(_escape(str(segment)), safe="~") for segment in segments)
     return None
 
 

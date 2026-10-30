@@ -49,6 +49,12 @@
     }
   ],
   "overrides": [],
+  "webhooks": [
+    {
+      "name": "apeOrder notification",
+      "reason": "Every to-go order this unit accepts ends in one of these posts to the endpoint the order names, built by events.py in two shapes: the status-change body and the refusal body for a SKU no menu at the location carries. It is the one outbound delivery this unit models, so it needs no event_types."
+    }
+  ],
   "stubs_accepted": [],
   "variables": {
     "client_id": "unit-lightspeed-k-client-id",
