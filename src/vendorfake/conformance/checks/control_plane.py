@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 
-from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, differing_paths
 from vendorfake.conformance.registry import check
 from vendorfake.conformance.types import ConformanceFailure, ConformanceSkip, Requires, require
 
@@ -192,13 +192,15 @@ def control_plane_reads_are_inert(env: CheckEnv) -> str:
             )
             digest_mine = str(env.state()["digest"])
             digest_theirs = str(other.state()["digest"])
-            require(
-                digest_mine == digest_theirs,
-                f"after the same {mutation.key} mutation, the unit whose control plane was read "
-                f"digests to {digest_mine} and an untouched one to {digest_theirs}. The digest "
-                f"covers every minted id, so some /__unit/ GET consumed the id or rng stream and "
-                f"shifted what the mutation minted -- the read renumbered the scenario.",
-            )
+            if digest_mine != digest_theirs:
+                paths = "\n  ".join(differing_paths(env, other))
+                raise ConformanceFailure(
+                    f"after the same {mutation.key} mutation, the unit whose control plane was read "
+                    f"digests to {digest_mine} and an untouched one to {digest_theirs}. First "
+                    f"differing paths:\n  {paths}\nMost likely a field this unit writes from its "
+                    f"clock is not declared volatile (C38 isolates that); otherwise a control read "
+                    f"consumed a stream and renumbered the scenario."
+                )
     detail = f"{len(reads)} control GETs read on one unit; {compared} refusal probes byte-identical across the pair"
     if mutation is None:
         return (

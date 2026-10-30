@@ -90,7 +90,8 @@ def test_chaos_demo_ships_four_rules_on_a_virtual_clock_and_the_request_rules_fi
 # Re-pinned for konyklabs/roadmap#15: the scenario gained a second customer
 # and a second order so every list survives the conformance page walk.
 # Re-pinned for konyklabs/roadmap#175: the seeded subscriber's event_types became ["*"].
-SEED_DIGEST = "9009b9d4ad0dd1a34aee5c0a0d786ed1c546957bc68e7e4fe206824ae4617536"
+# Re-pinned for konyklabs/roadmap#173: customerSince became volatile.
+SEED_DIGEST = "ac45e2105f343bb12add7fded4d64da9bf81c80d61180d3db25b081ce75aa508"
 """The entity digest of the shipped scenario, pinned as a literal.
 
 Identical on every profile because seeded ids come from the document, never

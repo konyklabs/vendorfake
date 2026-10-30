@@ -15,7 +15,7 @@ from vendorfake.conformance.client import (
     encode_request,
     with_query,
 )
-from vendorfake.conformance.env import ancestors, concrete_path
+from vendorfake.conformance.env import ancestors, concrete_path, snapshot_differences
 
 
 def test_a_json_body_is_compact_and_labelled() -> None:
@@ -83,3 +83,22 @@ def test_concrete_path_fills_every_template_segment() -> None:
 def test_ancestors_walks_dotted_capability_names() -> None:
     assert ancestors("a.b.c") == ("a", "a.b")
     assert ancestors("a") == ()
+
+
+def test_snapshot_differences_name_the_paths_and_hide_stamp_shaped_keys() -> None:
+    mine = {"collections": {"sales": {"s1": {"date": "12:20:01Z", "updated_at": "a", "lines": [{"qty": 1}]}}}, "seq": 1}
+    theirs = {
+        "collections": {"sales": {"s1": {"date": "12:00:00Z", "updated_at": "b", "lines": [{"qty": 2}]}}},
+        "seq": 2,
+    }
+    assert snapshot_differences(mine, theirs) == (
+        "collections/sales/s1/date: '12:20:01Z' vs '12:00:00Z'",
+        "collections/sales/s1/lines/0/qty: 1 vs 2",
+    )
+    # Only stamp-shaped differences: shown rather than hidden, and capped.
+    early = {"collections": {"a": {str(n): {"x_at": n} for n in range(9)}}}
+    late = {"collections": {"a": {str(n): {"x_at": n + 1} for n in range(9)}}}
+    assert snapshot_differences(early, late, limit=2) == (
+        "collections/a/0/x_at: 0 vs 1",
+        "collections/a/1/x_at: 1 vs 2",
+    )

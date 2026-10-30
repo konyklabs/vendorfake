@@ -28,6 +28,8 @@ __all__ = [
     "ancestors",
     "check_env",
     "concrete_path",
+    "differing_paths",
+    "snapshot_differences",
     "unmet_precondition",
 ]
 
@@ -437,6 +439,41 @@ def check_env(target: ConformanceTarget, profile: str, transport: str) -> Iterat
     """One check's environment: its own unit, torn down when it is done."""
     with target.open_client(profile, transport) as client:
         yield CheckEnv(target=target, profile=profile, transport=transport, client=client)
+
+
+_STAMP_SUFFIXES = ("_at", "_at_ms", "_time")
+_ABSENT = "<absent>"
+
+
+def _diff(mine: Any, theirs: Any, path: tuple[str, ...], out: list[tuple[tuple[str, ...], Any, Any]]) -> None:
+    if isinstance(mine, Mapping) and isinstance(theirs, Mapping):
+        for key in sorted(set(mine) | set(theirs), key=str):
+            _diff(mine.get(key, _ABSENT), theirs.get(key, _ABSENT), (*path, str(key)), out)
+    elif isinstance(mine, list) and isinstance(theirs, list) and len(mine) == len(theirs):
+        for index, (left, right) in enumerate(zip(mine, theirs, strict=True)):
+            _diff(left, right, (*path, str(index)), out)
+    elif mine != theirs:
+        out.append((path, mine, theirs))
+
+
+def snapshot_differences(mine: Mapping[str, Any], theirs: Mapping[str, Any], *, limit: int = 5) -> tuple[str, ...]:
+    """The first ``limit`` paths where two snapshots' ``collections`` differ, as ``path: mine vs theirs``.
+
+    No control route publishes a unit's volatile names, so a heuristic stands in: a path whose last key ends in ``_at``/``_at_ms``/``_time`` (``created_at``, ``updated_at`` among them) is hidden, unless that hides every difference. The journal, idempotency records and ``seq`` are never walked.
+    """
+    found: list[tuple[tuple[str, ...], Any, Any]] = []
+    _diff(mine.get("collections", {}), theirs.get("collections", {}), ("collections",), found)
+    kept = [row for row in found if not row[0][-1].endswith(_STAMP_SUFFIXES)]
+    return tuple(f"{'/'.join(path)}: {left!r} vs {right!r}" for path, left, right in (kept or found)[:limit])
+
+
+def differing_paths(mine: CheckEnv, theirs: CheckEnv, *, limit: int = 5) -> tuple[str, ...]:
+    """:func:`snapshot_differences` of the two units' ``GET /__unit/state/snapshot`` bodies."""
+    return snapshot_differences(
+        mine.get_json(f"{CONTROL_PREFIX}state/snapshot")["snapshot"],
+        theirs.get_json(f"{CONTROL_PREFIX}state/snapshot")["snapshot"],
+        limit=limit,
+    )
 
 
 def unmet_precondition(requires: Requires, env: CheckEnv) -> str | None:
