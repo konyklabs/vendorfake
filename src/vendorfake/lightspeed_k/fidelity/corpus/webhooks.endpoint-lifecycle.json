@@ -6,7 +6,7 @@
     "url": "https://api-docs.lsk.lightspeed.app/source.json",
     "fetched": "2026-10-29",
     "provenance": "documented",
-    "note": "apeCreateWebhookOo, apeUpdateWebhookOo (the three flags provideAccount, expandTransactions and expandPayments fall back to their defaults when an update leaves them out, as the document states on that operation), apeGetWebhookOo (404 example 'endpoint ID not found for MISSING-ENDPOINT') and apeDeleteWebhookEndpoint (200 'Webhook deleted'). That username survives the update is this unit's judgment; the reset is the documented fact asserted."
+    "note": "apeCreateWebhookOo, apeUpdateWebhookOo (the three flags provideAccount, expandTransactions and expandPayments fall back to their defaults when an update leaves them out, as the document states on that operation), apeGetWebhookOo (404 example 'endpoint ID not found for MISSING-ENDPOINT') and apeDeleteWebhookEndpoint (200 'Webhook deleted'). Only the reset is asserted here; that the credentials survive the update is this unit's judgment, asserted in webhooks.endpoint-update-keeps-credentials."
   },
   "routes": [
     "PUT /o/wh/1/webhook",
@@ -56,7 +56,6 @@
         "status": 200,
         "body": {
           "endpointId": "${vars.endpoint_id}",
-          "username": "${vars.basic_user}",
           "provideAccount": false,
           "expandTransactions": false,
           "expandPayments": false
@@ -72,7 +71,7 @@
       },
       "expect": {
         "status": 200,
-        "body": {"endpointId": "${vars.endpoint_id}", "username": "${vars.basic_user}", "provideAccount": false}
+        "body": {"endpointId": "${vars.endpoint_id}", "provideAccount": false}
       }
     },
     {

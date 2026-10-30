@@ -146,6 +146,65 @@ def test_hit_reads_the_cache_and_never_fetches(tmp_path: Path, monkeypatch: pyte
     assert result.hit is True and "hit" in result.summary
 
 
+LEAKED = "every widget carries exactly one immutable owner reference assigned at creation"
+
+
+def leaky(document: dict[str, Any]) -> dict[str, Any]:
+    """``document`` with a prose ``description``: the upstream a warm cache was cut from, as fetched again."""
+    document["info"]["description"] = f"{LEAKED}."
+    return document
+
+
+def plant_leak(tmp_path: Path, name: str) -> None:
+    corpus = tmp_path / "pkg" / name / "corpus"
+    corpus.mkdir(exist_ok=True)
+    (corpus / "copied.json").write_text(json.dumps({"note": LEAKED}))
+
+
+def test_hit_with_check_prose_fetches_and_catches_a_leak_planted_after_the_cut(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
+) -> None:
+    from vendorfake.fidelity.cache import ProseLeak
+
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()))
+    plant_leak(tmp_path, name)
+    before = (cache / name / EXTRACT_FILE).read_bytes()
+    fetcher = counting_fetcher(leaky(synthetic()))
+    assert populate(name, declaration_for(name), fetcher=fetcher).hit is True
+    assert fetcher.calls == []
+    with pytest.raises(ProseLeak, match=r"-- corpus/copied\.json: 4 window\(s\), e\.g\. 'carries exactly one "):
+        populate(name, declaration_for(name), fetcher=fetcher, check_prose=True)
+    assert fetcher.calls == [URL]
+    assert (cache / name / EXTRACT_FILE).read_bytes() == before
+
+
+def test_hit_with_check_prose_and_no_leak_is_the_hit_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
+) -> None:
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()))
+    fetcher = counting_fetcher(leaky(synthetic()))
+    result = populate(name, declaration_for(name), fetcher=fetcher, check_prose=True)
+    assert fetcher.calls == [URL]
+    assert result.hit is True and result.prose_unchecked is False and "hit" in result.summary
+
+
+def test_hit_with_check_prose_offline_returns_the_hit_and_names_the_unchecked_prose(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
+) -> None:
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()))
+    plant_leak(tmp_path, name)
+    err = io.StringIO()
+    offline = counting_fetcher(None, error=ConnectionError("unreachable"))
+    result = populate(name, declaration_for(name), fetcher=offline, check_prose=True, stderr=err)
+    assert result.hit is True and result.prose_unchecked is True
+    assert result.document["x-vendorfake"]["sources"][0]["url"] == URL
+    assert err.getvalue().startswith(f"PROSE UNCHECKED: cannot fetch {URL} (unreachable); {name}'s ")
+    assert "declaration.json, corpus/copied.json were not checked" in err.getvalue()
+
+
 def test_load_extract_routes_a_non_vendored_anchor_through_the_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
 ) -> None:
@@ -501,3 +560,20 @@ def test_fetch_with_no_network_and_no_cache_is_a_named_skip_not_a_usage_error(
     err = capsys.readouterr().err
     assert "fidelity fetch: " in err and " UNAVAILABLE -- " in err and name in err
     assert "its fidelity leg is skipped in this run" in err
+
+
+def test_fetch_check_prose_on_an_offline_hit_is_the_named_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from vendorfake.fidelity.__main__ import main
+
+    name = make_package(tmp_path, monkeypatch, pin=pin_for(synthetic()))
+    monkeypatch.setattr(f"{__name__}._FETCH_TARGET_ANCHOR", name)
+    populate(name, declaration_for(name), fetcher=counting_fetcher(synthetic()))
+    offline = counting_fetcher(None, error=ConnectionError("unreachable"))
+    assert main(["fetch", "--target", f"{__name__}:_fetch_target"], fetcher=offline) == 0
+    assert offline.calls == []
+    assert main(["fetch", "--check-prose", "--target", f"{__name__}:_fetch_target"], fetcher=offline) == 3
+    out, err = capsys.readouterr()
+    assert "fidelity cache: hit" in out
+    assert "PROSE UNCHECKED: cannot fetch" in err and f"{name}'s declaration.json were not checked" in err

@@ -224,14 +224,14 @@ All pages fetched 2026-10-29.
 | An account can have several business locations, referenced by `businessLocationId` | [business locations](https://api-portal.lsk.lightspeed.app/guides/definitions/business-locations) |
 | List the menus, copy the `ikentooMenuId`, load the menu | [online-ordering tutorial](https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics) |
 | `GET /o/op/1/menu/load/{menuId}` deprecated and V2 added on 2026-05-15 | [changes](https://api-docs.lsk.lightspeed.app/changes) |
-| The to-go validations: `businessLocationId`, `thirdPartyReference` (1..48, unique), `endpointId` and `customerInfo.firstName` (1..128) required; `items[].quantity` and `items[].sku` (≤25); `payment.paymentAmount`; `collectionCode` ≤8; `maxTimeToAttemptOrderDeliverToPos` ≥60000; the two ISO times "must be in the future" | `source.json` |
+| The to-go validations: `businessLocationId`, `thirdPartyReference` (1..48, unique), `endpointId` and `customerInfo.firstName` (1..128) required; `items[].quantity` and `items[].sku` (≤25); `payment.paymentAmount`; `collectionCode` ≤8; `maxTimeToAttemptOrderDeliverToPos` ≥60000 ("The minimum value is 60000ms"); the two times `format: date-time` (RFC 3339 §5.6, `Z` or a numeric offset, `t`/`z` in either case) and "must be in the future" | `source.json` |
 | A 200 "doesn't necessarily mean that it has been sent to the POS. This must be confirmed via the webhook" | tutorial |
 | The tutorial's to-go body carries `takeAway: true`, which the schema does not name; with no `additionalProperties: false` it is accepted and ignored | tutorial, `source.json` |
 | A reused `thirdPartyReference` is 409 `{"status": "fail", "msg": "reference has already been used <ref>"}` under `*/*` | `source.json` |
 | `endpointId` is case sensitive; `url` required; `withBasicAuth`, `provideAccount`, `expandTransactions`, `expandPayments` default false; `subscribeTo[].resource` is `order`, `payment`, `item` or `order_api` | `source.json` |
 | An update omitting `provideAccount`, `expandTransactions` or `expandPayments` resets them to their defaults | `source.json` |
 | An unknown endpoint is 404 `endpoint ID not found for <id>`; a delete answers 200 "Webhook deleted" | `source.json` |
-| With `withBasicAuth`, "a username and password ... to authenticate the requests being sent to your endpoint": Basic is the only delivery authentication | tutorial |
+| The endpoint schema `apeWebhookEndpoint` carries `withBasicAuth`, `username` and `password`, and no other credential member | `source.json` |
 | The notification shapes: the `failure` example; the others `apeBaseWebhookInformation` plus `status`, `type: ORDER`; `ikentooAccountIdentifier` shaped `A17700.3`; the status enum `SUCCESS, FAILURE, IN_DELIVERY, READY_FOR_PICKUP, CLOSED, ABANDONED, CANCELLED` | `source.json` webhooks |
 | Order `FAILURE`, `READY_FOR_PICKUP` and `CANCELLED` are always sent; `order: DELIVERED` is subscribable | `source.json` `apeEventResource` |
 | The tax breakdown's path, `businessLocationId` int64 with `minimum: 1`, and `orders-api` | `source.json` `tax-preview-apiTaxBreakdown` |
@@ -253,7 +253,7 @@ All pages fetched 2026-10-29.
 | The trailing space in `scope` is always present | both samples carry it |
 | A refresh leaves the previous access token valid until its own expiry | D-010: nothing documents revoking it |
 | Every 4xx on the reads is `{"status", "error", "message"}` — `apePaymentBadRequestError` without `timestamp` and `path`; 401 missing/unknown/expired bearer, 403 without `orders-api`, 400 missing or non-integer id, 404 unknown location or menu | "a 4xx error"; RFC 6750 §3.1; C10 compares both bindings' bytes |
-| Every 503 is the documented `*/*` envelope, also on the two routes that declare none (one declared deviation) | the only declared 503 |
+| Every 503 is the documented `*/*` envelope, also on the two routes that declare none (one declared deviation) | the envelope `apeGetMenuByIdV2` declares for its 503 and the tax breakdown for its 400, 403, 404 and 503 |
 | One unit is one merchant account: every token sees every seeded business | no binding is documented |
 | `richContent=false` (the default) strips `itemRichData`; `accountProfile` is accepted and ignored | the parameter descriptions |
 | Seeded values: ids, names, prices and tax rates | obvious placeholders |
@@ -269,6 +269,8 @@ All pages fetched 2026-10-29.
 | Routing travels in the event type, `order:<STATUS>:<endpointId percent-encoded>`; a registration subscribes to its own `order:*:<id>` only | the core's matcher |
 | No HTTPS rule on `url`, beyond refusing a link-local host | none is documented |
 | 404 for an unknown business location on the to-go order | the reads' choice |
+| A to-go order with no item (`items` absent or `[]`) is 400 `invalid_value` on `items`, and nothing is stored or notified | the schema requires no item; accepting an empty order silently would hide a consumer bug |
+| HTTP Basic is the only delivery authentication | the endpoint schema names no other scheme |
 | Tax breakdown: half-up rounding, once per line amount and once per tax part | nothing documented |
 | Tax breakdown: the inclusive split `gross / (1 + R) × rate` | nothing documented |
 | Tax lines keyed on description, rate and inclusion; `taxCode` and `taxName` omitted | the seeded menu carries neither |
@@ -310,8 +312,9 @@ All pages fetched 2026-10-29.
 
 Until a consumer asks: V2 authentication (OpenID Connect), the V1-to-V2 token
 exchange, `GET /oauth/userinfo`, `accountProfileCode` pricing, conditional tax
-rules and `/f/finance/{businessLocationId}/tax-rates`. Not planned: the V1 menu load
-(deprecated 2026-05-15), local orders, the `/business-locations` webhook
+rules and `/f/finance/{businessLocationId}/tax-rates`. Open, pending the two
+consumer facts below: the V1 menu load (deprecated 2026-05-15). Not planned:
+local orders, the `/business-locations` webhook
 operations and payment, item and order_api notifications, the `account`
 snapshot, `subscribeTo` filtering, `order: DELIVERED`, scheduled dispatch,
 `maxTimeToAttemptOrderDeliverToPos` elapsing, `accountProfile` pricing, rate

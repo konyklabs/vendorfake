@@ -25,8 +25,10 @@ unstated are this project's reading of it, labelled `JUDGMENT` at the site.
 
 Covers **Square** (Connect v2), **Clover** (REST v3), **Toast** (REST v2/v3),
 **Lightspeed Retail X-Series** (API 2026-07) and **Lightspeed Restaurant
-K-Series** (`lightspeed-k`, V1 authentication, slice 1 of D-016; the other
-Restaurant series are not modelled) — see [the docs
+K-Series** (`lightspeed-k`, slices 1 to 3 of D-016: the V1 token, an authorize
+stand-in, businesses, the menu list, menu V2, the to-go order, webhook
+registration, order-notification delivery with optional HTTP Basic, and the tax
+breakdown; the other Restaurant series are not modelled) — see [the docs
 site](docs/index.md) for what each surface covers; the route reference lists
 every route per vendor, and `vendorfake explain` describes one in place.
 Lightspeed has a page of its own, with real transcripts, the vendor's own

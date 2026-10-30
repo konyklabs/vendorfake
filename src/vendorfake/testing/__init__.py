@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import contextlib
+import functools
 import json
 import os
 import queue
@@ -35,7 +36,6 @@ from vendorfake.core.kernel.types import Logger, UnitError, UnitErrorKind, Vendo
 from vendorfake.core.kernel.unit import Unit
 from vendorfake.core.logging import JsonLogger
 from vendorfake.core.util.json import canonical_json
-from vendorfake.core.webhooks.models import matches_event_type
 from vendorfake.core.webhooks.sink import DeliverySink
 from vendorfake.registry import RouteInfo, create_unit
 from vendorfake.testing.receiver import Delivery, WebhookReceiver, webhook_receiver
@@ -318,15 +318,14 @@ class Driver(Generic[SeedT]):
         vendor-neutral. ``signature_key`` is the HMAC key for Square and the
         ``X-Clover-Auth`` code for Clover. ``event_types`` are checked against the
         vendor's vocabulary, a foreign type otherwise registering and never
-        firing; a glob passes if it matches one published type."""
+        firing; a type or glob passes if some event type matches both it and one
+        published entry, which may itself be a glob."""
         vocabulary = self.seed.event_types
-        unknown = [
-            pattern for pattern in event_types if not any(matches_event_type([pattern], known) for known in vocabulary)
-        ]
+        unknown = [pattern for pattern in event_types if not any(_globs_overlap(pattern, k) for k in vocabulary)]
         if unknown:
             raise ValueError(
                 f"{self.vendor!r} sends none of {unknown}; its event types are {list(vocabulary)} "
-                "(a glob that matches at least one of them, or '*', is accepted)"
+                "(a type or glob that one of them covers, or '*', is accepted)"
             )
         body: dict[str, Any] = {
             "notification_url": notification_url,
@@ -450,6 +449,20 @@ NO_SEED_HINT = (
 """What a caller can do about a vendor with no seed. Split out so the message is
 one string a test can assert on. It names the hook first, being the fix a
 vendor's author makes once for everyone."""
+
+
+def _globs_overlap(a: str, b: str) -> bool:
+    """Does one event type match both ``*``-globs (the grammar of ``core.webhooks.models.matches_event_type``)?"""
+
+    @functools.cache
+    def from_(i: int, j: int) -> bool:
+        if i == len(a) or j == len(b):
+            return set(a[i:] + b[j:]) <= {"*"}
+        if "*" in (a[i], b[j]):
+            return from_(i + 1, j) or from_(i, j + 1)
+        return a[i] == b[j] and from_(i + 1, j + 1)
+
+    return from_(0, 0)
 
 
 def _require_seed(vendor: str, profile: str, found: Seed | None) -> Seed:

@@ -3,6 +3,7 @@ The handler stores one order row; the notification comes from the journal, never
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -22,6 +23,7 @@ from vendorfake.core.kernel.reply import json_
 from vendorfake.core.kernel.types import HandlerArgs, ReplyInit, Route, UnitError, UnitErrorKind
 from vendorfake.core.util.json import compact
 from vendorfake.lightspeed_k.entities import COL
+from vendorfake.lightspeed_k.errors import ENVELOPE_INFO_KEY, TO_GO_CONFLICT_ENVELOPE
 from vendorfake.lightspeed_k.paths import APE_PLACE_TO_GO_ORDER
 from vendorfake.lightspeed_k.seed.constants import (
     SEED_BUSINESS_LOCATION_ID,
@@ -46,11 +48,14 @@ EXAMPLE_TO_GO: dict[str, Any] = {
     "items": [{"quantity": 1, "sku": SEED_UNKNOWN_SKU}],
 }
 Number = StrictFloat | StrictInt
+# RFC 3339 s5.6 date-time: full-date "T" full-time, with "Z" or a numeric offset; t and z may be lower case
+_DATE_TIME = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})", re.ASCII)
 
 
 class CustomerInfo(BaseModel):
     model_config = _BODY
 
+    # DOCUMENTED source.json apeCustomerInfo: firstName minLength 1, maxLength 128
     firstName: StrictStr = Field(min_length=1, max_length=128)
     lastName: StrictStr | None = None
     thirdPartyReference: StrictStr | None = None
@@ -61,6 +66,7 @@ class CustomerInfo(BaseModel):
 class ItemLine(BaseModel):
     model_config = _BODY
 
+    # DOCUMENTED source.json apeToGoOrderItemLine: quantity format int32, sku maxLength 25
     quantity: StrictInt = Field(ge=-_INT32, lt=_INT32)
     sku: StrictStr = Field(max_length=25)
     customItemName: StrictStr | None = None
@@ -90,34 +96,38 @@ class Payment(BaseModel):
 class ToGoOrderRequest(BaseModel):
     model_config = _BODY
 
+    # DOCUMENTED source.json apePlaceToGoOrder: businessLocationId format int64, thirdPartyReference 1..48
     businessLocationId: StrictInt = Field(ge=-_INT64, lt=_INT64)
     thirdPartyReference: StrictStr = Field(min_length=1, max_length=48)
     endpointId: StrictStr
     customerInfo: CustomerInfo
     orderNote: StrictStr | None = None
+    # DOCUMENTED source.json: format int32, and the description's "The minimum value is 60000ms (1 minute)"
     maxTimeToAttemptOrderDeliverToPos: StrictInt | None = Field(default=None, ge=60000, lt=_INT32)
     staffId: StrictInt | None = None
     accountProfileCode: StrictStr | None = None
     scheduledTimeForOrderAsIso8601: StrictStr | None = None
     payment: Payment | None = None
+    # DOCUMENTED source.json: collectionCode maxLength 8
     collectionCode: StrictStr | None = Field(default=None, max_length=8)
     orderCollectionTimeAsIso8601: StrictStr | None = None
-    items: list[ItemLine] = Field(default_factory=list)
+    # JUDGMENT: the schema requires no item; refused, since silently accepting an empty order hides a consumer bug
+    items: list[ItemLine] = Field(default_factory=list, min_length=1, validate_default=True)
     deliveryAddress: dict[str, Any] | None = None
     targetPrinterProfileId: StrictInt | None = None
 
-    # DOCUMENTED source.json: "Must be in the future"; JUDGMENT: RFC 3339 with an offset
+    # DOCUMENTED source.json: format date-time (RFC 3339 s5.6) and "Must be in the future"
     @field_validator("scheduledTimeForOrderAsIso8601", "orderCollectionTimeAsIso8601")
     @classmethod
     def _future(cls, value: str | None, info: ValidationInfo) -> str | None:
         if value is None:
             return value
+        if _DATE_TIME.fullmatch(value) is None:
+            raise ValueError("must be an RFC 3339 date-time with Z or a numeric offset")
         try:
-            instant = datetime.fromisoformat(value)
+            instant = datetime.fromisoformat(value.upper())
         except ValueError as exc:
             raise ValueError("must be an RFC 3339 date-time") from exc
-        if instant.tzinfo is None:
-            raise ValueError("must carry a UTC offset")
         now_ms = (info.context or {}).get("now_ms")
         if now_ms is not None and instant.timestamp() * 1000 <= now_ms:
             raise ValueError("must be in the future")
@@ -163,7 +173,7 @@ class LightspeedKToGoSurface:
                 UnitErrorKind.CONFLICT,
                 detail=f"reference has already been used {reference}",
                 field="thirdPartyReference",
-                info={"envelope": "to_go_conflict"},
+                info={ENVELOPE_INFO_KEY: TO_GO_CONFLICT_ENVELOPE},
             )
         # JUDGMENT tutorial: a SKU on no menu at the location is a "problem with the order", refused by the POS
         unknown = next((line.sku for line in order.items if menu_item(ctx, location, line.sku) is None), None)

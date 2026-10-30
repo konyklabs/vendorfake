@@ -91,6 +91,10 @@ FUTURE = "2026-10-29T13:00:00.000+00:00"
         body(scheduledTimeForOrderAsIso8601="2026-10-29T13:00:00.000"),
         body(orderCollectionTimeAsIso8601="2026-10-29T11:59:59.000+00:00"),
         body(orderCollectionTimeAsIso8601="not a time"),
+        body(scheduledTimeForOrderAsIso8601="20261029T130000+0000"),
+        body(scheduledTimeForOrderAsIso8601="2026-W45-1T13:00:00+00:00"),
+        body(scheduledTimeForOrderAsIso8601="2026-10-29T13+00:00"),
+        body(scheduledTimeForOrderAsIso8601="2026-10-29T13:00:00,5+00:00"),
         body(maxTimeToAttemptOrderDeliverToPos=59999),
         body(
             items=[{"quantity": 1, "sku": "UNITK-001", "discountAmountOverride": 1.0, "discountPercentOverride": 5.0}]
@@ -114,6 +118,22 @@ def test_future_times_and_the_minimum_delivery_window_are_accepted(virtual: Harn
     )
     res = virtual.post(TO_GO, payload)
     assert res.status == 200, res.text
+
+
+def test_a_lower_case_rfc_3339_time_is_accepted(virtual: Harness) -> None:
+    res = virtual.post(TO_GO, body(scheduledTimeForOrderAsIso8601="2026-10-29t14:00:00.5z"))
+    assert res.status == 200, res.text
+
+
+@pytest.mark.parametrize("payload", [body(items=[]), without("items")])
+def test_an_order_with_no_item_is_refused_and_nothing_is_stored(h: Harness, payload: dict[str, Any]) -> None:
+    res = h.post(TO_GO, payload)
+    assert res.status == 400, res.text
+    assert set(wire(res)) == {"status", "error", "message"}
+    assert res.json()["unit_error"]["kind"] == "invalid_value"
+    assert res.json()["unit_error"]["field"] == "items"
+    assert orders(h) == []
+    assert h.drain() == []
 
 
 def test_an_unknown_location_is_404(h: Harness) -> None:
@@ -141,6 +161,7 @@ def test_a_reused_reference_is_the_documented_409(h: Harness) -> None:
     assert res.status == 409
     assert wire(res) == {"status": "fail", "msg": "reference has already been used unit-k-order-1"}
     assert res.json()["unit_error"]["kind"] == "conflict"
+    assert res.json()["unit_error"]["status_provenance"] == "documented"
     assert len(orders(h)) == 1
 
 

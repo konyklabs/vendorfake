@@ -96,9 +96,13 @@ def price(lines: Iterable[Pricing]) -> dict[str, Any]:
                 "taxAmount": sum(parts) / 100,
             }
         )
-        # JUDGMENT: one tax line per (description, percentage, inclusion), first seen first
+        # JUDGMENT: one tax line per (description, percentage, inclusion), first seen first; a line's net joins it once
+        mine: dict[tuple[str | None, Any, bool], int] = {}
         for description, percentage, part in zip(line.descriptions, line.percentages, parts, strict=True):
-            sums = taxes.setdefault((description, percentage, line.included), [0, 0])
+            key = (description, percentage, line.included)
+            mine[key] = mine.get(key, 0) + part
+        for key, part in mine.items():
+            sums = taxes.setdefault(key, [0, 0])
             sums[0] += net
             sums[1] += part
         net_total, tax_total, gross_total = net_total + net, tax_total + sum(parts), gross_total + gross

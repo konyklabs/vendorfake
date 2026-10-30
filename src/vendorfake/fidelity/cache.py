@@ -23,6 +23,7 @@ cut fails there, on purpose; a byte-only move is a re-pin chore.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as _dt
 import json
 import os
@@ -147,6 +148,8 @@ class CacheResult:
     offline: bool = False
     #: Whether the cut digests to the pin's ``cut_sha256``; ``None`` when the pin records none.
     cut_matches: bool | None = None
+    #: A hit under ``check_prose`` whose sources could not be fetched: the prose guard did not run.
+    prose_unchecked: bool = False
 
     @property
     def extract_path(self) -> Path:
@@ -284,8 +287,14 @@ def populate(
     cache_dir: Path | str | None = None,
     fetched: str | None = None,
     stderr: Any = None,
+    check_prose: bool = False,
 ) -> CacheResult:
     """Make ``<cache>/<anchor>/extract.json`` current, fetching only when it is not.
+
+    ``check_prose`` runs the prose guard on a hit too: the cache holds only the
+    prose-stripped cut, so the sources are fetched again for it and nothing is
+    re-cut or written. A source it cannot fetch leaves the hit returned with
+    ``prose_unchecked`` set and one ``PROSE UNCHECKED`` line on ``stderr``.
 
     ``fetched`` is the ISO date stamped on a source row whose bytes differ from
     the pinned ones (today by default; injectable so a test is reproducible).
@@ -298,7 +307,8 @@ def populate(
     pin = read_package_pin(anchor)
     cached = _cached_text(path)
     if cached is not None and sha256_hex(cached.encode("utf-8")) == pin.extract_sha256:
-        return CacheResult(anchor, path, json.loads(cached), hit=True)
+        hit = CacheResult(anchor, path, json.loads(cached), hit=True)
+        return _check_prose_on_hit(anchor, declaration, hit, fetcher, out) if check_prose else hit
 
     modeled = _modeled(anchor, pin)
     blobs = []
@@ -318,12 +328,7 @@ def populate(
                 f"{path / EXTRACT_FILE}; connect once, or set {CACHE_ENV_VAR} to a directory holding one"
             ) from exc
 
-    leaks = prose_leaks(_package_prose(anchor), [blob for _, blob in blobs])
-
-    if leaks:
-        detail = "; ".join(f"{name}: {len(windows)} window(s), e.g. {windows[0]!r}" for name, windows in leaks.items())
-
-        raise ProseLeak(f"{anchor}: repository text repeats the vendor's document -- {detail}")
+    _raise_on_leaks(anchor, [blob for _, blob in blobs])
 
     document = cut_extract(
         blobs,
@@ -357,6 +362,32 @@ def populate(
     return CacheResult(
         anchor, path, document, hit=False, drift=tuple(drift), extract_differs=differs, cut_matches=cut_matches
     )
+
+
+def _raise_on_leaks(anchor: str, blobs: Sequence[bytes]) -> None:
+    leaks = prose_leaks(_package_prose(anchor), blobs)
+    if leaks:
+        detail = "; ".join(f"{name}: {len(windows)} window(s), e.g. {windows[0]!r}" for name, windows in leaks.items())
+        raise ProseLeak(f"{anchor}: repository text repeats the vendor's document -- {detail}")
+
+
+def _check_prose_on_hit(
+    anchor: str, declaration: FidelityDeclaration, hit: CacheResult, fetcher: Fetcher | None, out: Any
+) -> CacheResult:
+    blobs = []
+    for source in declaration.sources:
+        try:
+            blobs.append(fetch(source, fetcher=fetcher))
+        except (httpx.HTTPError, OSError) as exc:
+            names = ", ".join(_package_prose(anchor))
+            print(
+                f"PROSE UNCHECKED: cannot fetch {source.url} ({exc}); {anchor}'s {names} "
+                "were not checked against the vendor's document",
+                file=out,
+            )
+            return dataclasses.replace(hit, prose_unchecked=True)
+    _raise_on_leaks(anchor, blobs)
+    return hit
 
 
 def cached_extract(

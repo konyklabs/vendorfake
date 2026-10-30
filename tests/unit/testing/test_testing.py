@@ -1056,6 +1056,17 @@ def test_subscribe_refuses_an_event_type_the_vendor_never_sends() -> None:
         square.subscribe("http://127.0.0.1:1/x", ["order.*", "payment.created"], "k")
 
 
+def test_subscribe_accepts_what_a_glob_vocabulary_covers() -> None:
+    """lightspeed-k publishes globs (``order:<STATUS>:*``): the type its mapper emits
+    and the per-endpoint pattern its own registration stores both pass."""
+    with unit("lightspeed-k") as k:
+        k.subscribe("http://127.0.0.1:1/exact", ["order:SUCCESS:MY-ENDPOINT"], "", id="EXACT")
+        k.subscribe("http://127.0.0.1:1/endpoint", ["order:*:MY-ENDPOINT"], "", id="ENDPOINT")
+        for nonsense in (["payment:*"], ["order:BOGUS:MY-ENDPOINT"], ["order.created"]):
+            with pytest.raises(ValueError, match=r"'lightspeed-k' sends none of"):
+                k.subscribe("http://127.0.0.1:1/x", nonsense, "")
+
+
 def test_served_enforces_its_startup_deadline_on_a_child_that_never_announces(monkeypatch: pytest.MonkeyPatch) -> None:
     import vendorfake.testing as testing
 
