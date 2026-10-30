@@ -443,6 +443,19 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `tests/unit/test_docs_pins.py` holds it to `__version__`
   (konyklabs/roadmap#180).
 
+## [0.11.0](https://github.com/konyklabs/vendorfake/compare/v0.10.0...v0.11.0) (2026-10-30)
+
+
+### Features
+
+* **fidelity:** carry the webhooks entries a declaration names in the cut and validate delivery bodies against them (konyklabs/roadmap[#185](https://github.com/konyklabs/vendorfake/issues/185)) ([6803ab2](https://github.com/konyklabs/vendorfake/commit/6803ab2abd5cc3b31698d785833488d6b7e8d5c9))
+
+
+### Bug Fixes
+
+* **conformance:** declare clock-stamped fields volatile and add C38 so a stamp cannot split two identical scenarios (konyklabs/roadmap[#173](https://github.com/konyklabs/vendorfake/issues/173)) ([8186749](https://github.com/konyklabs/vendorfake/commit/8186749f7683c5afd12b91a22436627d468bb790))
+* **lightspeed-k:** key the to-go 409 on its marker, refuse itemless orders, price a repeated tax once, and run the prose guard on a warm cache (konyklabs/roadmap[#186](https://github.com/konyklabs/vendorfake/issues/186)) ([891c39b](https://github.com/konyklabs/vendorfake/commit/891c39bdb074bac99b3ee2133292aba71f67643b))
+
 ## [0.10.0](https://github.com/konyklabs/vendorfake/compare/v0.9.0...v0.10.0) (2026-10-29)
 
 
