@@ -65,6 +65,7 @@ __all__ = [
     "REMOTE_CAVEAT",
     "RESET_CAVEAT",
     "TARGET_ENV_VAR",
+    "AfterSteps",
     "ClientFactory",
     "ControlPlaneWorld",
     "CorpusClient",
@@ -74,6 +75,7 @@ __all__ = [
     "ManifestWorld",
     "Opener",
     "World",
+    "check_deliveries",
     "modeled_routes",
     "resolve_target",
     "run_case",
@@ -420,6 +422,7 @@ def run_corpus(
     declaration = load_declaration(target.anchor)
     ledger: Any = None
     factory: ClientFactory
+    after_steps: AfterSteps | None = None
     if client_factory is not None:
         factory = client_factory
     elif validate:
@@ -435,6 +438,9 @@ def run_corpus(
             # raise mid-case would hide every case after it.
             return ValidatingClient(unit, surface, ledger, strict_undeclared=False)
 
+        if declaration.webhooks:
+            after_steps = check_deliveries
+
     else:
         factory = in_process
 
@@ -444,7 +450,13 @@ def run_corpus(
             yield ObservingClient(factory(unit), Router(unit.routes))
 
     results = tuple(
-        run_case(case, opener, profile=_profile(case, target, profile_override), variables=declaration.variables)
+        run_case(
+            case,
+            opener,
+            profile=_profile(case, target, profile_override),
+            variables=declaration.variables,
+            after_steps=after_steps,
+        )
         for case in cases
     )
     # A caller that injects its own client is making its own claim about
@@ -471,6 +483,11 @@ class ObservingClient:
         self._router = router
         self.observed: list[str] = []
 
+    @property
+    def validator(self) -> Any:
+        """The wrapped client's ``ResponseValidator``, or ``None`` when it does not validate."""
+        return getattr(self._client, "validator", None)
+
     def call(
         self,
         *,
@@ -486,6 +503,55 @@ class ObservingClient:
             if key not in self.observed:
                 self.observed.append(key)
         return self._client.call(method=method, path=path, query=query, headers=headers, body=body)
+
+
+AfterSteps = Callable[[CorpusClient], StepFailure | None]
+"""A check run on a case's client once every step has passed, while the unit is still open."""
+
+
+def check_deliveries(client: CorpusClient) -> StepFailure | None:
+    """Every delivery the case caused, its body checked against the declared ``webhooks`` entry it maps to.
+
+    Drained first, through the control plane the client already reaches, because delivery runs on a worker thread.
+    Every attempt with a JSON body is checked whatever its outcome; one no entry covers is counted
+    ``delivery_unmatched``. In process only: over a base URL there is no validator to hand the bodies to."""
+    validator = getattr(client, "validator", None)
+    if validator is None:
+        return None
+    drained = client.call(method="POST", path=f"{CONTROL_PREFIX}webhooks/drain", body={})
+    listed = client.call(method="GET", path=f"{CONTROL_PREFIX}webhooks/deliveries")
+    if drained.status != 200 or listed.status != 200:
+        return StepFailure(
+            "deliveries",
+            "deliveries",
+            "the control plane's delivery log",
+            f"drain answered {drained.status}, deliveries answered {listed.status}",
+            kind="request",
+        )
+    declaration = validator.surface.declaration
+    for index, row in enumerate(json.loads(listed.raw.body).get("deliveries", [])):
+        event_type = str(row.get("event_type", ""))
+        hook = declaration.webhook_for(event_type)
+        if hook is None:
+            validator.unmatched_delivery(event_type)
+            continue
+        if "body" not in row:
+            continue  # no JSON body was sent on this attempt, so the entry's JSON schema has nothing to read
+        try:
+            validator.observe_delivery(hook.name, row["body"], headers=row.get("headers") or {})
+        except Exception as exc:
+            errors = _violation_errors(exc)
+            if errors is None:
+                raise
+            return StepFailure(
+                "deliveries",
+                f"deliveries/{index}/body",
+                f"a body webhooks[{hook.name!r}] accepts",
+                f"{type(exc).__name__}",
+                detail="\n".join((str(exc).splitlines()[0], *errors))[:1200],
+                kind="schema",
+            )
+    return None
 
 
 def _profile(case: Case, target: FidelityTarget, override: str | None) -> str:
@@ -550,6 +616,7 @@ def run_case(
     profile: str,
     variables: Mapping[str, str],
     world: World | None = None,
+    after_steps: AfterSteps | None = None,
 ) -> CaseResult:
     """One case: open a client, run every step in order, stop at the first failure.
 
@@ -558,7 +625,8 @@ def run_case(
     statement, and a diff between two runs should be a diff in the unit.
 
     ``$auth`` is resolved from ``world.credentials()``; ``None`` means the unit
-    the opener just yielded a client for.
+    the opener just yielded a client for. ``after_steps`` runs once every step
+    and the routes check have passed, before the unit is closed.
     """
     rng = random.Random(case.id)
 
@@ -651,6 +719,8 @@ def run_case(
                         f"never reached: {', '.join(unreached)}; reached: {', '.join(observed)}",
                         kind="missing",  # A route the case claims is missing from what the steps reached.
                     )
+            if failure is None and after_steps is not None:
+                failure = after_steps(client)
 
     except RuntimeError as exc:
         # The unit itself could not be opened, reset or asked for credentials

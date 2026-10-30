@@ -577,3 +577,21 @@ def test_fetch_check_prose_on_an_offline_hit_is_the_named_skip(
     out, err = capsys.readouterr()
     assert "fidelity cache: hit" in out
     assert "PROSE UNCHECKED: cannot fetch" in err and f"{name}'s declaration.json were not checked" in err
+
+
+def test_a_cold_cache_cut_carries_the_declared_webhooks_entries_and_matches_the_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cache: Path
+) -> None:
+    """The run-time cut is scoped by the pin's modeled routes and the declaration's webhooks names (konyklabs/roadmap#185)."""
+    from dataclasses import replace
+
+    from tests.unit.fidelity.test_extract import webhooked_document
+    from vendorfake.fidelity.types import Webhook
+
+    document = webhooked_document()
+    cut = cut_extract([(SOURCE, blob(document))], MODELED, fetched=FETCHED, webhooks=["widget changed"])
+    name = make_package(tmp_path, monkeypatch, pin=Pin.from_extract(cut, render_json(cut), modeled=MODELED))
+    declaration = replace(declaration_for(name), webhooks=(Webhook(name="widget changed", reason="r"),))
+    result = populate(name, declaration, fetcher=counting_fetcher(document), stderr=io.StringIO())
+    assert result.extract_differs is False and result.cut_matches is True
+    assert set(result.document["webhooks"]) == {"widget changed"}

@@ -86,6 +86,35 @@ turning it on today is red for all three, mostly where a vendor's own document
 does not model the sparse body its update endpoint takes, and partly where the
 unit accepts a lowercase enum member the vendor spells in capitals.
 
+**Outbound deliveries are checked against the entry a declaration names.** An
+OpenAPI 3.1 document can describe the notifications a vendor posts in a
+top-level `webhooks` section. A declaration lists the entries its unit
+delivers, each with a reason:
+
+```json
+"webhooks": [{"name": "apeOrder notification", "reason": "..."}]
+```
+
+`name` is the entry's key as the document spells it. With more than one row,
+every row also carries `event_types`, globs over a delivery's event type, and
+the declaration is refused at load without them. The cut keeps each named
+entry's `post` and the schemas it reaches. After a case's steps pass, the
+in-process runner drains the unit's delivery worker, reads the delivery log
+over the control plane and checks every attempt that carried a JSON body
+against its entry's `requestBody` schema, in the write direction because the
+unit is the sender. A body the schema refuses fails the case as a `schema`
+divergence. A delivery no row covers is counted `delivery unmatched`. Only a
+deviation with no `routes` applies to a delivery, since `routes` names HTTP
+routes. The report prints one line per named entry, after the deviation lines:
+
+```
+delivery: webhooks["apeOrder notification"] validated: 2
+```
+
+or `NOT OBSERVED (no delivery matched it in this run)` when no case produced
+one. Like a route no case reaches, that is a coverage fact and leaves the
+verdict `OK`. A `--base-url` run checks no delivery.
+
 **A served unit can validate too.** `vendorfake serve --validate` puts the
 same check behind the socket: the binding hands each answered exchange to a
 `ResponseObserver` after the unit has answered, so it can read the request and
@@ -101,9 +130,14 @@ agree with each other and with the declaration. Whether *upstream* has moved
 is a scheduled question, never a pull request's -- `pin` without `--offline`
 re-fetches, re-cuts and rewrites both files, and the diff is the review. For
 an extract that is fetched and never committed, the cache is judged by its cut
--- the modelled operations, the schemas they reach and their annotations; not
-the source bytes, the `info` block or the stripped-key ledger -- against the
-digests the pin records (`cut_sha256`, one per operation).
+-- the modelled operations and `webhooks` entries, the schemas they reach and
+their annotations; not the source bytes, the `info` block or the stripped-key
+ledger -- against the digests the pin records (`cut_sha256`, one per operation,
+and one per entry keyed `WEBHOOK <name>`). The pin also lists the entry names
+under `webhooks`, written only when a declaration names some. A cold-cache cut
+is scoped by the pin's `modeled` routes and by the declaration's `webhooks`,
+`annotations`, `extension_map` and `error_schema`, so `--offline` also fails
+when the declared entry names and the cut's disagree.
 
 The scheduled `pin --check` (no `--offline`) gives every declared source one
 `upstream <url>:` line, fetching all of them whatever the first one did, and
@@ -182,8 +216,8 @@ A failing case now says *how* it diverged, not only that it did:
 the body). `run` prints the class in the mark, `[FAIL missing]`, and a tally
 under the totals.
 
-Webhooks go the other way and no corpus case can reach them, so a captured
-delivery is its own document — a `vendorfake.webhook-golden/1` file carrying
+A delivery's body is checked by the runner, but its signature headers are not,
+so a captured delivery is its own document — a `vendorfake.webhook-golden/1` file carrying
 the URL, the exact bytes, the header names the signature occupies, and
 `secret_env`, the name of the variable holding the signing key: a recording
 never carries the key itself into a commit (a stub golden may inline `secret`). `verify_golden` hands the vendor's own signer the same three inputs

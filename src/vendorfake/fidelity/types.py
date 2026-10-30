@@ -16,6 +16,7 @@ from importlib import resources
 from typing import Any, Literal
 
 from vendorfake.core.kernel.types import Route
+from vendorfake.core.webhooks.models import matches_event_type
 
 __all__ = [
     "DECLARATION_FILE",
@@ -33,11 +34,13 @@ __all__ = [
     "Override",
     "SpecSource",
     "Surface",
+    "Webhook",
     "load_declaration",
     "load_extract",
     "route_key",
     "template_shape",
     "validate_declaration",
+    "webhook_key",
 ]
 
 DECLARATION_FILE = "declaration.json"
@@ -52,6 +55,11 @@ SourceKind = Literal["openapi3", "swagger2", "fragments"]
 def route_key(method: str, path: str) -> str:
     """``"GET /v2/orders/{order_id}"`` -- the one spelling of a route this package uses."""
     return f"{method.upper()} {path}"
+
+
+def webhook_key(name: str) -> str:
+    """``"WEBHOOK apeOrder notification"`` -- how a ``webhooks`` entry is keyed beside the route keys."""
+    return f"WEBHOOK {name}"
 
 
 def template_shape(path: str) -> str:
@@ -238,6 +246,26 @@ class Annotation:
 
 
 @dataclass(frozen=True, slots=True)
+class Webhook:
+    """A ``webhooks`` entry of the vendor's document that this unit delivers: carried in the cut, and checked against every delivery body that maps to it. ``event_types`` are globs over a delivery's event type; empty means every delivery, which is only allowed when it is the one entry."""
+
+    name: str
+    reason: str
+    event_types: tuple[str, ...] = ()
+
+    @classmethod
+    def of(cls, row: Mapping[str, Any]) -> Webhook:
+        return cls(
+            name=str(row["name"]),
+            reason=str(row["reason"]),
+            event_types=tuple(str(glob) for glob in row.get("event_types", ())),
+        )
+
+    def covers(self, event_type: str) -> bool:
+        return not self.event_types or matches_event_type(self.event_types, event_type)
+
+
+@dataclass(frozen=True, slots=True)
 class Override:
     """A route whose documented response shape is not the one its spec declares -- the narrowest tool after a deviation: one route, one status, validated against a named component schema instead of the declared one. The reason and the page are mandatory."""
 
@@ -285,6 +313,8 @@ class FidelityDeclaration:
     variables: Mapping[str, str] = field(default_factory=dict)
     #: Machine-readable facts to lift out of operation prose before it is stripped (see :class:`Annotation`).
     annotations: tuple[Annotation, ...] = ()
+    #: The document's ``webhooks`` entries this unit delivers (see :class:`Webhook`).
+    webhooks: tuple[Webhook, ...] = ()
 
     @classmethod
     def of(cls, anchor: str, doc: Mapping[str, Any]) -> FidelityDeclaration:
@@ -299,6 +329,12 @@ class FidelityDeclaration:
             raise ValueError(
                 f"{anchor}/{DECLARATION_FILE}: error_envelope needs error_member -- the member an error "
                 f"body must carry, or the envelope accepts a success payload on any status"
+            )
+        webhooks = tuple(Webhook.of(row) for row in doc.get("webhooks", ()))
+        if len(webhooks) > 1 and any(not hook.event_types for hook in webhooks):
+            raise ValueError(
+                f"{anchor}/{DECLARATION_FILE}: with more than one webhooks entry every row needs event_types, "
+                f"or a delivery could map to any of them"
             )
         return cls(
             anchor=anchor,
@@ -315,7 +351,12 @@ class FidelityDeclaration:
             extension_map={str(k): str(v) for k, v in dict(doc.get("extension_map", {})).items()},
             variables={str(k): str(v) for k, v in dict(doc.get("variables", {})).items()},
             annotations=tuple(Annotation.of(row) for row in doc.get("annotations", ())),
+            webhooks=webhooks,
         )
+
+    def webhook_for(self, event_type: str) -> Webhook | None:
+        """The first declared entry a delivery of ``event_type`` maps to, or ``None``."""
+        return next((hook for hook in self.webhooks if hook.covers(event_type)), None)
 
     def alias_for(self, method: str, path: str) -> Alias | None:
         key = route_key(method, path)
@@ -395,7 +436,7 @@ class Operation:
 class Extract:
     """``extract.json``, read: a scoped OpenAPI 3.0 or 3.1 document plus its own metadata."""
 
-    __slots__ = ("_by_shape", "document")
+    __slots__ = ("_by_shape", "_webhooks", "document")
 
     def __init__(self, document: Mapping[str, Any]) -> None:
         if document.get("openapi", "").split(".")[0] != "3":
@@ -409,6 +450,12 @@ class Extract:
             for method, raw in item.items():
                 if method.lower() in ("get", "put", "post", "delete", "options", "head", "patch", "trace"):
                     self._by_shape.setdefault(shape, {})[method.upper()] = Operation(method.upper(), spec_path, raw)
+        hooks = document.get("webhooks", {})
+        self._webhooks: dict[str, Operation] = {
+            str(name): Operation("POST", str(name), item["post"])
+            for name, item in (hooks.items() if isinstance(hooks, Mapping) else ())
+            if isinstance(item, Mapping) and isinstance(item.get("post"), Mapping)
+        }
 
     @property
     def metadata(self) -> Mapping[str, Any]:
@@ -436,6 +483,10 @@ class Extract:
 
     def operations(self) -> tuple[Operation, ...]:
         return tuple(op for by_method in self._by_shape.values() for op in by_method.values())
+
+    def webhook(self, name: str) -> Operation | None:
+        """The cut ``post`` of the ``webhooks`` entry ``name``; its ``spec_path`` is the entry's name."""
+        return self._webhooks.get(name)
 
 
 ClassifiedKind = Literal["operation", "excused", "internal", "undeclared"]

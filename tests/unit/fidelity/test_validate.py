@@ -527,7 +527,8 @@ def test_ledger_totals_are_exact(lenient: World) -> None:
     assert lenient.ledger.total("validated") == 3
     assert lenient.ledger.summary() == (
         "fidelity: 3 validated, 0 deviated, 1 excused, 1 internal, 1 undeclared, 0 undeclared status, "
-        "1 unmatched, 1 skipped non json, 0 request validated, 0 request deviated over 7 routes"
+        "1 unmatched, 1 skipped non json, 0 request validated, 0 request deviated, 0 delivery validated, "
+        "0 delivery unmatched over 7 routes"
     )
 
 
@@ -1195,5 +1196,130 @@ def test_request_validation_enforces_3_1_keywords() -> None:
         built.script.body = {"kind": "a"}
         with pytest.raises(FidelityViolation, match="request body"):
             built.client.post("/v3/things", {"kind": "b"})
+    finally:
+        built.unit.stop()
+
+
+# ---------------------------------------------------------------------------
+# Outbound deliveries (konyklabs/roadmap#185): a body the unit SENT, checked
+# against the requestBody of the named webhooks entry in the extract.
+# ---------------------------------------------------------------------------
+
+HOOK = "thing changed"
+
+
+def _webhooked_extract(openapi: str = "3.1.0") -> dict[str, Any]:
+    extract = _dialect_extract(openapi, {"type": "string"})
+    extract["components"]["schemas"]["Notice"] = {
+        "type": "object",
+        "properties": {"reference": {"type": "string"}, "location": {"type": "integer"}},
+    }
+    hook_schema = {
+        "allOf": [
+            {"$ref": "#/components/schemas/Notice"},
+            {"type": "object", "properties": {"status": {"type": "string", "enum": ["DONE", "FAILED"]}}},
+        ]
+    }
+    extract["webhooks"] = {
+        HOOK: {
+            "post": {
+                "requestBody": {"required": True, "content": {"application/json": {"schema": hook_schema}}},
+                "responses": {"200": {"description": "200"}},
+            }
+        }
+    }
+    return extract
+
+
+def test_a_webhooks_entry_with_a_space_in_its_name_resolves_through_the_percent_encoded_pointer() -> None:
+    from vendorfake.fidelity.validate import _webhook_schema_pointer
+
+    extract = _webhooked_extract()
+    schema = Extract(extract).webhook(HOOK).request_schema()  # type: ignore[union-attr]
+    pointer = _webhook_schema_pointer(extract, HOOK, schema)
+    assert pointer == "/webhooks/thing%20changed/post/requestBody/content/application~1json/schema"
+    built = _dialect_world(extract)
+    try:
+        built.client.validator.observe_delivery(HOOK, {"reference": "r1", "location": 7, "status": "DONE"})
+        assert built.ledger.row(f"WEBHOOK {HOOK}") == LedgerRow(f"WEBHOOK {HOOK}", delivery_validated=1)
+    finally:
+        built.unit.stop()
+
+
+def test_a_delivery_body_the_entry_refuses_is_a_violation_naming_the_pointer_through_the_reference() -> None:
+    built = _dialect_world(_webhooked_extract())
+    try:
+        with pytest.raises(FidelityViolation) as caught:
+            built.client.validator.observe_delivery(
+                HOOK, {"location": "7", "status": "LOST"}, headers={"authorization": "Basic x", "x-k": "v"}
+            )
+        violation = caught.value
+        assert violation.subject == "delivery body"
+        assert violation.errors == (
+            "/location: '7' is not of type 'integer'",
+            "/status: 'LOST' is not one of ['DONE', 'FAILED']",
+        )
+        message = str(violation)
+        assert message.startswith(
+            f"WEBHOOK {HOOK} sent a delivery body that fails against webhooks['{HOOK}'] (2 errors):"
+        )
+        assert "x-k: v" in message and "Basic x" not in message
+        assert built.ledger.total("delivery_validated") == 0
+    finally:
+        built.unit.stop()
+
+
+def test_a_delivery_uses_the_write_direction_under_3_0() -> None:
+    """The unit sends the body, so a ``readOnly`` member is refused under 3.0's write validator as in a request."""
+    extract = _webhooked_extract("3.0.0")
+    extract["components"]["schemas"]["Notice"]["properties"]["reference"]["readOnly"] = True
+    built = _dialect_world(extract)
+    try:
+        with pytest.raises(FidelityViolation, match="delivery body"):
+            built.client.validator.observe_delivery(HOOK, {"reference": "r1"})
+        built.client.validator.observe_delivery(HOOK, {"location": 1})
+        assert built.ledger.total("delivery_validated") == 1
+    finally:
+        built.unit.stop()
+
+
+def test_a_declared_entry_the_extract_does_not_carry_is_a_violation_not_a_pass() -> None:
+    built = _dialect_world(_dialect_extract("3.1.0", {"type": "string"}))
+    try:
+        with pytest.raises(FidelityViolation, match="carries no JSON requestBody schema for webhooks entry"):
+            built.client.validator.observe_delivery(HOOK, {"status": "DONE"})
+    finally:
+        built.unit.stop()
+
+
+def test_only_an_unscoped_deviation_absorbs_a_delivery_error() -> None:
+    row = {"pointer": "/status", "keyword": "enum", "value": "LOST", "reason": "r", "url": "https://d/"}
+    for routes, absorbed in (((), True), (("POST /v3/things",), False)):
+        deviation = Deviation.of({**row, "routes": list(routes)} if routes else row)
+        script = Script()
+        unit = make_unit([route("POST", "/v3/things", script.answer)], control_routes=control_plane_routes)
+        declaration = replace(DECLARATION, aliases=(), excused=(), deviations=(deviation,))
+        client = ValidatingClient(unit, Surface(declaration, Extract(_webhooked_extract())), Ledger())
+        try:
+            if absorbed:
+                client.validator.observe_delivery(HOOK, {"status": "LOST"})
+                assert client.ledger.absorbed() == ((deviation.label, 1),)
+            else:
+                with pytest.raises(FidelityViolation, match="LOST"):
+                    client.validator.observe_delivery(HOOK, {"status": "LOST"})
+        finally:
+            unit.stop()
+
+
+def test_an_unmatched_delivery_is_counted_and_no_delivery_key_counts_as_a_route() -> None:
+    built = _dialect_world(_webhooked_extract())
+    try:
+        built.script.body = {"kind": "a"}
+        built.client.post("/v3/things", {})
+        built.client.validator.observe_delivery(HOOK, {"status": "DONE"})
+        built.client.validator.unmatched_delivery("refund.created")
+        assert built.ledger.row("DELIVERY refund.created").delivery_unmatched == 1
+        summary = built.ledger.summary()
+        assert "1 delivery validated, 1 delivery unmatched over 1 route" in summary
     finally:
         built.unit.stop()

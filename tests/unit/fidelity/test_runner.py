@@ -697,3 +697,155 @@ def test_the_remote_runner_reaches_a_served_unit_and_says_it_did_not_validate(
     assert [result.passed for result in report.results] == [True, True], report.results
     assert report.remote and not report.validated and report.caveats
     assert report.results[0].profile == "test"
+
+
+# ---------------------------------------------------------------------------
+# Deliveries (konyklabs/roadmap#185): after a case's steps pass, every body the
+# unit delivered is checked against the webhooks entry the declaration names.
+# ---------------------------------------------------------------------------
+
+HOOK = "order notice"
+HOOKED_DECLARATION: dict[str, Any] = {**DECLARATION, "webhooks": [{"name": HOOK, "reason": "the one delivery"}]}
+
+
+def _hooked_extract() -> dict[str, Any]:
+    extract = json.loads(json.dumps(EXTRACT))
+    extract["components"]["schemas"]["Notice"] = {
+        "type": "object",
+        "required": ["type"],
+        "properties": {"type": {"type": "string", "enum": ["order.created"]}, "data": {"type": "object"}},
+    }
+    extract["webhooks"] = {
+        HOOK: {
+            "post": {
+                "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/Notice"}}}},
+                "responses": {"200": {"description": "200"}},
+            }
+        }
+    }
+    return extract
+
+
+@contextmanager
+def open_delivering_unit(profile: str | None) -> Iterator[Unit]:
+    from tests.fakes import WEBHOOK_CAPABILITIES, FakeEvents, FakeSigner, FakeVendor
+    from vendorfake.core.webhooks.sink import MemorySink
+
+    vendor = FakeVendor(capabilities=WEBHOOK_CAPABILITIES, not_supported={}, signer=FakeSigner(), events=FakeEvents())
+    unit = make_unit(
+        synthetic_routes(),
+        vendor=vendor,
+        control_routes=control_plane_routes,
+        sink=MemorySink(),
+        capabilities=("orders", "webhooks"),
+        clock_mode="virtual",
+        schedule_ms=(5, 10),
+        profile=profile or "test",
+    )
+    try:
+        yield unit  # type: ignore[misc]
+    finally:
+        unit.stop()  # type: ignore[attr-defined]
+
+
+def _delivering(body: Any) -> dict[str, Any]:
+    """A case that subscribes and has the control plane emit one event carrying ``body``."""
+    return case(
+        "deliveries.one",
+        [
+            step(
+                "subscribe",
+                "POST",
+                "/__unit/webhooks/subscriptions",
+                body={"notification_url": "https://r.test/h"},
+                status=201,
+            ),
+            step(
+                "emit",
+                "POST",
+                "/__unit/webhooks/emit",
+                body={"type": "order.created", "entity_id": "o1", "body": body},
+                status=202,
+            ),
+        ],
+    )
+
+
+def _run_delivering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *cases: Mapping[str, Any],
+    declaration: Mapping[str, Any] = HOOKED_DECLARATION,
+) -> Any:
+    from vendorfake.fidelity.corpus import load_corpus
+
+    anchor = make_anchor(tmp_path, monkeypatch, cases, declaration=declaration, extract=_hooked_extract())
+    target = FidelityTarget(name="delivering", anchor=anchor, open_unit=open_delivering_unit, default_profile="test")
+    return target, run_corpus(target, load_corpus(anchor))
+
+
+def test_a_delivered_body_the_entry_accepts_is_counted_and_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vendorfake.fidelity.report import format_matrix
+    from vendorfake.fidelity.types import Surface, load_declaration, load_extract
+
+    target, report = _run_delivering(tmp_path, monkeypatch, _delivering({"type": "order.created", "data": {}}))
+    (result,) = report.results
+    assert result.passed, result.failure
+    assert report.ledger.row(f"WEBHOOK {HOOK}").delivery_validated == 1
+    surface = Surface(load_declaration(target.anchor), load_extract(target.anchor))
+    with open_delivering_unit(None) as unit:
+        matrix = format_matrix(surface, unit.routes, report.ledger, report)
+    assert f'delivery: webhooks["{HOOK}"] validated: 1' in matrix.splitlines()
+
+
+def test_a_planted_wrong_delivery_body_fails_the_case_as_a_schema_divergence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, report = _run_delivering(tmp_path, monkeypatch, _delivering({"type": 7}))
+    (result,) = report.results
+    assert not result.passed
+    failure = result.failure
+    assert (failure.step, failure.pointer, failure.kind) == ("deliveries", "deliveries/0/body", "schema")
+    assert "/type: 7 is not of type 'string'" in failure.detail
+    assert report.ledger.total("delivery_validated") == 0
+
+
+def test_a_delivery_no_entry_covers_is_counted_unmatched_not_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    globbed = {**DECLARATION, "webhooks": [{"name": HOOK, "reason": "r", "event_types": ["refund.*"]}]}
+    _, report = _run_delivering(tmp_path, monkeypatch, _delivering({"type": 7}), declaration=globbed)
+    (result,) = report.results
+    assert result.passed, result.failure
+    assert report.ledger.row("DELIVERY order.created").delivery_unmatched == 1
+    assert report.ledger.total("delivery_validated") == 0
+
+
+def test_a_named_entry_no_case_delivered_is_reported_not_observed_and_stays_ok(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from vendorfake.fidelity.report import format_matrix
+    from vendorfake.fidelity.types import Surface, load_declaration, load_extract
+
+    target, report = _run_delivering(tmp_path, monkeypatch, case("quiet", [step("who", "GET", "/v2/whoami")]))
+    assert report.ok, report.results[0].failure
+    surface = Surface(load_declaration(target.anchor), load_extract(target.anchor))
+    with open_delivering_unit(None) as unit:
+        # Without the synthetic vendor's one undeclared route, which would make the verdict NOT OK on its own.
+        served = [served for served in unit.routes if served.path != "/v2/undeclared"]
+        matrix = format_matrix(surface, served, report.ledger, report).splitlines()
+    assert f'delivery: webhooks["{HOOK}"] NOT OBSERVED (no delivery matched it in this run)' in matrix
+    assert matrix[-1] == "OK"
+
+
+def test_an_unvalidated_run_checks_no_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from vendorfake.fidelity.corpus import load_corpus
+
+    anchor = make_anchor(
+        tmp_path, monkeypatch, [_delivering({"type": 7})], declaration=HOOKED_DECLARATION, extract=_hooked_extract()
+    )
+    target = FidelityTarget(name="delivering", anchor=anchor, open_unit=open_delivering_unit, default_profile="test")
+    (result,) = run_corpus(target, load_corpus(anchor), validate=False).results
+    assert result.passed, result.failure

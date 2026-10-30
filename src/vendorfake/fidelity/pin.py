@@ -113,6 +113,8 @@ class Pin:
     #: The cut's digest and one per kept operation (konyklabs/roadmap#178); empty on a vendored pin, like ``modeled``.
     cut_sha256: str = ""
     operations: tuple[tuple[str, str], ...] = ()
+    #: The ``webhooks`` entry names the cut was scoped to, found or not, read off its ledgers; empty unless declared.
+    webhooks: tuple[str, ...] = ()
 
     @classmethod
     def of(cls, doc: Mapping[str, Any]) -> Pin:
@@ -124,6 +126,7 @@ class Pin:
             modeled=tuple(str(key) for key in doc.get("modeled", ())),
             cut_sha256=str(doc.get("cut_sha256", "")),
             operations=tuple(sorted((str(key), str(value)) for key, value in doc.get("operations", {}).items())),
+            webhooks=tuple(str(name) for name in doc.get("webhooks", ())),
         )
 
     @classmethod
@@ -134,12 +137,14 @@ class Pin:
         meta = document.get("x-vendorfake", {})
         rows = meta.get("sources", ()) if isinstance(meta, Mapping) else ()
         cut_sha256, operations = cut_digests(document) if modeled else ("", {})
+        hooks = {str(name) for field in ("webhooks_modeled", "webhooks_missing") for name in meta.get(field, ())}
         return cls(
             sources=tuple(PinnedSource.of(row) for row in rows),
             extract_sha256=sha256_hex(extract_text.encode("utf-8")),
             modeled=tuple(route_key(method, spec_path) for method, spec_path in modeled),
             cut_sha256=cut_sha256,
             operations=tuple(sorted(operations.items())),
+            webhooks=tuple(sorted(hooks)) if modeled else (),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -153,6 +158,8 @@ class Pin:
         if self.cut_sha256:
             doc["cut_sha256"] = self.cut_sha256
             doc["operations"] = dict(self.operations)
+        if self.webhooks:
+            doc["webhooks"] = list(self.webhooks)
         return doc
 
     def source(self, url: str) -> PinnedSource | None:
@@ -286,6 +293,7 @@ def refresh(
         extension_map=declaration.extension_map,
         error_schema=declaration.error_schema,
         annotations=declaration.annotations,
+        webhooks=[hook.name for hook in declaration.webhooks],
     )
 
     lines: list[str] = []
@@ -347,8 +355,8 @@ def refresh(
         and not changed_upstream
         and not changed_extract
         and not moved
-        and (old_pin.sources, old_pin.extract_sha256, old_pin.modeled)
-        != (new_pin.sources, new_pin.extract_sha256, new_pin.modeled)
+        and (old_pin.sources, old_pin.extract_sha256, old_pin.modeled, old_pin.webhooks)
+        != (new_pin.sources, new_pin.extract_sha256, new_pin.modeled, new_pin.webhooks)
     ):
         # Same bytes and same cut can only disagree with the pin if the pin was edited by hand.
         changed_upstream = True
@@ -461,7 +469,7 @@ def _extract_diff(old: Mapping[str, Any], new: Mapping[str, Any], old_text: str,
     out: list[str] = []
     old_meta = old.get("x-vendorfake", {}) if isinstance(old.get("x-vendorfake"), Mapping) else {}
     new_meta = new.get("x-vendorfake", {})
-    for field in ("modeled", "missing", "stubbed"):
+    for field in ("modeled", "missing", "stubbed", "webhooks_modeled", "webhooks_missing"):
         before = set(old_meta.get(field, ()))
         after = set(new_meta.get(field, ()))
         for key in sorted(after - before):
@@ -572,6 +580,13 @@ def verify(anchor_dir: Path, declaration: FidelityDeclaration, *, cache_dir: Pat
             f"{EXTRACT_FILE}: schema {name!r} is stubbed to {{}} (upstream dangles) and not in stubs_accepted -- "
             f"everything it types is unvalidated until the declaration accepts it"
         )
+    if isinstance(meta, Mapping):
+        cut_names = {str(name) for field in ("webhooks_modeled", "webhooks_missing") for name in meta.get(field, ())}
+        declared_names = {hook.name for hook in declaration.webhooks}
+        for name in sorted(declared_names ^ cut_names):
+            changed_extract = True
+            side = "declared but not in the cut" if name in declared_names else "in the cut but no longer declared"
+            lines.append(f"{EXTRACT_FILE}: webhooks entry {name!r} is {side} -- run `vendorfake-fidelity pin`")
     declared = {source.url for source in declaration.sources}
     pinned = {row.url for row in pin.sources}
     for url in sorted(declared - pinned):

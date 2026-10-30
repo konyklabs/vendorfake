@@ -555,3 +555,101 @@ def test_a_changed_source_beside_a_gone_one_is_still_reported_as_changed(pinned:
     result = refresh(pinned, TWO_SOURCES, MODELED, fetcher=fetcher, fetched="2026-10-27", check=True)
     assert result.changed_upstream is True and len(result.gone) == 1
     assert f"upstream {URL}: changed sha256 " in result.diff_summary
+
+
+# ---------------------------------------------------------------------------
+# Webhooks entries (konyklabs/roadmap#185).
+# ---------------------------------------------------------------------------
+
+
+def _hooked(*names: str) -> FidelityDeclaration:
+    from vendorfake.fidelity.types import Webhook
+
+    return replace(NOT_VENDORED, webhooks=tuple(Webhook(name=name, reason="r") for name in names))
+
+
+def test_a_pin_records_its_webhooks_names_only_when_the_declaration_names_some(tmp_path: Path) -> None:
+    from tests.unit.fidelity.test_extract import webhooked_document
+
+    plain, hooked = tmp_path / "plain", tmp_path / "hooked"
+    plain.mkdir()
+    hooked.mkdir()
+    fetcher = fetcher_for(webhooked_document())
+    refresh(plain, NOT_VENDORED, MODELED, fetcher=fetcher, fetched="2026-09-02", cache_dir=tmp_path / "c1")
+    assert "webhooks" not in json.loads((plain / PIN_FILE).read_text())
+    declaration = _hooked("widget changed", "nope")
+    refresh(hooked, declaration, MODELED, fetcher=fetcher, fetched="2026-09-02", cache_dir=tmp_path / "c2")
+    pin = read_pin(hooked / PIN_FILE)
+    # Found or not, every declared name scoped the cut, and only the found one has a digest.
+    assert pin.webhooks == ("nope", "widget changed")
+    assert "WEBHOOK widget changed" in dict(pin.operations)
+    assert "WEBHOOK nope" not in dict(pin.operations)
+    assert not {key for key, _ in pin.operations if key.startswith("WEBHOOK")} & set(pin.modeled)
+    assert verify(hooked, declaration, cache_dir=tmp_path / "c2").changed is False
+
+
+def test_a_moved_webhooks_entry_is_named_by_the_check(tmp_path: Path) -> None:
+    from tests.unit.fidelity.test_extract import webhooked_document
+
+    declaration = _hooked("widget changed")
+    package = tmp_path / "pkg"
+    package.mkdir()
+    refresh(
+        package,
+        declaration,
+        MODELED,
+        fetcher=fetcher_for(webhooked_document()),
+        fetched="2026-09-02",
+        cache_dir=tmp_path / "c",
+    )
+    moved = webhooked_document()
+    moved["components"]["schemas"]["Notice"]["properties"]["reference"]["type"] = "integer"
+    result = refresh(
+        package,
+        declaration,
+        MODELED,
+        fetcher=fetcher_for(moved),
+        fetched="2026-09-03",
+        check=True,
+        cache_dir=tmp_path / "c",
+    )
+    assert result.changed_extract is True
+    assert result.diff_summary.splitlines()[-2:] == [
+        f"{EXTRACT_FILE}: operation ~ WEBHOOK widget changed",
+        "check mode: nothing written",
+    ]
+
+
+def test_the_structural_diff_names_a_webhooks_entry_gained_or_lost() -> None:
+    from tests.unit.fidelity.test_extract import webhooked_document
+    from vendorfake.fidelity.pin import _extract_diff
+
+    old = cut_extract([(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02")
+    new = cut_extract(
+        [(SOURCE, blob(webhooked_document()))], MODELED, fetched="2026-09-02", webhooks=["widget changed", "x"]
+    )
+    lines = _extract_diff(old, new, render_json(old), render_json(new))
+    assert f"{EXTRACT_FILE}: webhooks_modeled + widget changed" in lines
+    assert f"{EXTRACT_FILE}: webhooks_missing + x" in lines
+    assert f"{EXTRACT_FILE}: schema + Notice" in lines
+
+
+def test_verify_refuses_a_declared_webhooks_entry_the_cut_was_not_scoped_to(tmp_path: Path) -> None:
+    from tests.unit.fidelity.test_extract import webhooked_document
+
+    package = tmp_path / "pkg"
+    package.mkdir()
+    refresh(
+        package,
+        NOT_VENDORED,
+        MODELED,
+        fetcher=fetcher_for(webhooked_document()),
+        fetched="2026-09-02",
+        cache_dir=tmp_path / "c",
+    )
+    result = verify(package, _hooked("widget changed"), cache_dir=tmp_path / "c")
+    assert result.changed_extract is True
+    assert (
+        f"{EXTRACT_FILE}: webhooks entry 'widget changed' is declared but not in the cut -- run `vendorfake-fidelity pin`"
+        in result.diff_summary
+    )

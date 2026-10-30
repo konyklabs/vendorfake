@@ -19,13 +19,14 @@ and nothing else about how the validating client keeps them.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 from vendorfake.core.kernel.types import Route
 from vendorfake.fidelity.corpus import PROVENANCES
-from vendorfake.fidelity.types import Surface, route_key
+from vendorfake.fidelity.types import Surface, route_key, webhook_key
 
 __all__ = [
     "KINDS",
@@ -69,6 +70,9 @@ class LedgerRow(Protocol):
 
     @property
     def undeclared_status(self) -> int: ...
+
+    @property
+    def delivery_validated(self) -> int: ...
 
 
 class LedgerLike(Protocol):
@@ -271,6 +275,15 @@ def format_matrix(
     if ledger is not None:
         for label, count in ledger.absorbed():
             lines.append(f"deviation absorbed {count} error(s): {label}")
+        delivered = {row.key: row.delivery_validated for row in ledger.rows()} if surface.declaration.webhooks else {}
+        for hook in surface.declaration.webhooks:
+            seen = delivered.get(webhook_key(hook.name), 0)
+            # No delivery in a run is a coverage fact, like a route no case reaches: printed, and still OK.
+            lines.append(
+                f"delivery: webhooks[{json.dumps(hook.name)}] validated: {seen}"
+                if seen
+                else f"delivery: webhooks[{json.dumps(hook.name)}] NOT OBSERVED (no delivery matched it in this run)"
+            )
         for row in ledger.rows():
             if row.undeclared_status:
                 lines.append(

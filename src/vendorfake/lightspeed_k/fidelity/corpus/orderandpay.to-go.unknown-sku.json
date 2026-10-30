@@ -1,0 +1,69 @@
+{
+  "schema": 1,
+  "id": "orderandpay.to-go.unknown-sku",
+  "title": "A to-go order naming a SKU on no menu at the location is still received with 200, and its outcome arrives as a refusal notification",
+  "source": {
+    "url": "https://api-portal.lsk.lightspeed.app/guides/tutorials/online-ordering-basics",
+    "fetched": "2026-10-29",
+    "provenance": "judgment",
+    "note": "The tutorial says a 200 only means the order was received and that the POS may still turn it down; which input makes this unit turn one down (a SKU absent from every seeded menu at the location) is its own choice. The runner checks the notification this produces against the order notification entry of source.json's webhooks section."
+  },
+  "routes": [
+    "PUT /o/wh/1/webhook",
+    "POST /o/op/1/order/toGo"
+  ],
+  "profile": "full",
+  "steps": [
+    {
+      "name": "create the webhook",
+      "request": {
+        "method": "PUT",
+        "path": "/o/wh/1/webhook",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {"endpointId": "${vars.endpoint_id}", "url": "${vars.webhook_url}"}
+      },
+      "expect": {"status": 200, "body": {"endpointId": "${vars.endpoint_id}"}}
+    },
+    {
+      "name": "the order with an unknown SKU",
+      "request": {
+        "method": "POST",
+        "path": "/o/op/1/order/toGo",
+        "headers": {"authorization": "bearer ${vars.access_token}"},
+        "body": {
+          "accountProfileCode": "AAP-TOGO",
+          "businessLocationId": 100000000101,
+          "thirdPartyReference": "${vars.third_party_reference}",
+          "endpointId": "${vars.endpoint_id}",
+          "customerInfo": {"firstName": "Jane"},
+          "items": [{"quantity": 1, "sku": "${vars.unknown_sku}"}]
+        }
+      },
+      "expect": {"status": 200, "body": {"status": "ok"}}
+    },
+    {
+      "name": "settle the delivery worker",
+      "request": {"method": "POST", "path": "/__unit/webhooks/drain", "body": {}},
+      "expect": {"status": 200}
+    },
+    {
+      "name": "the refusal notification",
+      "request": {"method": "GET", "path": "/__unit/webhooks/deliveries"},
+      "expect": {
+        "status": 200,
+        "body": {
+          "count": 1,
+          "deliveries": [
+            {
+              "body": {
+                "status": "FAILURE",
+                "reason": "Unknown SKU ${vars.unknown_sku} at business location 100000000101",
+                "thirdPartyReference": "${vars.third_party_reference}"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
