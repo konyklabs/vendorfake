@@ -443,6 +443,13 @@ the 0.2 gate approval (konyklabs/roadmap#99).
   `tests/unit/test_docs_pins.py` holds it to `__version__`
   (konyklabs/roadmap#180).
 
+## [0.11.1](https://github.com/konyklabs/vendorfake/compare/v0.11.0...v0.11.1) (2026-10-30)
+
+
+### Documentation
+
+* **agents:** record C38 and C39 as the next free conformance id (konyklabs/roadmap[#173](https://github.com/konyklabs/vendorfake/issues/173)) ([33172cc](https://github.com/konyklabs/vendorfake/commit/33172cc18e96cc29b240d12682babcb891f33b91))
+
 ## [0.11.0](https://github.com/konyklabs/vendorfake/compare/v0.10.0...v0.11.0) (2026-10-30)
 
 

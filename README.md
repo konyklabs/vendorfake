@@ -41,8 +41,8 @@ inconsistencies it reproduces and every judgment call it makes:
 Python 3.11 or newer. Not on PyPI yet — install from the tag:
 
 ```sh
-pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.11.0"  # x-release-please-version
-# or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.11.0"  # x-release-please-version
+pip install "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.11.1"  # x-release-please-version
+# or, in a uv project: uv add "vendorfake[serve] @ git+https://github.com/konyklabs/vendorfake@v0.11.1"  # x-release-please-version
 # or, from a checkout of this repository: uv sync
 
 vendorfake vendors                       # -> clover, lightspeed, lightspeed-k, square, toast
@@ -58,12 +58,12 @@ use](docs/start/bindings.md).
 
 ```sh
 curl -s http://127.0.0.1:8080/__unit/health
-# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.11.0"}  # x-release-please-version
+# -> {"status":"ok","vendor":"square","profile":"full","uptime_ms":221,"version":"0.11.1"}  # x-release-please-version
 ```
 
 Every command names a vendor (`--vendor square|clover|toast|lightspeed|lightspeed-k`, or
 `VENDORFAKE_VENDOR`); with none installed it refuses and lists what it found.
-Drop the `@v0.11.0` to track `main` instead of a release tag. <!-- x-release-please-version --> A container image
+Drop the `@v0.11.1` to track `main` instead of a release tag. <!-- x-release-please-version --> A container image
 is also available (one image, every vendor, chosen at run time) — see
 [Install → As a container](docs/start/install.md#as-a-container).
 
