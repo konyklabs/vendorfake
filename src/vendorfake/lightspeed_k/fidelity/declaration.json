@@ -28,7 +28,7 @@
       "keyword": "type",
       "pattern": "503",
       "routes": ["GET /o/op/data/businesses", "GET /o/op/1/menu/list"],
-      "reason": "The document's only declared 503 body (under */* on apeGetMenuByIdV2) types status as the string enum '503'; this unit answers that one envelope for every 503, and on the two routes that declare no 503 the body falls back to error_schema, whose status is an integer. One keyword, one pointer, the two routes.",
+      "reason": "The document declares one */* error envelope, on apeGetMenuByIdV2's 503 and on tax-preview-apiTaxBreakdown's 400, 403, 404 and 503, and it types status as a string enum such as '503'; this unit answers that one envelope for every 503, and on the two routes that declare no 503 the body falls back to error_schema, whose status is an integer. One keyword, one pointer, the two routes.",
       "url": "https://api-docs.lsk.lightspeed.app/source.json"
     },
     {

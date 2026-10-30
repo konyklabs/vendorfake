@@ -9,11 +9,13 @@ from vendorfake.lightspeed_k.errors import (
     LIGHTSPEED_K_ERROR_TABLE,
     OAUTH_ERROR_INFO_KEY,
     STATUS_STRING_ENVELOPE,
+    TO_GO_CONFLICT_ENVELOPE,
     LightspeedKErrorShaper,
 )
 from vendorfake.lightspeed_k.vendor import LightspeedKVendor
 
 from .conftest import fake_ctx
+from .harness import Harness
 
 
 def test_the_table_covers_every_core_error_kind_with_a_provenance() -> None:
@@ -23,13 +25,18 @@ def test_the_table_covers_every_core_error_kind_with_a_provenance() -> None:
         assert 400 <= row.status < 600 and row.title and row.message, kind
 
 
-def test_unavailable_and_conflict_are_the_documented_rows() -> None:
+def test_unavailable_is_the_one_documented_row() -> None:
     documented = {kind for kind, row in LIGHTSPEED_K_ERROR_TABLE.items() if row.provenance == "documented"}
-    assert documented == {UnitErrorKind.UNAVAILABLE, UnitErrorKind.CONFLICT}
+    assert documented == {UnitErrorKind.UNAVAILABLE}
 
 
-def test_conflict_answers_envelope_c() -> None:
-    err = UnitError(UnitErrorKind.CONFLICT, detail="reference has already been used R1", field="thirdPartyReference")
+def test_the_marked_conflict_answers_envelope_c_and_reports_documented() -> None:
+    err = UnitError(
+        UnitErrorKind.CONFLICT,
+        detail="reference has already been used R1",
+        field="thirdPartyReference",
+        info={ENVELOPE_INFO_KEY: TO_GO_CONFLICT_ENVELOPE},
+    )
     shaped = LightspeedKErrorShaper().shape(err, fake_ctx(error_sidecar_mode="headers"))
     assert shaped.status == 409
     assert shaped.body == {"status": "fail", "msg": "reference has already been used R1"}
@@ -37,11 +44,20 @@ def test_conflict_answers_envelope_c() -> None:
     assert with_sidecar.body["unit_error"]["status_provenance"] == "documented"
 
 
-def test_the_other_409_kinds_keep_envelope_a() -> None:
-    for kind in (UnitErrorKind.VERSION_CONFLICT, UnitErrorKind.IDEMPOTENCY_CONFLICT, UnitErrorKind.INVALID_TRANSITION):
+def test_the_other_409_kinds_and_an_unmarked_conflict_keep_envelope_a() -> None:
+    kinds = (
+        UnitErrorKind.CONFLICT,
+        UnitErrorKind.VERSION_CONFLICT,
+        UnitErrorKind.IDEMPOTENCY_CONFLICT,
+        UnitErrorKind.INVALID_TRANSITION,
+    )
+    for kind in kinds:
         shaped = LightspeedKErrorShaper().shape(UnitError(kind), fake_ctx(error_sidecar_mode="headers"))
         assert shaped.status == 409
         assert set(shaped.body) == {"status", "error", "message"}, kind
+        assert LightspeedKErrorShaper().shape(UnitError(kind), fake_ctx()).body["unit_error"]["status_provenance"] == (
+            "judgment"
+        ), kind
 
 
 def test_envelope_a_has_status_error_message_and_no_timestamp_or_path() -> None:
@@ -124,3 +140,16 @@ def test_not_found_names_the_routes_listing() -> None:
     req = make_request(method="GET", path="/nowhere")
     shaped = LightspeedKErrorShaper().not_found(req, fake_ctx())
     assert shaped.status == 404 and "GET /__unit/routes" in shaped.body["message"]
+
+
+def test_a_control_plane_duplicate_subscription_is_a_judgment_409_not_the_to_go_envelope(h: Harness) -> None:
+    payload = {"id": "CP-DUP", "notification_url": "http://127.0.0.1:1/x", "signature_key": "k", "event_types": ["*"]}
+    assert h.api.post("/__unit/webhooks/subscriptions", payload).status == 201
+    res = h.api.post("/__unit/webhooks/subscriptions", payload)
+    assert res.status == 409, res.text
+    body = res.json()
+    assert set(body) == {"status", "error", "message", "unit_error"}
+    assert body["status"] == 409 and body["error"] == "Conflict"
+    assert body["unit_error"]["kind"] == "conflict"
+    assert body["unit_error"]["status_provenance"] == "judgment"
+    assert "envelope" not in body["unit_error"]

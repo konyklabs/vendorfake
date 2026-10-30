@@ -8,7 +8,9 @@ Unofficial. Not affiliated with, endorsed by, or connected to any vendor
 named here. Every behaviour is derived from publicly published API
 documentation. Five vendors ship today: Square (Connect v2), Clover
 (REST v3), Toast (REST v2/v3), Lightspeed Retail X-Series (API 2026-07),
-Lightspeed Restaurant K-Series (`lightspeed-k`, V1 authentication, slice 1).
+Lightspeed Restaurant K-Series (`lightspeed-k`, slices 1 to 3: V1 token,
+authorize stand-in, businesses, menu list, menu V2, to-go order, webhook
+registration, order-notification delivery with HTTP Basic, tax breakdown).
 
 ## Docs
 
@@ -35,9 +37,11 @@ Lightspeed Restaurant K-Series (`lightspeed-k`, V1 authentication, slice 1).
   itself and this fake reproduces it, the capability table, and every judgment
   call with the page that is silent about it.
 - [Lightspeed Restaurant K-Series](https://github.com/konyklabs/vendorfake/blob/main/docs/vendors/lightspeed-k.md):
-  the `lightspeed-k` page -- the V1 token endpoint and the three Order and Pay
-  reads it models, transcripts from a served unit, what is documented and
-  what is judgment, and what the slice leaves out.
+  the `lightspeed-k` page -- the V1 token endpoint, the authorize stand-in,
+  the three Order and Pay reads, the to-go order, the webhook endpoint
+  registration and the order notifications delivered to it (HTTP Basic
+  optional), and the tax breakdown; transcripts from a served unit, what is
+  documented and what is judgment, and what is deferred.
 - [Which binding to use](https://github.com/konyklabs/vendorfake/blob/main/docs/start/bindings.md):
   the four bindings (in-process sync, in-process async, served, container),
   the `vendorfake` pytest marker and its three fixtures, docker compose, CI,

@@ -480,6 +480,29 @@ def test_fetch_with_no_network_and_no_cache_is_a_named_skip(
     assert "fetch:" in err and "cannot fetch https://example.test/spec.json (unreachable)" in err
 
 
+def test_fetch_check_prose_on_a_warm_cache_exits_two_naming_the_leak(
+    not_vendored: Any, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.unit.fidelity.test_cache import LEAKED, counting_fetcher, leaky
+    from tests.unit.fidelity.test_extract import synthetic
+
+    name, _, fetcher = not_vendored()
+    assert main(["fetch", "--target", HERE], fetcher=fetcher) == 0
+    corpus = tmp_path / name / "corpus"
+    corpus.mkdir(exist_ok=True)
+    (corpus / "zz.copied.json").write_text(f'{{"note": "{LEAKED}"}}')
+    upstream = counting_fetcher(leaky(synthetic()))
+    assert main(["fetch", "--target", HERE], fetcher=upstream) == 0
+    assert upstream.calls == []
+    capsys.readouterr()
+    assert main(["fetch", "--check-prose", "--target", HERE], fetcher=upstream) == 2
+    err = capsys.readouterr().err
+    assert err == (
+        f"fetch: {name}: repository text repeats the vendor's document -- corpus/zz.copied.json: 4 window(s), "
+        "e.g. 'carries exactly one immutable owner reference assigned at'\n"
+    )
+
+
 def test_fetch_on_a_vendored_anchor_is_a_no_op(anchor: Any, capsys: pytest.CaptureFixture[str]) -> None:
     anchor([])
     assert main(["fetch", "--target", HERE]) == 0

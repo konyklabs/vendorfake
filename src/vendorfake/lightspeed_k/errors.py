@@ -1,5 +1,5 @@
 """lightspeed-k error shaping: one table, four bodies chosen by the refusal. Every status is JUDGMENT
-but the 503's and the to-go 409's; see ``docs/vendors/lightspeed-k.md`` and each row's ``note``."""
+but the 503's and the marked to-go 409's; see ``docs/vendors/lightspeed-k.md`` and each row's ``note``."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ __all__ = [
     "LIGHTSPEED_K_ERROR_TABLE",
     "OAUTH_ERROR_INFO_KEY",
     "STATUS_STRING_ENVELOPE",
+    "TO_GO_CONFLICT_ENVELOPE",
     "LightspeedKErrorMapping",
     "LightspeedKErrorShaper",
 ]
@@ -28,6 +29,7 @@ __all__ = [
 OAUTH_ERROR_INFO_KEY = "oauth_error"
 ENVELOPE_INFO_KEY = "envelope"
 STATUS_STRING_ENVELOPE = "status_string"
+TO_GO_CONFLICT_ENVELOPE = "to_go_conflict"
 _ENVELOPE_NOTE = (
     "Lightspeed documents only 'a 4xx error will be returned'; this body is the Order and Pay tag's one named "
     "error component (apePaymentBadRequestError) without timestamp and path, generalised to every refusal."
@@ -104,11 +106,12 @@ LIGHTSPEED_K_ERROR_TABLE: dict[UnitErrorKind, LightspeedKErrorMapping] = {
     ),
     UnitErrorKind.CONFLICT: _M(
         409,
-        "documented",
+        "judgment",
         "Conflict",
-        "reference has already been used",
-        "apePlaceToGoOrder declares 409 {status:'fail', msg:'reference has already been used <ref>'} under */* "
-        "(source.json, fetched 2026-10-29) for a thirdPartyReference already spent.",
+        "The entity already exists.",
+        "409 is the core's for a duplicate id or a refused control-plane change. The one documented 409 is "
+        "apePlaceToGoOrder's {status:'fail', msg:'reference has already been used <ref>'} under */* (source.json, "
+        "fetched 2026-10-29), answered only where the to-go route marks the refusal, and reported documented there.",
     ),
     UnitErrorKind.RATE_LIMITED: _M(
         429,
@@ -146,6 +149,7 @@ class LightspeedKErrorShaper:
         detail = err.detail or mapping.message
         headers = mechanism_headers(err, retry_after_header=True)
         oauth = info.get(OAUTH_ERROR_INFO_KEY)
+        to_go_conflict = info.get(ENVELOPE_INFO_KEY) == TO_GO_CONFLICT_ENVELOPE
         body: dict[str, Any]
         if isinstance(oauth, str) and oauth:
             # JUDGMENT RFC 6749 s5.2: V1 documents no token-endpoint error body
@@ -157,13 +161,14 @@ class LightspeedKErrorShaper:
             keyed = info.get(ENVELOPE_INFO_KEY) == STATUS_STRING_ENVELOPE and err.field
             subs = [compact({"field": err.field, "rejectedValue": info.get("rejected_value"), "message": detail})]
             body = {"status": str(mapping.status), "message": detail, "apiSubExceptions": subs if keyed else []}
-        elif err.kind is UnitErrorKind.CONFLICT:
+        elif to_go_conflict:
             # DOCUMENTED source.json: apePlaceToGoOrder 409 under */*
             body = {"status": "fail", "msg": detail}
         else:
             body = {"status": mapping.status, "error": mapping.title, "message": detail}
         if self._sidecar:
-            sidecar = unit_error_sidecar(err, mapping.provenance, field=err.field or None)
+            provenance: Provenance = "documented" if to_go_conflict else mapping.provenance
+            sidecar = unit_error_sidecar(err, provenance, field=err.field or None)
             mode = ctx.config.errors.sidecar
             if mode != "headers":
                 body["unit_error"] = sidecar

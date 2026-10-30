@@ -112,9 +112,29 @@ def test_price_line_is_half_up_per_line_and_per_part(
 
 
 def test_rounding_is_per_line_not_per_order() -> None:
-    basket = [(12.5, 2, [10], True), (4.0, 1, [10], True)]
-    tax = sum(sum(price_line(p, Decimal(str(q)), r, i)[1]) for p, q, r, i in basket)
-    assert tax == 263
+    lines = [
+        Pricing("A", Decimal(2), 12.5, (10,), ("10% VAT",), True),
+        Pricing("B", Decimal(1), 4.0, (10,), ("10% VAT",), True),
+    ]
+    body = price(lines)
+    # Per order: 2900 / 1.1 leaves 264 of tax; per line it is 227 + 36.
+    assert body["totalTaxAmountInCents"] == 263
+    assert body["totalTaxAmountInCents"] == sum(round(t["taxAmount"] * 100) for t in body["taxLines"])
+
+
+def test_one_tax_twice_on_a_line_joins_its_net_to_the_tax_line_once() -> None:
+    body = price([Pricing("X", Decimal(1), 4.0, (5, 5), ("5% VAT", "5% VAT"), True)])
+    assert body["transactions"][0]["netAmount"] == 3.64
+    assert body["taxLines"] == [
+        {
+            "description": "5% VAT",
+            "taxRate": "1.05",
+            "netAmount": 3.64,
+            "grossAmount": 4.0,
+            "taxAmount": 0.36,
+            "taxIncluded": True,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
@@ -178,18 +198,35 @@ def test_quantity_defaults_to_one(h: Harness) -> None:
     assert res.json()["transactions"][0]["quantity"] == 1.0
 
 
-def test_the_same_sku_twice_is_two_lines(h: Harness) -> None:
+def test_the_same_sku_twice_is_two_lines_and_one_merged_tax_line(h: Harness) -> None:
     res = h.post(PATH, items({"sku": "UNITK-002"}, {"sku": "UNITK-002"}))
     assert res.status == 200, res.text
     assert [row["sku"] for row in res.json()["transactions"]] == ["UNITK-002", "UNITK-002"]
+    assert res.json()["taxLines"] == [
+        {
+            "description": "10% VAT",
+            "taxRate": "1.10",
+            "netAmount": 7.28,
+            "grossAmount": 8.0,
+            "taxAmount": 0.72,
+            "taxIncluded": True,
+        }
+    ]
 
 
 def test_a_sub_item_is_its_own_line_at_parent_times_sub_quantity(h: Harness) -> None:
     payload = items({"sku": "UNITK-001", "quantity": 3, "subItems": [{"sku": "UNITK-002", "quantity": 2}]})
     res = h.post(PATH, payload)
     assert res.status == 200, res.text
-    lines = res.json()["transactions"]
+    body = res.json()
+    lines = body["transactions"]
     assert [(row["sku"], row["quantity"]) for row in lines] == [("UNITK-001", 3.0), ("UNITK-002", 6.0)]
+    assert (lines[1]["netAmount"], lines[1]["taxAmount"], lines[1]["grossAmount"]) == (21.82, 2.18, 24.0)
+    assert [(t["netAmount"], t["taxAmount"], t["taxIncluded"]) for t in body["taxLines"]] == [
+        (37.5, 3.75, False),
+        (21.82, 2.18, True),
+    ]
+    assert body["totalTaxAmountInCents"] == 375 + 218
 
 
 def test_the_account_profile_code_changes_nothing(h: Harness) -> None:

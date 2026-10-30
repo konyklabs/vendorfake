@@ -125,7 +125,7 @@ if [ "$QUICK" -eq 0 ]; then
     vendor="${entry%%=*}"
     TARGET="${entry#*=}"
     skippable_step "fidelity fetch ($vendor)" \
-      uv run python -m vendorfake.fidelity fetch --target "$TARGET"
+      uv run python -m vendorfake.fidelity fetch --check-prose --target "$TARGET"
   done
 fi
 if [ "$QUICK" -eq 0 ]; then

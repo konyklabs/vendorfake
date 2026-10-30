@@ -18,7 +18,8 @@ EXIT CODES. ``0`` clean; ``1`` a finding -- a changed pin under ``--check``, a
 failed case, an UNDECLARED route, a golden the signer did not reproduce; ``2``
 a usage error -- no target, an unresolvable one, an unknown case id, an
 unreachable base URL, a manifest that is not one, a target with no signer, a
-``fetch`` with no pin or no network and no cache. A moved upstream under ``fetch`` is
+``fetch`` with no pin or no network and no cache, or a prose leak (``--check-prose`` checks a warm cache too, and
+is ``3`` when it cannot fetch a source to check against). A moved upstream under ``fetch`` is
 ``0`` with an ``UPSTREAM MOVED`` line on stderr: a vendor release never fails
 a test run, and ``pin --check`` is what fails on it. ``3`` is the named skip
 (an extract that is unavailable, below). ``pin``, with or without
@@ -105,6 +106,12 @@ def _parser() -> argparse.ArgumentParser:
         help="for a vendor whose extract is never committed: fetch, cut and cache it (no-op when the cache matches the pin)",
     )
     with_target(fetch)
+    fetch.add_argument(
+        "--check-prose",
+        dest="check_prose",
+        action="store_true",
+        help="on a cache hit too, fetch the sources and run the prose guard (exit 2 on a leak, 3 if unfetchable)",
+    )
 
     run = sub.add_parser("run", help="run the corpus, one fresh unit per case")
     with_target(run)
@@ -183,7 +190,7 @@ def _dispatch(
             return _pin_offline(target, fail_on_move=bool(args.fail_on_move))
         return _pin(target, check=bool(args.check), refresh=refresh, fail_on_move=bool(args.fail_on_move))
     if args.command == "fetch":
-        return _fetch(target, fetcher=fetcher)
+        return _fetch(target, fetcher=fetcher, check_prose=bool(args.check_prose))
     if args.command == "webhooks":
         return _webhooks(target, args.golden, allow_empty=bool(args.allow_empty))
     try:
@@ -345,19 +352,19 @@ def _pin_offline(target: FidelityTarget, *, fail_on_move: bool) -> int:
     return 0
 
 
-def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None) -> int:
+def _fetch(target: FidelityTarget, *, fetcher: Fetcher | None, check_prose: bool = False) -> int:
     declaration: FidelityDeclaration = load_declaration(target.anchor)
     if declaration.vendored:
         print(f"fetch: {target.anchor} is vendored; its extract is committed and there is nothing to cache")
         return 0
     try:
-        result = populate(target.anchor, declaration, fetcher=fetcher)
+        result = populate(target.anchor, declaration, fetcher=fetcher, check_prose=check_prose)
     except Unavailable:
         raise  # handled in main(): exit 3, the named skip
     except (LookupError, ValueError) as exc:
         return _fail(f"fetch: {exc}")
     print(result.summary)
-    return 0
+    return 3 if result.prose_unchecked else 0
 
 
 def _report(

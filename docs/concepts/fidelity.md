@@ -147,6 +147,11 @@ the tell; `pin --check --offline` then says whether the cut moved -- a
 byte-only move is green and a re-pin chore, a moved cut is `INCONSISTENT`
 naming the operations, from the per-operation digests in `pin.json` (digests,
 not copies). That is the price of never committing the document.
+The cut is prose-stripped, so the guard that fails when the declaration or a
+corpus case repeats eight words of the vendor's document runs where the
+sources are fetched: on every cache miss, and on a hit too under `fetch
+--check-prose` (exit `2` on a leak, `3` when a source cannot be fetched), which
+`tools/self-test.sh` passes.
 
 ## Recorded cases
 
