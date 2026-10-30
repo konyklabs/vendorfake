@@ -95,10 +95,14 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "used_at_ms",
     "register_close_time",
     "activated_at",
+    "register_open_time",
+    "date",
+    "deleted_at",
 )
-"""Fields excluded from the state digest because this unit writes them from its clock,
-matched at any depth. ``register_open_time`` is deliberately ABSENT (scenario data, not a
-stamp); ``register_close_time`` IS here, since only a close action writes it."""
+"""Fields excluded from the state digest, matched at any depth. JUDGMENT: any field this unit
+EVER writes from its clock is here, even one a request may supply (a sale's and a payment's
+``date``, ``register_open_time``): the digest cannot tell a supplied value from a defaulted
+one, and C38 fails for the omission (konyklabs/roadmap#173)."""
 
 _OPAQUE_FIELDS: tuple[str, ...] = (
     "document",

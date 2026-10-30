@@ -78,9 +78,12 @@ _VOLATILE_FIELDS: tuple[str, ...] = (
     "modifiedTime",
     "clientCreatedTime",
     "deletedTime",
+    "customerSince",
+    "printTime",
 )
-"""Fields excluded from the state digest because they carry wall-clock time
--- two units seeded identically a second apart must still agree."""
+"""Fields excluded from the state digest because this unit writes them from its clock
+-- two units seeded identically a second apart must still agree. JUDGMENT: a seeded
+``customerSince`` is scrubbed too, since the digest cannot tell it from a stamped one."""
 
 
 class CloverVendor:

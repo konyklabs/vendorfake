@@ -37,7 +37,8 @@
     "C34": "discovery: every capability role maps to a declared capability or is declared unsupported with a reason",
     "C35": "discovery: the profile-name contract holds for the profile this unit was built on",
     "C36": "state: a seed overlay is applied, and may not invent a collection",
-    "C37": "chaos: refresh_rejected is the vendor's own 401 and commits nothing"
+    "C37": "chaos: refresh_rejected is the vendor's own 401 and commits nothing",
+    "C38": "state: the digest does not move with the clock"
   },
   "expected_skips": {
     "C07": [
@@ -98,6 +99,13 @@
     ],
     "C37": [
       "no-faults"
+    ],
+    "C38": [
+      "full",
+      "no-chaos",
+      "no-faults",
+      "oauth-only",
+      "orders-only"
     ]
   }
 }

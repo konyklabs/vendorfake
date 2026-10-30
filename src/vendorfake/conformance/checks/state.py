@@ -1,4 +1,4 @@
-"""C06, C07, C13, C19, C20, C22, C24, C25, C26, C36 -- state is reproducible, append-only, honestly gated, deduplicated per operation, paged without overlap, and seeded from a document an overlay may narrow but not invent keys in.
+"""C06, C07, C13, C19, C20, C22, C24, C25, C26, C36, C38 -- state is reproducible, append-only, honestly gated, deduplicated per operation, paged without overlap, seeded from a document an overlay may narrow but not invent keys in, and digested without the clock.
 
 C06 is the property a consumer's CI depends on: two units built the same way hold the same entities, so a test that passed this morning does not fail this afternoon because an id was drawn from a system random. C07 is what makes the journal usable as an event source rather than as decoration. C13 is the lifecycle: a state machine that quietly permits a self-transition turns "pay this order twice" into a success.
 """
@@ -9,9 +9,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from vendorfake.conformance.client import MISSING
-from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, RouteRow
+from vendorfake.conformance.env import CONTROL_PREFIX, CheckEnv, RouteRow, differing_paths
 from vendorfake.conformance.registry import check
-from vendorfake.conformance.types import ConformanceSkip, Requires, require
+from vendorfake.conformance.types import ConformanceFailure, ConformanceSkip, Requires, require
 
 __all__ = [
     "a_cursor_belongs_to_the_query_that_issued_it",
@@ -24,6 +24,7 @@ __all__ = [
     "seed_is_deterministic_across_processes",
     "seed_is_deterministic_across_units",
     "state_machines_are_honestly_gated",
+    "the_digest_does_not_move_with_the_clock",
 ]
 
 _INVALID_TRANSITION = "invalid_transition"
@@ -1159,3 +1160,56 @@ def a_seed_overlay_cannot_invent_a_collection(env: CheckEnv) -> str:
         f"{_ABSENT_COLLECTION!r} is refused before the unit starts, "
         f"naming {len(named)} valid collection(s): {', '.join(named)}"
     )
+
+
+_CLOCK_SKEW_S = 1201
+"""Twenty minutes and a second: minute and second stamps move, and a 30-minute seeded token (the shortest shipped TTL) still authenticates."""
+
+
+@check(
+    id="C38",
+    name="state: the digest does not move with the clock",
+    asserts=(
+        "Two same-profile units, one with its virtual clock advanced, apply the same successful "
+        "example mutation and report the same state digest. A field written from the clock that "
+        "the vendor has not declared volatile makes two identical scenarios digest differently."
+    ),
+    requires=Requires(mutating_example=True, virtual_clock=True),
+)
+def the_digest_does_not_move_with_the_clock(env: CheckEnv) -> str:
+    """C30 on a real clock fails only when two writes straddle a second; this makes the straddle certain (konyklabs/roadmap#173)."""
+    route = env.example_routes(methods=_MUTATING_METHODS)[0]
+    with env.fresh() as other:
+        for unit in (env, other):
+            unit.client.call("POST", f"{CONTROL_PREFIX}chaos/reset", json_body={})
+        advanced = env.client.call(
+            "POST", f"{CONTROL_PREFIX}clock/advance", json_body={"ms": _CLOCK_SKEW_S * 1000, "drain": False}
+        )
+        require(
+            advanced.status == 200,
+            f"POST /__unit/clock/advance answered {advanced.status}: {advanced.text[:200]}. The "
+            f"virtual-clock precondition held, so the control plane must accept an advance.",
+        )
+        answers = [
+            unit.client.call(
+                route.method,
+                route.example_path,
+                json_body=dict(route.example_body or {}),
+                headers=unit.authorized(route),
+            )
+            for unit in (env, other)
+        ]
+        require(
+            all(200 <= answer.status < 300 for answer in answers),
+            f"{route.key} refused its own published example_body ({answers[0].status} advanced, "
+            f"{answers[1].status} not): {answers[0].text[:200]}. A refused mutation writes no stamp to compare.",
+        )
+        digests = [str(unit.state()["digest"]) for unit in (env, other)]
+        if digests[0] != digests[1]:
+            paths = "\n  ".join(differing_paths(env, other))
+            raise ConformanceFailure(
+                f"after the same {route.key}, a unit {_CLOCK_SKEW_S}s ahead digests to {digests[0]} and "
+                f"one not to {digests[1]}. First differing paths:\n  {paths}\nDeclare each field this "
+                f"unit writes from its clock in VendorDefinition.volatile_fields."
+            )
+    return f"digests agree after {route.key} on two units {_CLOCK_SKEW_S}s apart"

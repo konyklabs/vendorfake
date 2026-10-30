@@ -62,6 +62,7 @@ CLOVER_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C37": ("no-faults",),
+    "C38": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 CLOVER_INAPPLICABLE: Mapping[str, str] = {
@@ -92,6 +93,7 @@ TOAST_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C37": ("no-faults",),
+    "C38": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 _TOAST_NO_IDEMPOTENCY_KEY = (
@@ -128,6 +130,7 @@ LIGHTSPEED_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C37": ("no-faults",),
+    "C38": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 """Which contract skips on which Lightspeed profile: ``oauth-only`` enables only
 the token endpoint, ``orders-only`` has no webhooks, ``no-faults`` no chaos
@@ -160,6 +163,7 @@ LIGHTSPEED_K_EXPECTED_SKIPS: Mapping[str, Sequence[str]] = {
     "C29": ("no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C32": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
     "C37": ("no-faults",),
+    "C38": ("full", "no-chaos", "no-faults", "oauth-only", "orders-only"),
 }
 
 _LIGHTSPEED_K_NO_MAGIC = (

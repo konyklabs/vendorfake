@@ -1647,3 +1647,37 @@ register(
 every other request-scope fault is untouched, so this mutant does not also
 trip C08, C12, C14 or C27 -- only C37, which is the one contract that reads a
 one-shot refresh_rejected rule from arm to fire."""
+
+
+# ---------------------------------------------------------------------------
+# C38 -- the digest does not move with the clock.
+# ---------------------------------------------------------------------------
+
+
+def _stamp_an_undeclared_field(handler: Handler) -> Handler:
+    def wrapped(args: HandlerArgs) -> ReplyInit | UnitResponse:
+        reply = handler(args)
+        order = reply.json.get("order") if isinstance(reply, ReplyInit) and isinstance(reply.json, Mapping) else None
+        stored = args.ctx.store.raw("orders")
+        if isinstance(order, Mapping) and order.get("id") in stored and (reply.status or 200) < 300:
+            stored[order["id"]] = {**stored[order["id"]], "opened_on": args.ctx.clock.iso_seconds()}
+        return reply
+
+    return wrapped
+
+
+register(
+    Mutant(
+        id="M60",
+        name="order-stamped-from-the-clock-undeclared",
+        defect="A successful order write stores an `opened_on` second-granularity stamp from the clock that volatile_fields omits.",
+        provenance=Provenance.HYPOTHETICAL,
+        trips=frozenset({"C38"}),
+        profiles=("chaos-demo",),
+        vendor=lambda inner: VendorOverlay(inner, routes=wrap_vendor_handlers(_stamp_an_undeclared_field)),
+    )
+)
+"""konyklabs/roadmap#173, transplanted: a sibling vendor shipped a sale `date`
+defaulted from the clock and not declared volatile, so C30 failed only when its
+two writes straddled a wall-clock second. Written to the live map, so no
+journal entry or delivery changes; judged on the virtual-clock profile."""

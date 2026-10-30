@@ -154,6 +154,8 @@ def test_volatile_fields_are_clovers_wall_clock_names() -> None:
         "modifiedTime",
         "clientCreatedTime",
         "deletedTime",
+        "customerSince",
+        "printTime",
     }
 
 
